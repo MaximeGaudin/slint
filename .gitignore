@@ -1,0 +1,19 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Node
+node_modules/
+**/out/
+*.vsix
+npm-debug.log*
+.DS_Store
+
+# Editors / OS
+.idea/
+.vscode/
+*.swp
+
+# Env / secrets
+.env
+.env.*

@@ -1,0 +1,19 @@
+# slint — the linter for Agent Skills.
+#
+# Every rule already has a severity; this file is for the ones you disagree with.
+# See https://slint.dev/rules for what each one checks and where it comes from.
+
+ignore = ["**/fixtures/**"]
+
+[rules]
+# "description/says-when" = "error"
+# "body/max-lines" = ["warn", { max = 400 }]
+# "bundle/unused-file" = "off"
+
+# The rules a regular expression cannot answer need a model. Nothing is sent anywhere
+# until this is filled in, and the report always says which rules did not run.
+[llm]
+base_url = "https://openrouter.ai/api/v1/"
+provider = "openrouter"      # none | openai | openrouter | groq | ollama | gemini | anthropic
+model = "deepseek/deepseek-v4-flash-0731"             # any model id the provider understands
+api_key_env = "OPENROUTER_API_KEY"   # the variable holding the key, never the key

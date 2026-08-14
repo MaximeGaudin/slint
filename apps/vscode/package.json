@@ -1,0 +1,96 @@
+{
+  "name": "slint-vscode",
+  "displayName": "slint - Agent Skills linter",
+  "description": "Lints SKILL.md files as you save them, with the source of every rule one hover away.",
+  "version": "0.1.0",
+  "publisher": "skillos",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": ["Linters"],
+  "activationEvents": ["onLanguage:markdown", "workspaceContains:**/SKILL.md"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "slint",
+      "properties": {
+        "slint.path": {
+          "type": "string",
+          "default": "slint",
+          "description": "The slint binary. An absolute path, or a name found on PATH."
+        },
+        "slint.onSave": {
+          "type": "string",
+          "enum": ["nothing", "no-llm", "llm"],
+          "default": "no-llm",
+          "enumDescriptions": [
+            "Do not lint when saving a SKILL.md",
+            "Run static rules only (fast, free)",
+            "Run static rules, then the model pass (uses your LLM settings)"
+          ],
+          "description": "What to run when you save a SKILL.md: nothing, static only (no-llm), or static then model (llm)."
+        },
+        "slint.onType": {
+          "type": "boolean",
+          "default": false,
+          "description": "Run static rules while typing a SKILL.md (debounced). Never runs the model."
+        },
+        "slint.llm.provider": {
+          "type": "string",
+          "enum": ["", "openai", "openrouter", "groq", "ollama", "gemini", "anthropic"],
+          "default": "",
+          "description": "Model provider for the LLM rules (OpenAI, OpenRouter, Groq, Ollama, Gemini, Anthropic). Overrides [llm].provider in slint.toml when set."
+        },
+        "slint.llm.model": {
+          "type": "string",
+          "default": "",
+          "description": "Model id the provider understands (e.g. llama-3.1-8b-instant on Groq). Overrides [llm].model when set."
+        },
+        "slint.llm.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "API key for the provider. Prefer User settings (not workspace) so it is not committed. Passed to slint via a process env var, never as a CLI flag."
+        },
+        "slint.arguments": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Extra arguments passed to slint, such as --rule name=off."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "slint.lintWorkspace",
+        "title": "slint: Lint every skill in the workspace"
+      },
+      {
+        "command": "slint.lintWithModel",
+        "title": "slint: Lint with model (current skill)"
+      },
+      {
+        "command": "slint.lintWorkspaceWithModel",
+        "title": "slint: Lint workspace with model"
+      },
+      {
+        "command": "slint.fixDocument",
+        "title": "slint: Apply the computed fixes to this skill"
+      },
+      {
+        "command": "slint.showOutput",
+        "title": "slint: Show Output"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.7.2"
+  }
+}

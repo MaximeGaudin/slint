@@ -1,0 +1,679 @@
+//! Rules about the files a skill ships.
+//!
+//! These are the ones a diff cannot produce: whether a path in the instructions is a path that
+//! exists, and whether a file that exists is one anything reads.
+
+use regex::Regex;
+use std::collections::BTreeSet;
+use std::sync::LazyLock;
+
+use crate::diagnostics::{Fix, Location, Severity};
+use crate::rules::{Rule, RuleContext, RuleMeta, sources};
+
+/// A relative path that looks like it means a bundled file.
+static BUNDLED_REFERENCE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?:^|[\s`(\x22'\[])((?:scripts|references|reference|assets|templates|data)/[\w./-]+)",
+    )
+    .expect("the bundled reference pattern compiles")
+});
+
+static PYTHON_IMPORT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?m)^\s*(?:import|from)\s+([A-Za-z_][A-Za-z0-9_]*)")
+        .expect("the import pattern compiles")
+});
+
+const PYTHON_STDLIB: [&str; 42] = [
+    "sys",
+    "os",
+    "json",
+    "re",
+    "pathlib",
+    "subprocess",
+    "datetime",
+    "time",
+    "math",
+    "random",
+    "itertools",
+    "functools",
+    "collections",
+    "typing",
+    "dataclasses",
+    "argparse",
+    "csv",
+    "io",
+    "shutil",
+    "glob",
+    "tempfile",
+    "textwrap",
+    "hashlib",
+    "base64",
+    "urllib",
+    "http",
+    "html",
+    "sqlite3",
+    "unittest",
+    "logging",
+    "string",
+    "enum",
+    "abc",
+    "copy",
+    "statistics",
+    "zipfile",
+    "tarfile",
+    "uuid",
+    "signal",
+    "traceback",
+    "warnings",
+    "__future__",
+];
+
+static NO_DANGLING: RuleMeta = RuleMeta {
+    name: "bundle/no-dangling-path",
+    summary: "Every path mentioned in the instructions must exist in the skill folder.",
+    rationale: "The agent will try to open that path after unpacking the skill. If the file is missing, the step fails and the agent has to guess.",
+    advice: "Either add the missing file under the skill directory, or remove that path from the instructions.",
+    default_severity: Severity::Error,
+    fixable: false,
+    needs_model: false,
+    reference_title: sources::SPECIFICATION.0,
+    reference_url: sources::SPECIFICATION.1,
+};
+
+static UNUSED_FILE: RuleMeta = RuleMeta {
+    name: "bundle/unused-file",
+    summary: "Every file in the skill folder should be referenced from the instructions (or another linked file).",
+    rationale: "Unreferenced files are still downloaded with the skill but never read — wasted size and a sign the docs are out of date.",
+    advice: "Mention the file from SKILL.md (or remove the file if it is leftover).",
+    default_severity: Severity::Warning,
+    // Deliberately not fixable: deleting a file is not something to do in a batch, and a path
+    // normalised in the same run can make this very file referenced.
+    fixable: false,
+    needs_model: false,
+    reference_title: sources::PAPER.0,
+    reference_url: sources::PAPER.1,
+};
+
+static EXECUTABLE: RuleMeta = RuleMeta {
+    name: "bundle/executable-script",
+    summary: "Scripts that start with a shebang (#!) must be marked executable.",
+    rationale: "A shebang means the file is meant to be run as a program. Without the executable bit, the first run fails with a permission error.",
+    advice: "Make the script executable (for example: chmod +x path/to/script).",
+    default_severity: Severity::Warning,
+    fixable: true,
+    needs_model: false,
+    reference_title: sources::SPECIFICATION.0,
+    reference_url: sources::SPECIFICATION.1,
+};
+
+static FLAT_REFERENCES: RuleMeta = RuleMeta {
+    name: "bundle/flat-references",
+    summary: "Link bundled files from SKILL.md, not only from other bundled files.",
+    rationale: "Agents usually read SKILL.md first and may only partially read secondary files. A file reachable only through another file is often skipped.",
+    advice: "Add a direct reference to that file from SKILL.md (path or link in the steps).",
+    default_severity: Severity::Warning,
+    fixable: false,
+    needs_model: false,
+    reference_title: sources::BEST_PRACTICES.0,
+    reference_url: sources::BEST_PRACTICES.1,
+};
+
+static CONTENTS_LIST: RuleMeta = RuleMeta {
+    name: "bundle/contents-list",
+    summary: "Long reference files should start with a table of contents.",
+    rationale: "Agents often preview only the top of a long file. A contents list at the top still shows what else is inside after a partial read.",
+    advice: "Add a short contents list at the top of the file, using the headings you already have.",
+    default_severity: Severity::Info,
+    fixable: true,
+    needs_model: false,
+    reference_title: sources::BEST_PRACTICES.0,
+    reference_url: sources::BEST_PRACTICES.1,
+};
+
+static DECLARED_DEPENDENCIES: RuleMeta = RuleMeta {
+    name: "bundle/declared-dependencies",
+    summary: "Third-party packages a script imports must be named in the install instructions.",
+    rationale: "If the agent runs the script without installing those packages, the import fails and the skill stops mid-task.",
+    advice: "In SKILL.md, at the step that runs the script, name each third-party package and the install command (for example: pip install requests).",
+    default_severity: Severity::Warning,
+    fixable: false,
+    needs_model: false,
+    reference_title: sources::BEST_PRACTICES.0,
+    reference_url: sources::BEST_PRACTICES.1,
+};
+
+fn paths_in(text: &str) -> BTreeSet<String> {
+    BUNDLED_REFERENCE
+        .captures_iter(text)
+        .filter_map(|captures| captures.get(1))
+        .map(|found| {
+            found
+                .as_str()
+                .trim_end_matches(|c: char| ".,;:)`'\"]".contains(c))
+                .to_string()
+        })
+        .collect()
+}
+
+struct NoDangling;
+struct UnusedFile;
+struct Executable;
+struct FlatReferences;
+struct ContentsList;
+struct DeclaredDependencies;
+
+impl Rule for NoDangling {
+    fn meta(&self) -> &'static RuleMeta {
+        &NO_DANGLING
+    }
+
+    fn check(&self, context: &mut RuleContext<'_>) {
+        let bundled: BTreeSet<String> = context
+            .skill
+            .files
+            .iter()
+            .map(|file| file.path.clone())
+            .collect();
+        let body = context.skill.body.clone();
+
+        for path in paths_in(&body) {
+            if bundled.contains(&path) {
+                continue;
+            }
+
+            let line = body
+                .lines()
+                .position(|line| line.contains(&path))
+                .map(|index| context.skill.document_line(index + 1))
+                .unwrap_or(1);
+
+            context.report(
+                format!("The instructions name {path}, which is not in the bundle"),
+                Location::at(line, 1),
+            );
+        }
+    }
+}
+
+impl Rule for UnusedFile {
+    fn meta(&self) -> &'static RuleMeta {
+        &UNUSED_FILE
+    }
+
+    fn check(&self, context: &mut RuleContext<'_>) {
+        let mut reachable = paths_in(&context.skill.body);
+
+        for file in &context.skill.files {
+            if let Some(text) = &file.text {
+                reachable.extend(paths_in(text));
+            }
+        }
+
+        let unused: Vec<String> = context
+            .skill
+            .files
+            .iter()
+            .filter(|file| !reachable.contains(&file.path))
+            .map(|file| file.path.clone())
+            .collect();
+
+        for path in unused {
+            context.report_in_file(
+                &path,
+                format!("Nothing refers to {path}"),
+                Location::whole_file(),
+            );
+        }
+    }
+}
+
+impl Rule for Executable {
+    fn meta(&self) -> &'static RuleMeta {
+        &EXECUTABLE
+    }
+
+    fn check(&self, context: &mut RuleContext<'_>) {
+        let candidates: Vec<String> = context
+            .skill
+            .files
+            .iter()
+            .filter(|file| {
+                !file.executable
+                    && file
+                        .text
+                        .as_deref()
+                        .is_some_and(|text| text.starts_with("#!"))
+            })
+            .map(|file| file.path.clone())
+            .collect();
+
+        for path in candidates {
+            context.report_fixable_in_file(
+                &path,
+                format!("{path} has a shebang and is not executable"),
+                Location::at(1, 1),
+                // A permission change rather than a text edit: the fixer recognises an empty
+                // replacement over an empty range as "make this runnable".
+                Fix {
+                    start: 0,
+                    end: 0,
+                    replacement: String::new(),
+                    description: "Sets the executable bit.".into(),
+                },
+            );
+        }
+    }
+}
+
+impl Rule for FlatReferences {
+    fn meta(&self) -> &'static RuleMeta {
+        &FLAT_REFERENCES
+    }
+
+    fn check(&self, context: &mut RuleContext<'_>) {
+        let from_body = paths_in(&context.skill.body);
+        let bundled: BTreeSet<String> = context
+            .skill
+            .files
+            .iter()
+            .map(|file| file.path.clone())
+            .collect();
+
+        let mut nested: Vec<(String, String)> = Vec::new();
+
+        for file in &context.skill.files {
+            let Some(text) = &file.text else { continue };
+
+            for path in paths_in(text) {
+                if path != file.path && bundled.contains(&path) && !from_body.contains(&path) {
+                    nested.push((path, file.path.clone()));
+                }
+            }
+        }
+
+        for (path, from) in nested {
+            context.report_in_file(
+                &path,
+                format!("{path} is only reachable through {from}"),
+                Location::whole_file(),
+            );
+        }
+    }
+}
+
+impl Rule for ContentsList {
+    fn meta(&self) -> &'static RuleMeta {
+        &CONTENTS_LIST
+    }
+
+    fn check(&self, context: &mut RuleContext<'_>) {
+        let long_files: Vec<(String, String)> = context
+            .skill
+            .files
+            .iter()
+            .filter(|file| file.path.ends_with(".md"))
+            .filter_map(|file| {
+                file.text
+                    .as_ref()
+                    .map(|text| (file.path.clone(), text.clone()))
+            })
+            .filter(|(_, text)| text.lines().count() > 100 && !has_contents(text))
+            .collect();
+
+        for (path, text) in long_files {
+            let lines = text.lines().count();
+
+            match with_contents(&text) {
+                Some(replacement) => context.report_fixable_in_file(
+                    &path,
+                    format!("{path} is {lines} lines with no contents list"),
+                    Location::at(1, 1),
+                    Fix {
+                        start: 0,
+                        end: text.len(),
+                        replacement,
+                        description: "Adds a contents list built from the headings already there."
+                            .into(),
+                    },
+                ),
+                None => context.report_in_file(
+                    &path,
+                    format!("{path} is {lines} lines with no contents list"),
+                    Location::at(1, 1),
+                ),
+            }
+        }
+    }
+}
+
+impl Rule for DeclaredDependencies {
+    fn meta(&self) -> &'static RuleMeta {
+        &DECLARED_DEPENDENCIES
+    }
+
+    fn check(&self, context: &mut RuleContext<'_>) {
+        let body = context.skill.body.to_ascii_lowercase();
+
+        let missing: Vec<(String, String)> = context
+            .skill
+            .files
+            .iter()
+            .filter(|file| file.path.ends_with(".py"))
+            .filter_map(|file| {
+                file.text
+                    .as_ref()
+                    .map(|text| (file.path.clone(), text.clone()))
+            })
+            .flat_map(|(path, text)| {
+                undeclared_imports(&text, &body)
+                    .into_iter()
+                    .map(move |module| (path.clone(), module))
+            })
+            .collect();
+
+        for (path, module) in missing {
+            context.report_in_file(
+                &path,
+                format!("{path} imports {module} and nothing says to install it"),
+                Location::whole_file(),
+            );
+        }
+    }
+}
+
+fn undeclared_imports(script: &str, body: &str) -> Vec<String> {
+    let mentioned = format!("{body}\n{}", script.to_ascii_lowercase());
+
+    let mut modules: Vec<String> = PYTHON_IMPORT
+        .captures_iter(script)
+        .filter_map(|captures| captures.get(1))
+        .map(|found| found.as_str().to_string())
+        .filter(|module| !PYTHON_STDLIB.contains(&module.as_str()))
+        .filter(|module| {
+            let install = Regex::new(&format!(
+                r"(?i)(pip install|uv (pip )?(install|add)|requirements)[^\n]*{}",
+                regex::escape(module)
+            ))
+            .expect("the install pattern compiles");
+
+            !install.is_match(&mentioned)
+        })
+        .collect();
+
+    modules.sort();
+    modules.dedup();
+    modules
+}
+
+fn has_contents(text: &str) -> bool {
+    text.lines().take(15).any(|line| {
+        let lower = line.trim().to_ascii_lowercase();
+        lower.starts_with("## contents")
+            || lower.starts_with("# contents")
+            || lower.starts_with("## table of contents")
+            || lower.starts_with("## in this file")
+    })
+}
+
+fn with_contents(text: &str) -> Option<String> {
+    let lines: Vec<&str> = text.lines().collect();
+
+    let headings: Vec<String> = lines
+        .iter()
+        .filter(|line| line.starts_with("## "))
+        .map(|line| format!("- {}", line.trim_start_matches("## ")))
+        .collect();
+
+    if headings.is_empty() {
+        return None;
+    }
+
+    // After the title if there is one, which is where a reader looks for a contents list.
+    let at = lines
+        .iter()
+        .position(|line| line.starts_with("# ") && !line.starts_with("## "))
+        .map(|index| index + 1)
+        .unwrap_or(0);
+
+    let mut rebuilt: Vec<String> = lines[..at].iter().map(|line| line.to_string()).collect();
+    rebuilt.push(String::new());
+    rebuilt.push("## Contents".into());
+    rebuilt.push(String::new());
+    rebuilt.extend(headings);
+    rebuilt.extend(lines[at..].iter().map(|line| line.to_string()));
+
+    let mut joined = rebuilt.join("\n");
+    if text.ends_with('\n') {
+        joined.push('\n');
+    }
+
+    Some(joined)
+}
+
+static DANGLING_RULE: NoDangling = NoDangling;
+static UNUSED_RULE: UnusedFile = UnusedFile;
+static EXECUTABLE_RULE: Executable = Executable;
+static FLAT_RULE: FlatReferences = FlatReferences;
+static CONTENTS_RULE: ContentsList = ContentsList;
+static DEPENDENCIES_RULE: DeclaredDependencies = DeclaredDependencies;
+
+pub fn rules() -> Vec<&'static dyn Rule> {
+    vec![
+        &DANGLING_RULE,
+        &UNUSED_RULE,
+        &EXECUTABLE_RULE,
+        &FLAT_RULE,
+        &CONTENTS_RULE,
+        &DEPENDENCIES_RULE,
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::testing::{check, good_skill, skill_with_body};
+    use crate::skill::BundledFile;
+
+    fn file(path: &str, text: &str, executable: bool) -> BundledFile {
+        BundledFile {
+            path: path.into(),
+            bytes: text.len(),
+            executable,
+            text: Some(text.into()),
+        }
+    }
+
+    #[test]
+    fn a_skill_with_no_bundle_passes_every_rule_here() {
+        let skill = good_skill();
+
+        for rule in rules() {
+            assert!(
+                check(rule, &skill).is_empty(),
+                "{} fired on a skill with no files",
+                rule.meta().name
+            );
+        }
+    }
+
+    #[test]
+    fn a_path_that_is_not_in_the_bundle_is_an_error() {
+        let skill = skill_with_body("\n## Culling\n\nRun scripts/cull.py when you are done.\n");
+        let messages = check(&DANGLING_RULE, &skill);
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].severity, Severity::Error);
+        assert!(messages[0].message.contains("scripts/cull.py"));
+    }
+
+    #[test]
+    fn a_dangling_path_is_reported_on_the_line_that_names_it() {
+        let skill = skill_with_body("\n## Culling\n\n1. Import.\n2. Run scripts/cull.py.\n");
+        let messages = check(&DANGLING_RULE, &skill);
+
+        assert_eq!(messages[0].location.line, skill.document_line(5));
+    }
+
+    #[test]
+    fn a_referenced_file_that_exists_passes() {
+        let mut skill = skill_with_body("\n## Culling\n\nRun scripts/cull.py when you are done.\n");
+        skill
+            .files
+            .push(file("scripts/cull.py", "#!/usr/bin/env python3\n", true));
+
+        assert!(check(&DANGLING_RULE, &skill).is_empty());
+    }
+
+    #[test]
+    fn a_file_nothing_refers_to_is_reported() {
+        let mut skill = good_skill();
+        skill
+            .files
+            .push(file("references/formats.md", "# Formats\n", false));
+
+        let messages = check(&UNUSED_RULE, &skill);
+
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].message.contains("references/formats.md"));
+        // Never fixable: deleting a file in a batch is how a fixed path loses the file it points at.
+        assert!(messages[0].fix.is_none());
+    }
+
+    #[test]
+    fn a_file_referenced_by_another_file_counts_as_used() {
+        let mut skill = skill_with_body("\n## Culling\n\nRead references/formats.md first.\n");
+        skill.files.push(file(
+            "references/formats.md",
+            "# Formats\n\nSee references/raw.md.\n",
+            false,
+        ));
+        skill
+            .files
+            .push(file("references/raw.md", "# RAW\n", false));
+
+        assert!(check(&UNUSED_RULE, &skill).is_empty());
+    }
+
+    #[test]
+    fn a_file_reachable_only_through_another_file_is_reported() {
+        let mut skill = skill_with_body("\n## Culling\n\nRead references/formats.md first.\n");
+        skill.files.push(file(
+            "references/formats.md",
+            "# Formats\n\nSee references/raw.md.\n",
+            false,
+        ));
+        skill
+            .files
+            .push(file("references/raw.md", "# RAW\n", false));
+
+        let messages = check(&FLAT_RULE, &skill);
+
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].message.contains("references/raw.md"));
+        assert!(messages[0].message.contains("references/formats.md"));
+    }
+
+    #[test]
+    fn a_script_with_a_shebang_and_no_bit_is_reported_and_fixable() {
+        let mut skill = skill_with_body("\n## Culling\n\nRun scripts/cull.py.\n");
+        skill.files.push(file(
+            "scripts/cull.py",
+            "#!/usr/bin/env python3\nprint(1)\n",
+            false,
+        ));
+
+        let messages = check(&EXECUTABLE_RULE, &skill);
+
+        assert_eq!(messages.len(), 1);
+        let fix = messages[0].fix.as_ref().unwrap();
+        assert_eq!(
+            (fix.start, fix.end),
+            (0, 0),
+            "a permission change, not an edit"
+        );
+    }
+
+    #[test]
+    fn a_script_already_marked_executable_passes() {
+        let mut skill = skill_with_body("\n## Culling\n\nRun scripts/cull.py.\n");
+        skill
+            .files
+            .push(file("scripts/cull.py", "#!/usr/bin/env python3\n", true));
+
+        assert!(check(&EXECUTABLE_RULE, &skill).is_empty());
+    }
+
+    #[test]
+    fn a_long_reference_file_gets_a_contents_list_written_from_its_headings() {
+        let mut text = String::from("# Formats\n\n");
+        for index in 0..40 {
+            text.push_str(&format!("## Section {index}\n\nWords about it.\n\n"));
+        }
+
+        let mut skill = skill_with_body("\n## Culling\n\nRead references/formats.md.\n");
+        skill
+            .files
+            .push(file("references/formats.md", &text, false));
+
+        let messages = check(&CONTENTS_RULE, &skill);
+        assert_eq!(messages.len(), 1);
+
+        let fixed = &messages[0].fix.as_ref().unwrap().replacement;
+        assert!(fixed.contains("## Contents"));
+        assert!(fixed.contains("- Section 0"));
+        // The contents list goes under the title rather than above it.
+        assert!(fixed.starts_with("# Formats"));
+    }
+
+    #[test]
+    fn a_long_file_that_already_has_a_contents_list_passes() {
+        let mut text = String::from("# Formats\n\n## Contents\n\n- Section 0\n\n");
+        for index in 0..40 {
+            text.push_str(&format!("## Section {index}\n\nWords.\n\n"));
+        }
+
+        let mut skill = skill_with_body("\n## Culling\n\nRead references/formats.md.\n");
+        skill
+            .files
+            .push(file("references/formats.md", &text, false));
+
+        assert!(check(&CONTENTS_RULE, &skill).is_empty());
+    }
+
+    #[test]
+    fn an_undeclared_import_is_reported() {
+        let mut skill = skill_with_body("\n## Culling\n\nRun scripts/cull.py.\n");
+        skill.files.push(file(
+            "scripts/cull.py",
+            "import rawpy\nimport os\n\nprint(rawpy)\n",
+            true,
+        ));
+
+        let messages = check(&DEPENDENCIES_RULE, &skill);
+
+        assert_eq!(messages.len(), 1, "the standard library does not count");
+        assert!(messages[0].message.contains("rawpy"));
+    }
+
+    #[test]
+    fn an_import_the_instructions_tell_you_to_install_passes() {
+        let mut skill = skill_with_body(
+            "\n## Culling\n\nFirst run `pip install rawpy`, then run scripts/cull.py.\n",
+        );
+        skill
+            .files
+            .push(file("scripts/cull.py", "import rawpy\n", true));
+
+        assert!(check(&DEPENDENCIES_RULE, &skill).is_empty());
+    }
+
+    #[test]
+    fn paths_are_found_in_the_shapes_instructions_actually_write_them() {
+        let found =
+            paths_in("Run `scripts/cull.py`, read references/formats.md, see (assets/logo.png).");
+
+        assert!(found.contains("scripts/cull.py"));
+        assert!(found.contains("references/formats.md"));
+        assert!(found.contains("assets/logo.png"));
+    }
+}

@@ -1,0 +1,597 @@
+//! Running the rules.
+//!
+//! Static rules first and always (in parallel across skills), then plugins, then the model pass if
+//! one is configured — also in parallel across skills. Everything cheap runs before anything
+//! expensive is asked for, and a model that is unreachable must never take the rest of the review
+//! down with it.
+
+use anyhow::Result;
+use rayon::prelude::*;
+use regex::Regex;
+use std::collections::BTreeSet;
+use std::path::PathBuf;
+use std::sync::LazyLock;
+
+use crate::config::Config;
+use crate::diagnostics::{Message, Report, SkillReport};
+use crate::llm;
+use crate::plugin::Plugin;
+use crate::rules::{self, RuleContext};
+use crate::skill::{self, Skill};
+
+/// How much of the catalogue to run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Passes {
+    pub plugins: bool,
+    /// The model pass. Off unless a provider is configured *and* the caller wants it.
+    pub model: bool,
+}
+
+impl Default for Passes {
+    fn default() -> Self {
+        Passes {
+            plugins: true,
+            model: true,
+        }
+    }
+}
+
+/// `<!-- slint-disable rule -->` anywhere in the document, and its per-line form.
+static DISABLE_FILE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"<!--\s*slint-disable\s+([^\s>-][^>]*?)\s*-->")
+        .expect("the disable pattern compiles")
+});
+
+static DISABLE_LINE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"<!--\s*slint-disable-next-line\s+([^\s>-][^>]*?)\s*-->")
+        .expect("the disable-next-line pattern compiles")
+});
+
+/// Why the model pass failed, and what the reader can do about it.
+///
+/// An error from a provider is usually one of three things — no key, a model id it does not know,
+/// or something transient — and the difference matters to whoever has to fix it. The whole chain is
+/// printed, because the useful sentence is nearly always the innermost one.
+fn model_failure(llm: &crate::config::LlmConfig, failure: &anyhow::Error) -> String {
+    let mut note = format!(
+        "The rules that need a model did not run. {llm_provider}/{model} said: {failure:#}",
+        llm_provider = format!("{:?}", llm.provider).to_lowercase(),
+        model = llm.model,
+    );
+
+    match &llm.api_key_env {
+        Some(variable) if std::env::var(variable).is_err() => {
+            note.push_str(&format!(
+                " — {variable} is not set in this shell. Export it, or point api_key_env at the variable that holds the key."
+            ));
+        }
+        Some(variable) => {
+            note.push_str(&format!(
+                " — {variable} is set, so check the model id and, if it is a gateway, base_url."
+            ));
+        }
+        None => {
+            note.push_str(
+                " — no api_key_env is configured, so nothing was sent with the request. Name the environment variable holding the key.",
+            );
+        }
+    }
+
+    note
+}
+
+/// What a document says it does not want to hear about.
+#[derive(Debug, Default, Clone)]
+pub struct Suppressions {
+    /// Rules turned off for the whole file.
+    pub file: BTreeSet<String>,
+    /// Rules turned off for one line, keyed by the line they apply to.
+    pub lines: Vec<(usize, String)>,
+}
+
+impl Suppressions {
+    pub fn read(source: &str) -> Self {
+        let mut suppressions = Suppressions::default();
+
+        for (index, line) in source.lines().enumerate() {
+            if let Some(found) = DISABLE_LINE.captures(line) {
+                for rule in split_rules(&found[1]) {
+                    // The comment is on the line before the one it covers.
+                    suppressions.lines.push((index + 2, rule));
+                }
+                continue;
+            }
+
+            if let Some(found) = DISABLE_FILE.captures(line) {
+                for rule in split_rules(&found[1]) {
+                    suppressions.file.insert(rule);
+                }
+            }
+        }
+
+        suppressions
+    }
+
+    pub fn allows(&self, message: &Message) -> bool {
+        if self.file.contains(&message.rule) {
+            return false;
+        }
+
+        !self
+            .lines
+            .iter()
+            .any(|(line, rule)| *line == message.location.line && rule == &message.rule)
+    }
+}
+
+fn split_rules(text: &str) -> Vec<String> {
+    text.split([',', ' '])
+        .map(|part| part.trim())
+        .filter(|part| !part.is_empty())
+        .map(|part| part.to_string())
+        .collect()
+}
+
+/// Every static rule that is on, against one skill.
+pub fn lint_skill(skill: &Skill, config: &Config) -> Vec<Message> {
+    let mut messages = Vec::new();
+
+    for rule in rules::registry() {
+        let meta = rule.meta();
+        let Some(severity) = config.severity_for(meta.name, meta.default_severity) else {
+            continue;
+        };
+
+        let mut context = RuleContext::new(skill, config, meta, severity);
+        rule.check(&mut context);
+        messages.extend(context.finish());
+    }
+
+    messages
+}
+
+/// The rules that need every skill at once.
+pub fn lint_project(skills: &[Skill], config: &Config) -> Vec<Message> {
+    let mut messages = Vec::new();
+
+    for rule in rules::project_registry() {
+        let meta = rule.meta();
+        let Some(severity) = config.severity_for(meta.name, meta.default_severity) else {
+            continue;
+        };
+
+        messages.extend(rule.check(skills, config, severity));
+    }
+
+    messages
+}
+
+/// Reads, lints and reports on every skill under the given paths.
+pub fn run(
+    paths: &[PathBuf],
+    config: &Config,
+    plugins: &[Plugin],
+    passes: Passes,
+) -> Result<Report> {
+    let ignore = skill::build_ignore(&config.ignore)?;
+    let directories = skill::discover(paths, &ignore)?;
+
+    let mut skills = Vec::new();
+    let mut unreadable = Vec::new();
+
+    for directory in directories {
+        match skill::read(&directory) {
+            Ok(one) => skills.push(one),
+            Err(failure) => unreadable.push((directory, failure.to_string())),
+        }
+    }
+
+    // Static rules, in parallel: they are pure functions of a skill, which is the property that
+    // makes this safe and the reason the whole run is fast enough to sit in an editor's save hook.
+    let mut per_skill: Vec<SkillReport> = skills
+        .par_iter()
+        .map(|one| {
+            let mut messages = lint_skill(one, config);
+            let mut notes = one.notes.clone();
+
+            if passes.plugins {
+                let (found, plugin_notes) = crate::plugin::run(plugins, one, config);
+                messages.extend(found);
+                notes.extend(plugin_notes);
+            }
+
+            SkillReport {
+                path: one.directory.display().to_string(),
+                name: one.name.clone(),
+                messages,
+                notes,
+            }
+        })
+        .collect();
+
+    for message in lint_project(&skills, config) {
+        if let Some(report) = per_skill
+            .iter_mut()
+            .find(|one| message.file.starts_with(&one.path))
+        {
+            report.messages.push(message);
+        }
+    }
+
+    // The model pass, last and optional. One request per skill, in parallel: the skills do not
+    // share state, and waiting on them one after another is how a workspace review feels broken.
+    // A provider that is unreachable leaves a note on that skill rather than an error on the run —
+    // the static half already produced something worth reading.
+    if passes.model && config.llm.is_configured() {
+        let outcomes: Vec<(Vec<Message>, Vec<String>)> = skills
+            .par_iter()
+            .map(|one| match llm::review(one, config) {
+                Ok((messages, notes)) => (messages, notes),
+                // The whole chain, and what to do about it. "asking openrouter::…" on its own
+                // tells the reader that something failed and nothing about which part.
+                Err(failure) => (Vec::new(), vec![model_failure(&config.llm, &failure)]),
+            })
+            .collect();
+
+        for (report, (messages, notes)) in per_skill.iter_mut().zip(outcomes) {
+            report.messages.extend(messages);
+            report.notes.extend(notes);
+        }
+    } else if passes.model && !config.llm.is_configured() {
+        // Asked for, and impossible: say exactly what is missing and where it goes.
+        for report in &mut per_skill {
+            report.notes.push(
+                "The model rules were asked for and no provider is configured. Add an [llm] block to slint.toml with a provider, a model and api_key_env — see https://slint.dev/config/."
+                    .to_string(),
+            );
+        }
+    } else if !passes.model {
+        // Intentional skip, not a failure. Keep it short: the editor runs --no-llm on every
+        // static pass and a lecture about slint.toml there reads like something went wrong.
+        let count = llm::rules::all().len();
+
+        if let Some(first) = per_skill.first_mut() {
+            first.notes.push(format!(
+                "Skipped {count} model rules (not requested). Pass --llm to run them."
+            ));
+        }
+    }
+
+    // Anything the document itself asked not to hear about.
+    for (report, one) in per_skill.iter_mut().zip(skills.iter()) {
+        let suppressions = Suppressions::read(&one.source);
+        report
+            .messages
+            .retain(|message| suppressions.allows(message));
+    }
+
+    for (directory, failure) in unreadable {
+        per_skill.push(SkillReport {
+            path: directory.display().to_string(),
+            name: directory
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default()
+                .to_string(),
+            messages: Vec::new(),
+            notes: vec![format!(
+                "This could not be read, so nothing was checked: {failure}"
+            )],
+        });
+    }
+
+    Ok(Report {
+        skills: per_skill,
+        fixed: 0,
+    }
+    .sorted())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::RuleSetting;
+    use crate::diagnostics::Severity;
+    use crate::rules::testing::{good_skill, skill_with_body};
+    use std::fs;
+
+    fn write_skill(root: &std::path::Path, name: &str, document: &str) -> PathBuf {
+        let directory = root.join(name);
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("SKILL.md"), document).unwrap();
+        directory
+    }
+
+    const GOOD: &str = "---\nname: photo-culling\ndescription: Culls a photo shoot in Lightroom by flagging the keepers and rejecting the rest. Use when triaging RAW files after a session.\n---\n\n## Culling\n\n1. Import the RAW files.\n2. Flag keepers with P.\n";
+
+    #[test]
+    fn a_good_skill_produces_nothing() {
+        assert!(lint_skill(&good_skill(), &Config::default()).is_empty());
+    }
+
+    #[test]
+    fn a_rule_turned_off_does_not_run_at_all() {
+        let skill = skill_with_body("\n## Culling\n\nRead scripts\\notes.md.\n");
+
+        assert_eq!(lint_skill(&skill, &Config::default()).len(), 1);
+
+        let mut config = Config::default();
+        config
+            .rules
+            .insert("body/posix-paths".into(), RuleSetting::Off);
+
+        assert!(lint_skill(&skill, &config).is_empty());
+    }
+
+    #[test]
+    fn a_disable_comment_silences_a_rule_for_the_file() {
+        let source =
+            format!("{GOOD}\n<!-- slint-disable body/posix-paths -->\nRead scripts\\notes.md.\n");
+        let suppressions = Suppressions::read(&source);
+
+        assert!(suppressions.file.contains("body/posix-paths"));
+    }
+
+    #[test]
+    fn a_disable_next_line_comment_silences_only_the_line_below_it() {
+        let suppressions = Suppressions::read(
+            "one\n<!-- slint-disable-next-line body/posix-paths -->\ntwo\nthree\n",
+        );
+
+        assert_eq!(
+            suppressions.lines,
+            vec![(3, "body/posix-paths".to_string())]
+        );
+        assert!(suppressions.file.is_empty());
+    }
+
+    #[test]
+    fn several_rules_can_be_named_in_one_comment() {
+        let suppressions =
+            Suppressions::read("<!-- slint-disable body/posix-paths, name/not-generic -->\n");
+
+        assert!(suppressions.file.contains("body/posix-paths"));
+        assert!(suppressions.file.contains("name/not-generic"));
+    }
+
+    #[test]
+    fn running_over_a_tree_reports_every_skill_it_finds() {
+        let temporary = tempfile::tempdir().unwrap();
+        write_skill(temporary.path(), "photo-culling", GOOD);
+        write_skill(
+            temporary.path(),
+            "helper",
+            "---\nname: helper\ndescription: Does things.\n---\n\n## Helper\n\nDo them.\n",
+        );
+
+        let report = run(
+            &[temporary.path().to_path_buf()],
+            &Config::default(),
+            &[],
+            Passes {
+                plugins: false,
+                model: false,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(report.skills.len(), 2);
+
+        let helper = report
+            .skills
+            .iter()
+            .find(|one| one.name == "helper")
+            .unwrap();
+        assert!(
+            helper
+                .messages
+                .iter()
+                .any(|one| one.rule == "name/not-generic")
+        );
+        assert!(
+            helper
+                .messages
+                .iter()
+                .any(|one| one.rule == "description/min-length")
+        );
+    }
+
+    #[test]
+    fn a_project_rule_attaches_its_findings_to_the_file_they_are_about() {
+        let temporary = tempfile::tempdir().unwrap();
+        let shared = "---\nname: {name}\ndescription: Culls a photo shoot in Lightroom by flagging the keepers and rejecting the rest. Use when triaging RAW files after a session.\n---\n\n## Culling\n\n1. Import.\n";
+
+        write_skill(temporary.path(), "one", &shared.replace("{name}", "one"));
+        write_skill(temporary.path(), "two", &shared.replace("{name}", "two"));
+
+        let report = run(
+            &[temporary.path().to_path_buf()],
+            &Config::default(),
+            &[],
+            Passes {
+                plugins: false,
+                model: false,
+            },
+        )
+        .unwrap();
+
+        for skill in &report.skills {
+            assert!(
+                skill
+                    .messages
+                    .iter()
+                    .any(|one| one.rule == "project/distinct-descriptions"),
+                "{} heard nothing about its twin",
+                skill.name
+            );
+        }
+    }
+
+    #[test]
+    fn a_static_only_run_says_how_to_run_the_rest() {
+        let temporary = tempfile::tempdir().unwrap();
+        write_skill(temporary.path(), "photo-culling", GOOD);
+
+        let report = run(
+            &[temporary.path().to_path_buf()],
+            &Config::default(),
+            &[],
+            Passes {
+                plugins: false,
+                model: false,
+            },
+        )
+        .unwrap();
+
+        let note = report.skills[0].notes.join(" ");
+
+        assert!(note.contains("Skipped"), "{note}");
+        assert!(note.contains("model rules"), "{note}");
+        assert!(note.contains("--llm"), "{note}");
+    }
+
+    #[test]
+    fn asking_for_the_model_pass_with_no_provider_says_what_is_missing() {
+        let temporary = tempfile::tempdir().unwrap();
+        write_skill(temporary.path(), "photo-culling", GOOD);
+
+        let report = run(
+            &[temporary.path().to_path_buf()],
+            &Config::default(),
+            &[],
+            Passes {
+                plugins: false,
+                model: true,
+            },
+        )
+        .unwrap();
+
+        let note = report.skills[0].notes.join(" ");
+
+        assert!(note.contains("no provider is configured"), "{note}");
+        assert!(note.contains("api_key_env"), "{note}");
+    }
+
+    #[test]
+    fn a_provider_that_fails_says_what_it_said_and_what_to_check() {
+        let failure =
+            anyhow::anyhow!("model not found").context("asking openrouter::deepseek/deepseek-v4");
+
+        let llm = crate::config::LlmConfig {
+            provider: crate::config::Provider::Openrouter,
+            model: "deepseek/deepseek-v4".into(),
+            api_key_env: Some("SLINT_TEST_ABSENT_KEY".into()),
+            ..crate::config::LlmConfig::default()
+        };
+
+        let note = model_failure(&llm, &failure);
+
+        // The whole chain, because the useful sentence is nearly always the innermost one.
+        assert!(note.contains("model not found"), "{note}");
+        assert!(
+            note.contains("asking openrouter::deepseek/deepseek-v4"),
+            "{note}"
+        );
+        assert!(note.contains("SLINT_TEST_ABSENT_KEY is not set"), "{note}");
+    }
+
+    #[test]
+    fn a_failure_with_the_key_present_points_at_the_model_id_instead() {
+        // SAFETY: single-threaded within this test, and the variable is only read by this call.
+        unsafe { std::env::set_var("SLINT_TEST_PRESENT_KEY", "value") };
+
+        let llm = crate::config::LlmConfig {
+            provider: crate::config::Provider::Openai,
+            model: "gpt-nonexistent".into(),
+            api_key_env: Some("SLINT_TEST_PRESENT_KEY".into()),
+            ..crate::config::LlmConfig::default()
+        };
+
+        let note = model_failure(&llm, &anyhow::anyhow!("unknown model"));
+
+        assert!(note.contains("is set, so check the model id"), "{note}");
+
+        unsafe { std::env::remove_var("SLINT_TEST_PRESENT_KEY") };
+    }
+
+    #[test]
+    fn a_suppression_comment_is_honoured_by_a_real_run() {
+        let temporary = tempfile::tempdir().unwrap();
+        write_skill(
+            temporary.path(),
+            "helper",
+            "---\nname: helper\ndescription: Culls a photo shoot in Lightroom by flagging the keepers and rejecting the rest. Use when triaging RAW files after a session.\n---\n\n<!-- slint-disable name/not-generic -->\n\n## Helper\n\nDo them.\n",
+        );
+
+        let report = run(
+            &[temporary.path().to_path_buf()],
+            &Config::default(),
+            &[],
+            Passes {
+                plugins: false,
+                model: false,
+            },
+        )
+        .unwrap();
+
+        assert!(
+            !report.skills[0]
+                .messages
+                .iter()
+                .any(|one| one.rule == "name/not-generic")
+        );
+    }
+
+    #[test]
+    fn a_directory_that_cannot_be_read_is_reported_rather_than_failing_the_run() {
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = temporary.path().join("broken");
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("SKILL.md"), [0xff, 0xfe, 0xfd]).unwrap();
+
+        let report = run(
+            &[temporary.path().to_path_buf()],
+            &Config::default(),
+            &[],
+            Passes {
+                plugins: false,
+                model: false,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(report.skills.len(), 1);
+        assert!(report.skills[0].notes[0].contains("could not be read"));
+    }
+
+    #[test]
+    fn the_report_is_ordered_worst_first() {
+        let temporary = tempfile::tempdir().unwrap();
+        write_skill(
+            temporary.path(),
+            "helper",
+            "---\nname: helper\ndescription: Does things.\n---\n\n## Helper\n\nRun scripts/missing.py.\n",
+        );
+
+        let report = run(
+            &[temporary.path().to_path_buf()],
+            &Config::default(),
+            &[],
+            Passes {
+                plugins: false,
+                model: false,
+            },
+        )
+        .unwrap();
+
+        let severities: Vec<Severity> = report.skills[0]
+            .messages
+            .iter()
+            .map(|one| one.severity)
+            .collect();
+        let mut sorted = severities.clone();
+        sorted.sort();
+
+        assert_eq!(severities, sorted);
+    }
+}
