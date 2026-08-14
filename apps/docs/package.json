@@ -2,5 +2,8 @@
   "name": "slint-docs",
   "private": true,
   "version": "0.1.0",
-  "description": "Documentation for the slint Agent Skills linter."
+  "description": "Documentation for the slint Agent Skills linter.",
+  "scripts": {
+    "build": "echo \"docs: markdown only for now\""
+  }
 }
