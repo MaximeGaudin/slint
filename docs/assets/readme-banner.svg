@@ -1,0 +1,152 @@
+<svg width="1200" height="300" viewBox="0 0 1200 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="slint  the linter for Agent Skills">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0a1214"/>
+      <stop offset="0.55" stop-color="#0c1618"/>
+      <stop offset="1" stop-color="#101c1f"/>
+    </linearGradient>
+    <radialGradient id="lintGlow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#2dd4bf" stop-opacity="0.26"/>
+      <stop offset="0.55" stop-color="#2dd4bf" stop-opacity="0.09"/>
+      <stop offset="1" stop-color="#2dd4bf" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M40 0H0V40" fill="none" stroke="#ffffff" stroke-opacity="0.025" stroke-width="1"/>
+    </pattern>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="2.5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="softGlow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- background -->
+  <rect width="1200" height="300" fill="url(#bg)"/>
+  <rect width="1200" height="300" fill="url(#grid)"/>
+
+  <!-- scattered stars -->
+  <g fill="#c8f5ee">
+    <circle cx="480" cy="42" r="1.4" opacity="0.35"/>
+    <circle cx="540" cy="262" r="1.1" opacity="0.25"/>
+    <circle cx="950" cy="28" r="1.3" opacity="0.3"/>
+    <circle cx="660" cy="22" r="1.0" opacity="0.25"/>
+    <circle cx="905" cy="270" r="1.5" opacity="0.3"/>
+    <circle cx="415" cy="150" r="1.2" opacity="0.2"/>
+    <circle cx="1010" cy="150" r="1.0" opacity="0.25"/>
+    <circle cx="585" cy="120" r="0.9" opacity="0.2"/>
+  </g>
+
+  <!-- ===== left: wordmark ===== -->
+  <g>
+    <rect x="78" y="96" width="74" height="74" rx="18" fill="#0f1c1f" stroke="#2a4548" stroke-width="1.5"/>
+    <rect x="78" y="96" width="74" height="74" rx="18" fill="url(#lintGlow)"/>
+    <!-- checklist mark -->
+    <path d="M100 132 l10 10 22 -24" fill="none" stroke="#5eead4" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <text x="172" y="152" font-family="-apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="64" font-weight="800" fill="#f1f5f9" letter-spacing="-1">slint</text>
+  <text x="174" y="192" font-family="-apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="22" font-weight="400" fill="#94a3b8">The linter for Agent Skills.</text>
+
+  <!-- ===== middle-right: terminal ===== -->
+  <ellipse cx="710" cy="150" rx="240" ry="150" fill="url(#lintGlow)"/>
+  <g>
+    <rect x="540" y="48" width="340" height="204" rx="12" fill="#0b1517" fill-opacity="0.94" stroke="#2a4548" stroke-width="1.5"/>
+    <line x1="540" y1="80" x2="880" y2="80" stroke="#1e3336" stroke-width="1"/>
+    <circle cx="562" cy="64" r="5" fill="#ff5f56"/>
+    <circle cx="580" cy="64" r="5" fill="#ffbd2e"/>
+    <circle cx="598" cy="64" r="5" fill="#27c93f"/>
+
+    <text x="560" y="108" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="14" font-weight="600">
+      <tspan fill="#5eead4">o</tspan><tspan fill="#e2e8f0" dx="8">slint skills</tspan>
+    </text>
+
+    <text x="560" y="134" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="12" fill="#94a3b8">skills/helper  1 error, 2 warnings</text>
+
+    <g font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="11">
+      <text x="560" y="160">
+        <tspan fill="#f87171">error</tspan>
+        <tspan fill="#64748b" dx="8">bundle/no-dangling-path</tspan>
+      </text>
+      <text x="560" y="180">
+        <tspan fill="#fbbf24">warn</tspan>
+        <tspan fill="#64748b" dx="8">description/says-when</tspan>
+      </text>
+      <text x="560" y="200">
+        <tspan fill="#fbbf24">warn</tspan>
+        <tspan fill="#64748b" dx="8">body/posix-paths</tspan>
+      </text>
+      <text x="560" y="226" fill="#5eead4">1 fix available  run with --fix</text>
+    </g>
+
+    <rect x="560" y="236" width="10" height="12" rx="2" fill="#5eead4">
+      <animate attributeName="opacity" values="1;0;1" dur="1.6s" repeatCount="indefinite"/>
+    </rect>
+  </g>
+
+  <!-- ===== lines into the terminal ===== -->
+  <g fill="none" stroke-width="2" filter="url(#glow)">
+    <path d="M1048 52  C 980 52, 940 96, 882 102" stroke="#5eead4"/>
+    <path d="M1078 101 C 1000 104, 960 124, 882 126" stroke="#38bdf8"/>
+    <path d="M1093 150 C 1010 150, 950 150, 882 150" stroke="#fbbf24"/>
+    <path d="M1078 199 C 1000 196, 960 176, 882 174" stroke="#a78bfa"/>
+    <path d="M1048 248 C 980 248, 940 204, 882 198" stroke="#fb7185"/>
+  </g>
+  <g filter="url(#glow)">
+    <circle cx="882" cy="102" r="3.5" fill="#5eead4"/>
+    <circle cx="882" cy="126" r="3.5" fill="#38bdf8"/>
+    <circle cx="882" cy="150" r="3.5" fill="#fbbf24"/>
+    <circle cx="882" cy="174" r="3.5" fill="#a78bfa"/>
+    <circle cx="882" cy="198" r="3.5" fill="#fb7185"/>
+  </g>
+
+  <!-- ===== right: capability tiles ===== -->
+  <!-- Static -->
+  <g filter="url(#softGlow)">
+    <rect x="1048" y="26" width="52" height="52" rx="13" fill="#5eead4" fill-opacity="0.10" stroke="#5eead4" stroke-width="1.5"/>
+    <path d="M1064 52 l8 8 16 -18" fill="none" stroke="#99f6e4" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <!-- SKILL.md -->
+  <g filter="url(#softGlow)">
+    <rect x="1078" y="75" width="52" height="52" rx="13" fill="#38bdf8" fill-opacity="0.10" stroke="#38bdf8" stroke-width="1.5"/>
+    <rect x="1092" y="90" width="24" height="28" rx="3" fill="none" stroke="#7dd3fc" stroke-width="2"/>
+    <line x1="1097" y1="98" x2="1111" y2="98" stroke="#7dd3fc" stroke-width="1.6"/>
+    <line x1="1097" y1="104" x2="1111" y2="104" stroke="#7dd3fc" stroke-width="1.6"/>
+    <line x1="1097" y1="110" x2="1107" y2="110" stroke="#7dd3fc" stroke-width="1.6"/>
+  </g>
+  <!-- LLM -->
+  <g filter="url(#softGlow)">
+    <rect x="1093" y="124" width="52" height="52" rx="13" fill="#fbbf24" fill-opacity="0.10" stroke="#fbbf24" stroke-width="1.5"/>
+    <circle cx="1119" cy="150" r="11" fill="none" stroke="#fcd34d" stroke-width="2"/>
+    <circle cx="1119" cy="150" r="4" fill="#fcd34d"/>
+    <path d="M1119 139 v-4 M1119 165 v4 M1108 150 h-4 M1134 150 h4" stroke="#fcd34d" stroke-width="2" stroke-linecap="round"/>
+  </g>
+  <!-- Plugins -->
+  <g filter="url(#softGlow)">
+    <rect x="1078" y="173" width="52" height="52" rx="13" fill="#a78bfa" fill-opacity="0.10" stroke="#a78bfa" stroke-width="1.5"/>
+    <rect x="1093" y="190" width="10" height="10" rx="2" fill="none" stroke="#c4b5fd" stroke-width="1.8"/>
+    <rect x="1107" y="190" width="10" height="10" rx="2" fill="none" stroke="#c4b5fd" stroke-width="1.8"/>
+    <rect x="1093" y="204" width="10" height="10" rx="2" fill="none" stroke="#c4b5fd" stroke-width="1.8"/>
+    <rect x="1107" y="204" width="10" height="10" rx="2" fill="none" stroke="#c4b5fd" stroke-width="1.8"/>
+  </g>
+  <!-- VS Code -->
+  <g filter="url(#softGlow)">
+    <rect x="1048" y="222" width="52" height="52" rx="13" fill="#fb7185" fill-opacity="0.10" stroke="#fb7185" stroke-width="1.5"/>
+    <path d="M1064 238 l24 10 -24 10 z" fill="none" stroke="#fda4af" stroke-width="2" stroke-linejoin="round"/>
+  </g>
+
+  <!-- faint extras -->
+  <g opacity="0.45">
+    <rect x="1140" y="50" width="40" height="40" rx="11" fill="#94a3b8" fill-opacity="0.08" stroke="#94a3b8" stroke-width="1.2"/>
+    <text x="1148" y="75" font-family="ui-monospace, Menlo, monospace" font-size="11" font-weight="700" fill="#cbd5e1">fix</text>
+    <rect x="1140" y="210" width="40" height="40" rx="11" fill="#94a3b8" fill-opacity="0.08" stroke="#94a3b8" stroke-width="1.2"/>
+    <text x="1147" y="235" font-family="ui-monospace, Menlo, monospace" font-size="10" font-weight="700" fill="#cbd5e1">CI</text>
+  </g>
+</svg>

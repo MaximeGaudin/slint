@@ -45,7 +45,7 @@ never read like a review that found nothing.
 ## Install
 
 ```
-cargo install --path apps/slint
+cargo install --path apps/cli
 ```
 
 ## Use
