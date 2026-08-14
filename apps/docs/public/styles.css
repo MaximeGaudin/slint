@@ -53,8 +53,16 @@ body {
   line-height: 1.65;
   color: var(--text);
   background:
-    radial-gradient(1200px 600px at 12% -10%, color-mix(in srgb, var(--signal) 16%, transparent), transparent 55%),
-    radial-gradient(900px 500px at 92% 8%, color-mix(in srgb, var(--info) 10%, transparent), transparent 50%),
+    radial-gradient(
+      1200px 600px at 12% -10%,
+      color-mix(in srgb, var(--signal) 16%, transparent),
+      transparent 55%
+    ),
+    radial-gradient(
+      900px 500px at 92% 8%,
+      color-mix(in srgb, var(--info) 10%, transparent),
+      transparent 50%
+    ),
     linear-gradient(165deg, #e4edf3 0%, var(--paper) 42%, #e8f0f4 100%);
   background-attachment: fixed;
   -webkit-font-smoothing: antialiased;
@@ -78,10 +86,14 @@ body::before {
 
 @keyframes mesh-drift {
   from {
-    background-position: 0 0, 0 0;
+    background-position:
+      0 0,
+      0 0;
   }
   to {
-    background-position: 48px 48px, 48px 48px;
+    background-position:
+      48px 48px,
+      48px 48px;
   }
 }
 
@@ -291,8 +303,16 @@ pre code {
   margin-bottom: 64px;
   padding: 36px max(24px, calc((100% - 1120px) / 2)) 48px;
   background:
-    radial-gradient(ellipse 55% 70% at 85% 35%, color-mix(in srgb, var(--signal) 28%, transparent), transparent 62%),
-    radial-gradient(ellipse 45% 55% at 8% 85%, color-mix(in srgb, var(--info) 18%, transparent), transparent 55%),
+    radial-gradient(
+      ellipse 55% 70% at 85% 35%,
+      color-mix(in srgb, var(--signal) 28%, transparent),
+      transparent 62%
+    ),
+    radial-gradient(
+      ellipse 45% 55% at 8% 85%,
+      color-mix(in srgb, var(--info) 18%, transparent),
+      transparent 55%
+    ),
     linear-gradient(165deg, #050a0e 0%, #0b1520 48%, #071218 100%);
   color: #dce7ee;
   overflow: hidden;
@@ -318,7 +338,11 @@ pre code {
   bottom: 0;
   height: 72px;
   z-index: 0;
-  background: linear-gradient(to bottom, transparent, color-mix(in srgb, var(--paper) 55%, #071016));
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    color-mix(in srgb, var(--paper) 55%, #071016)
+  );
   pointer-events: none;
 }
 
@@ -415,7 +439,10 @@ pre code {
   text-decoration: none;
   border-radius: var(--radius);
   border: 1px solid transparent;
-  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease;
 }
 
 .btn-primary {
@@ -793,7 +820,9 @@ pre code {
   border-left: 3px solid var(--signal);
   background: color-mix(in srgb, var(--paper-raised) 90%, transparent);
   text-decoration: none;
-  transition: border-color 0.15s ease, background 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease;
 }
 
 .citation:hover {

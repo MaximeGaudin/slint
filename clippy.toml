@@ -1,2 +1,3 @@
-# Workspace Clippy policy. `pnpm lint:cli` (and the CLI turbo lint task) also
-# passes `-D warnings`, so new Clippy hits fail the build rather than accumulate.
+# Workspace Clippy policy. `pnpm lint:cli` also passes `-D warnings`.
+# Stub macros (todo!, unimplemented!, dbg!) are denied via [workspace.lints.clippy]
+# in Cargo.toml. Comment markers (TODO/FIXME/…) are checked by scripts/check-no-todos.mjs.

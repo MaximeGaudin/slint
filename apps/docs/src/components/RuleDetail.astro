@@ -1,20 +1,12 @@
 ---
+import type { Rule } from '../types/rule'
+
 /**
  * One rule page body. Content is entirely from the catalogue JSON — the MDX/Astro
  * route only chooses which rule to show.
  */
 export interface Props {
-  rule: {
-    name: string
-    summary: string
-    rationale: string
-    advice: string
-    default_severity: string
-    fixable: boolean
-    needs_model: boolean
-    reference_title: string
-    reference_url: string
-  }
+  rule: Rule
 }
 
 const { rule } = Astro.props

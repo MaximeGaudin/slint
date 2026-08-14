@@ -1,7 +1,8 @@
 ---
-import Page from '../../layouts/Page.astro'
 import RuleDetail from '../../components/RuleDetail.astro'
 import rules from '../../data/rules.json'
+import Page from '../../layouts/Page.astro'
+import type { Rule } from '../../types/rule'
 
 /**
  * One page per rule. Stays `.astro` because paths come from the catalogue JSON —
@@ -11,10 +12,14 @@ import rules from '../../data/rules.json'
  * `/rules/bundle-no-dangling-path/`.
  */
 export function getStaticPaths() {
-  return rules.map((rule) => ({
+  return (rules as Rule[]).map((rule) => ({
     params: { rule: rule.name.replace('/', '-') },
     props: { rule },
   }))
+}
+
+interface Props {
+  rule: Rule
 }
 
 const { rule } = Astro.props

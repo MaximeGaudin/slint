@@ -9,10 +9,17 @@
     "dev": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
-    "check": "astro check"
+    "check": "astro check",
+    "lint": "biome check --error-on-warnings . && astro check && node ../../scripts/check-no-todos.mjs apps/docs/src apps/docs/scripts apps/docs/public",
+    "format": "biome check --write ."
   },
   "dependencies": {
     "@astrojs/mdx": "^7.0.5",
     "astro": "^7.2.2"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.10",
+    "@biomejs/biome": "2.5.8",
+    "typescript": "^5.9.3"
   }
 }

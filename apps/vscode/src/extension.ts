@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
 import * as path from 'node:path'
+import { promisify } from 'node:util'
 import * as vscode from 'vscode'
 
 const run = promisify(execFile)
@@ -251,7 +251,10 @@ async function runPass(
     if (!error.stdout) {
       output.appendLine(`slint could not run: ${error.message ?? 'unknown failure'}`)
       output.appendLine(`  ${binary} ${argv.join(' ')}`)
-      finishStatus('$(error) slint failed', error.message ?? 'slint could not run — click for details')
+      finishStatus(
+        '$(error) slint failed',
+        error.message ?? 'slint could not run — click for details',
+      )
       return undefined
     }
 
@@ -354,19 +357,12 @@ function finishStatus(text: string, detail?: string): void {
 
 function finishFromSummaryText(text: string, skills: number): void {
   if (text === 'clean') {
-    finishStatus(
-      '$(check) slint',
-      `No problems across ${skills} skill${skills === 1 ? '' : 's'}`,
-    )
+    finishStatus('$(check) slint', `No problems across ${skills} skill${skills === 1 ? '' : 's'}`)
     return
   }
 
   const icon = text.includes('error') ? '$(error)' : '$(warning)'
   finishStatus(`${icon} slint: ${text}`, 'Click to open the slint output channel')
-}
-
-function finishFromSummary(summary: Envelope['summary']): void {
-  finishFromSummaryText(summarize(summary), summary.skills)
 }
 
 /**
@@ -442,7 +438,8 @@ function clearSkills(skillPaths: string[]): void {
     const file = uri.fsPath
     if (
       skillPaths.some(
-        (root) => file === root || file.startsWith(root + path.sep) || file === path.join(root, 'SKILL.md'),
+        (root) =>
+          file === root || file.startsWith(root + path.sep) || file === path.join(root, 'SKILL.md'),
       )
     ) {
       stale.push(uri)

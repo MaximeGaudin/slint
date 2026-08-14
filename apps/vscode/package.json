@@ -110,9 +110,12 @@
   "scripts": {
     "build": "tsc -p ./",
     "watch": "tsc -watch -p ./",
+    "lint": "biome check --error-on-warnings . && tsc -p ./ --noEmit && node ../../scripts/check-no-todos.mjs apps/vscode/src",
+    "format": "biome check --write .",
     "package": "vsce package --no-dependencies"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.8",
     "@types/node": "^22.10.2",
     "@types/vscode": "^1.90.0",
     "@vscode/vsce": "^3.9.2",

@@ -6,12 +6,20 @@
   "scripts": {
     "build": "turbo run build",
     "dev": "turbo run dev",
-    "lint": "turbo run lint",
+    "lint": "turbo run lint && node scripts/check-no-todos.mjs",
     "test": "turbo run test",
     "build:cli": "turbo run build --filter=slint-cli",
     "test:cli": "cargo test --workspace",
+    "coverage:cli": "env CARGO_PROFILE_TEST_DEBUG=0 RUST_TEST_THREADS=1 cargo llvm-cov --workspace --summary-only --ignore-filename-regex='/.cargo/|/rustc/'",
+    "coverage:cli:html": "env CARGO_PROFILE_TEST_DEBUG=0 RUST_TEST_THREADS=1 cargo llvm-cov --workspace --html --output-dir coverage/html --ignore-filename-regex='/.cargo/|/rustc/'",
+    "coverage:cli:lcov": "env CARGO_PROFILE_TEST_DEBUG=0 RUST_TEST_THREADS=1 cargo llvm-cov --workspace --lcov --output-path coverage/lcov.info --ignore-filename-regex='/.cargo/|/rustc/'",
     "lint:cli": "turbo run lint --filter=slint-cli",
     "format:cli": "pnpm --filter slint-cli format",
+    "lint:vscode": "turbo run lint --filter=slint-vscode",
+    "lint:docs": "turbo run lint --filter=slint-docs",
+    "format:vscode": "pnpm --filter slint-vscode format",
+    "format:docs": "pnpm --filter slint-docs format",
+    "format": "pnpm format:cli && pnpm format:vscode && pnpm format:docs",
     "build:vscode": "turbo run build --filter=slint-vscode",
     "package:vscode": "turbo run build --filter=slint-vscode && pnpm --filter slint-vscode package",
     "dev:docs": "turbo run dev --filter=slint-docs",
@@ -19,6 +27,7 @@
     "sync:docs": "pnpm --filter slint-docs sync"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.8",
     "turbo": "^2.5.4"
   }
 }

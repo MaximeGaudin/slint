@@ -1,17 +1,18 @@
 ---
 import rules from '../data/rules.json'
+import type { Rule, RuleArea } from '../types/rule'
 
 /**
  * Catalogue grouped by namespace. Data comes from `slint rules --json` — never hand-written.
  */
-const areas = new Map()
+const areas = new Map<string, Rule[]>()
 
-for (const rule of rules) {
+for (const rule of rules as Rule[]) {
   const area = rule.name.split('/')[0]
   areas.set(area, [...(areas.get(area) ?? []), rule])
 }
 
-const titles = {
+const titles: Record<RuleArea, string> = {
   name: 'The name',
   description: 'The description',
   frontmatter: 'The frontmatter',
@@ -21,7 +22,7 @@ const titles = {
   llm: 'What only a reader can see',
 }
 
-const blurbs = {
+const blurbs: Record<RuleArea, string> = {
   name: 'Half of what an agent matches a request against.',
   description: 'The whole of the routing surface: an agent chooses on this sentence and nothing else.',
   frontmatter: 'What has to be declared, and how.',
@@ -31,8 +32,20 @@ const blurbs = {
   llm: 'The judgements a regular expression cannot make. One model request per skill covers all of them.',
 }
 
-const order = ['description', 'name', 'frontmatter', 'body', 'bundle', 'project', 'llm']
-const grouped = order.filter((area) => areas.has(area)).map((area) => [area, areas.get(area)])
+const order: RuleArea[] = [
+  'description',
+  'name',
+  'frontmatter',
+  'body',
+  'bundle',
+  'project',
+  'llm',
+]
+
+const grouped: [RuleArea, Rule[]][] = order.flatMap((area) => {
+  const list = areas.get(area)
+  return list ? [[area, list]] : []
+})
 ---
 
 <div class="rule-groups">
@@ -40,7 +53,7 @@ const grouped = order.filter((area) => areas.has(area)).map((area) => [area, are
     grouped.map(([area, list]) => (
       <section>
         <div class="area-label">{area}</div>
-        <h2 id={area}>{titles[area] ?? area}</h2>
+        <h2 id={area}>{titles[area]}</h2>
         <p>{blurbs[area]}</p>
 
         <ul class="rule-list">

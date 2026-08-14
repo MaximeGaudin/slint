@@ -166,15 +166,26 @@ JS/TS apps use **pnpm workspaces** + **Turborepo**. Rust stays on a **Cargo work
 pnpm install
 
 cargo test --workspace    # or: pnpm test:cli
+pnpm coverage:cli         # line/region/function coverage (needs cargo-llvm-cov)
+pnpm coverage:cli:html    # HTML report under coverage/html
+pnpm coverage:cli:lcov    # LCOV at coverage/lcov.info
 cargo build --release --package slint-cli
 
-pnpm lint:cli             # rustfmt check + clippy (-D warnings)
+pnpm lint                 # CLI + vscode + docs (+ no TODO/FIXME/stubs)
+pnpm lint:cli             # rustfmt + clippy (-D warnings, deny todo!/unimplemented!/dbg!)
+pnpm lint:vscode          # biome + tsc --noEmit
+pnpm lint:docs            # biome + astro check
+pnpm format               # rustfmt + biome --write (cli/vscode/docs)
 pnpm format:cli           # rustfmt --all
+pnpm format:vscode        # biome --write for the extension
+pnpm format:docs          # biome --write for the docs site
 pnpm build                # Turbo: CLI + vscode + docs
 pnpm build:vscode
 pnpm sync:docs            # refresh apps/docs/src/data/rules.json from the CLI
 pnpm dev:docs             # Astro docs at http://localhost:4321
 ```
+
+Coverage needs [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) and the `llvm-tools-preview` rustup component (`rustup component add llvm-tools-preview && cargo install cargo-llvm-cov --locked`).
 
 `slint rules` prints the catalogue. `slint rules --json` feeds the docs site, so the site and the binary never disagree about what a rule does.
 

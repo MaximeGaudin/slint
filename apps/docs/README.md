@@ -6,6 +6,8 @@ generated from `slint rules --json` — never hand-written.
 ```bash
 pnpm install          # from repo root
 pnpm sync:docs        # refresh src/data/rules.json from the CLI
+pnpm lint:docs        # biome + astro check
+pnpm format:docs      # biome --write
 pnpm dev:docs         # http://localhost:4321
 pnpm build:docs
 ```

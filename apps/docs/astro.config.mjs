@@ -1,5 +1,5 @@
-import { defineConfig } from 'astro/config'
 import mdx from '@astrojs/mdx'
+import { defineConfig } from 'astro/config'
 
 /**
  * Static docs site. Prose lives in MDX; the rule catalogue is still rendered from

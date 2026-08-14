@@ -2,6 +2,11 @@
 /target/
 **/*.rs.bk
 
+# Coverage (cargo-llvm-cov)
+/coverage/
+**/lcov.info
+**/cobertura.xml
+
 # Node / pnpm
 node_modules/
 **/out/
