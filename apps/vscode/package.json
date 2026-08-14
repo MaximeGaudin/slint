@@ -6,11 +6,20 @@
   "publisher": "skillos",
   "private": true,
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MaximeGaudin/slint"
+  },
   "engines": {
     "vscode": "^1.90.0"
   },
-  "categories": ["Linters"],
-  "activationEvents": ["onLanguage:markdown", "workspaceContains:**/SKILL.md"],
+  "categories": [
+    "Linters"
+  ],
+  "activationEvents": [
+    "onLanguage:markdown",
+    "workspaceContains:**/SKILL.md"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "configuration": {
@@ -23,7 +32,11 @@
         },
         "slint.onSave": {
           "type": "string",
-          "enum": ["nothing", "no-llm", "llm"],
+          "enum": [
+            "nothing",
+            "no-llm",
+            "llm"
+          ],
           "default": "no-llm",
           "enumDescriptions": [
             "Do not lint when saving a SKILL.md",
@@ -39,7 +52,15 @@
         },
         "slint.llm.provider": {
           "type": "string",
-          "enum": ["", "openai", "openrouter", "groq", "ollama", "gemini", "anthropic"],
+          "enum": [
+            "",
+            "openai",
+            "openrouter",
+            "groq",
+            "ollama",
+            "gemini",
+            "anthropic"
+          ],
           "default": "",
           "description": "Model provider for the LLM rules (OpenAI, OpenRouter, Groq, Ollama, Gemini, Anthropic). Overrides [llm].provider in slint.toml when set."
         },
@@ -55,7 +76,9 @@
         },
         "slint.arguments": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [],
           "description": "Extra arguments passed to slint, such as --rule name=off."
         }
@@ -86,11 +109,13 @@
   },
   "scripts": {
     "build": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package --no-dependencies"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
     "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^3.9.2",
     "typescript": "^5.7.2"
   }
 }

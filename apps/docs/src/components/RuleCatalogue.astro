@@ -1,0 +1,64 @@
+---
+import rules from '../data/rules.json'
+
+/**
+ * Catalogue grouped by namespace. Data comes from `slint rules --json` — never hand-written.
+ */
+const areas = new Map()
+
+for (const rule of rules) {
+  const area = rule.name.split('/')[0]
+  areas.set(area, [...(areas.get(area) ?? []), rule])
+}
+
+const titles = {
+  name: 'The name',
+  description: 'The description',
+  frontmatter: 'The frontmatter',
+  body: 'The instructions',
+  bundle: 'The bundle',
+  project: 'The whole set',
+  llm: 'What only a reader can see',
+}
+
+const blurbs = {
+  name: 'Half of what an agent matches a request against.',
+  description: 'The whole of the routing surface: an agent chooses on this sentence and nothing else.',
+  frontmatter: 'What has to be declared, and how.',
+  body: 'What the agent does once it has been chosen.',
+  bundle: 'The failures a diff cannot show: a path that resolves nowhere, a file nothing reads.',
+  project: 'Rules that can only be answered by looking at every skill at once.',
+  llm: 'The judgements a regular expression cannot make. One model request per skill covers all of them.',
+}
+
+const order = ['description', 'name', 'frontmatter', 'body', 'bundle', 'project', 'llm']
+const grouped = order.filter((area) => areas.has(area)).map((area) => [area, areas.get(area)])
+---
+
+<div class="rule-groups">
+  {
+    grouped.map(([area, list]) => (
+      <section>
+        <div class="area-label">{area}</div>
+        <h2 id={area}>{titles[area] ?? area}</h2>
+        <p>{blurbs[area]}</p>
+
+        <ul class="rule-list">
+          {list.map((rule) => (
+            <li>
+              <a class="rule-row" href={`/rules/${rule.name.replace('/', '-')}/`}>
+                <span class={`badge ${rule.default_severity}`}>{rule.default_severity}</span>
+                <span class="rule-name">{rule.name}</span>
+                <span class="rule-summary">{rule.summary}</span>
+                <span class="tags">
+                  {rule.fixable && <span class="badge plain">fixable</span>}
+                  {rule.needs_model && <span class="badge plain">model</span>}
+                </span>
+              </a>
+            </li>
+          ))}
+        </ul>
+      </section>
+    ))
+  }
+</div>

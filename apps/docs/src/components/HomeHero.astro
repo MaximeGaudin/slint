@@ -1,0 +1,59 @@
+---
+/**
+ * Home hero: brand lockup + agent-routing console. Kept as a component so the MDX
+ * page stays editable prose without a wall of markup.
+ */
+---
+
+<section class="hero-bleed" aria-label="Introduction">
+  <div class="hero-grid">
+    <div class="hero-copy">
+      <p class="hero-kicker">agent skill linter</p>
+      <p class="brand-lockup">sl<span>int</span></p>
+      <h1>The linter for Agent Skills.</h1>
+      <p class="lede">
+        Skills are chosen in silence and followed without questions. slint catches the ones that
+        never fire — and the ones that fire badly.
+      </p>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="/rules/">Browse the catalogue</a>
+        <a class="btn btn-ghost" href="#install">Install</a>
+      </div>
+    </div>
+
+    <div class="hero-stage">
+      <svg class="route-svg" viewBox="0 0 320 220" aria-hidden="true">
+        <path d="M20 40 C80 40, 90 110, 160 110 S240 40, 300 40"></path>
+        <path d="M20 180 C90 180, 100 110, 160 110 S230 180, 300 180"></path>
+        <path d="M160 20 V200"></path>
+        <circle cx="20" cy="40" r="3.5"></circle>
+        <circle cx="20" cy="180" r="3.5"></circle>
+        <circle cx="160" cy="110" r="5"></circle>
+        <circle cx="300" cy="40" r="3.5"></circle>
+        <circle cx="300" cy="180" r="3.5"></circle>
+      </svg>
+
+      <div class="console" role="img" aria-label="Example slint terminal output">
+        <div class="console-bar">
+          <span>agent · skill route</span>
+          <span class="live">linting</span>
+        </div>
+        <pre><code><span class="tok-dim">$</span> slint skills
+
+skills/helper
+  <span class="tok-err">10:1  error</span>    The instructions name scripts/cull.py,
+                 which is not in the bundle
+                 <span class="tok-rule">bundle/no-dangling-path</span>
+                 <span class="tok-dim">↳ Add the file, or take the reference out.</span>
+                 <span class="tok-dim">  https://agentskills.io/specification</span>
+
+   <span class="tok-warn">3:1  warning</span>  The description never says when to use this
+                 <span class="tok-rule">description/says-when</span>
+                 <span class="tok-dim">↳ Append “Use when …” followed by the situation.</span>
+
+<span class="tok-ok">2 problem(s) across 1 skill.</span>
+1 of them are computed fixes: run again with --fix.<span class="cursor"></span></code></pre>
+      </div>
+    </div>
+  </div>
+</section>

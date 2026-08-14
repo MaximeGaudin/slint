@@ -1,0 +1,18 @@
+---
+import rules from '../data/rules.json'
+
+const total = rules.length
+const staticCount = rules.filter((rule) => !rule.needs_model).length
+---
+
+<div class="page-intro">
+  <h1>Rules</h1>
+  <p class="lead">
+    {total} rules. {staticCount} of them are answered from the text alone; the rest need a reader,
+    and say so.
+  </p>
+  <p>
+    Every rule is on by default. A <code>slint.toml</code> is for the ones you disagree with — see{' '}
+    <a href="/config/">configuring them</a>.
+  </p>
+</div>

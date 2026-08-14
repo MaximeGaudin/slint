@@ -1,0 +1,113 @@
+---
+layout: ../layouts/Page.astro
+title: Configuring slint
+description: Rule severities, options, ignore patterns, and pointing slint at a model provider.
+section: config
+---
+
+<div class="page-intro">
+
+# Configuring slint
+
+<p class="lead">
+  {
+    'Every rule is already on. A config file is for the ones you disagree with, which is why most of them are three lines long.'
+  }
+</p>
+
+</div>
+
+```bash
+slint init
+```
+
+That writes `slint.toml`. `slint.config.json` and `.slintrc.json` work too, with the same fields.
+The file is found by walking up from whatever you asked slint to lint, so running it inside a
+subdirectory uses the project's settings rather than none.
+
+## Rules
+
+```toml
+[rules]
+"description/says-when" = "error"           # raise one
+"body/max-lines" = ["warn", { max = 400 }]  # tune one
+"bundle/unused-file" = "off"                # turn one off
+```
+
+A severity is `off`, `info`, `warn` or `error`; `0`, `1` and `2` work as well, for anyone arriving
+from ESLint. A rule with options takes a list: the severity, then an object the rule reads for
+itself. Each rule's page lists what it accepts.
+
+## What to skip
+
+```toml
+ignore = ["**/fixtures/**", "**/vendor/**"]
+```
+
+Directories that are never a skill — `.git`, `node_modules`, `target`, `dist`, `.venv` — are
+skipped without being configured, because nobody has ever wanted them linted.
+
+## Silencing a rule for one document
+
+```markdown
+<!-- slint-disable name/not-generic -->
+<!-- slint-disable-next-line body/posix-paths -->
+```
+
+The first turns a rule off for the whole file; the second for the line beneath it. Both take
+several rule names, separated by commas.
+
+## A model, for the rules that need one
+
+```toml
+[llm]
+provider = "openai"              # none | openai | openrouter | ollama | gemini | anthropic
+model = "gpt-5-mini"
+api_key_env = "OPENAI_API_KEY"   # the variable holding the key, never the key itself
+timeout_seconds = 90
+max_input_bytes = 65536
+```
+
+**Configuring a provider is not enough to spend anything.** The model pass is off unless `--llm` is
+given, so a plain `slint` never reaches a paid service by surprise — in a terminal, in an editor, or
+in a hook someone else wrote.
+
+```bash
+slint --llm
+```
+
+**The key is never in the file.** `api_key_env` names the environment variable holding it, because a
+secret in a config file is a secret in version control.
+
+`base_url` points any of these at somewhere else — a gateway, a proxy, a self-hosted server, an
+OpenAI-compatible service that is none of the five:
+
+```toml
+[llm]
+provider = "openai"
+model = "qwen3-30b"
+base_url = "http://gateway.internal/v1"
+api_key_env = "GATEWAY_TOKEN"
+```
+
+A local Ollama needs no key at all. With `provider = "none"`, or with no `[llm]` block, nothing is
+ever sent anywhere and the report names the rules that did not run.
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `provider` | `none` | Which service answers the model rules. |
+| `model` | — | Any model id the provider understands. No default is invented. |
+| `api_key_env` | — | The environment variable holding the key. |
+| `base_url` | — | Sends the same wire format somewhere else. |
+| `timeout_seconds` | `90` | Before a request is abandoned. |
+| `max_input_bytes` | `65536` | Bodies over this are cut at a heading, and the report says so. |
+
+## In CI
+
+```yaml
+- run: slint skills --format github --max-warnings 0
+```
+
+`--format github` turns each finding into an annotation on the diff, where the person who caused it
+will read it. `--max-warnings` decides whether warnings fail the build; without it, warnings exit
+`2` and errors exit `1`, so a script can tell them apart.

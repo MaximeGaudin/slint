@@ -1,0 +1,79 @@
+---
+layout: ../layouts/Page.astro
+title: slint in your editor
+description: Findings where the writing happens, with the source of each rule one click away.
+section: editors
+---
+
+<div class="page-intro">
+
+# In your editor
+
+<p class="lead">
+  {
+    'A linter read after the fact is a linter read too late. The extension runs slint on save and turns each finding into a diagnostic, with the document the rule comes from behind the rule name.'
+  }
+</p>
+
+</div>
+
+## VS Code
+
+```bash
+cd apps/vscode
+pnpm install && pnpm build
+# package a .vsix, then:
+cursor --install-extension slint-vscode-0.1.0.vsix
+# or: code --install-extension slint-vscode-0.1.0.vsix
+```
+
+It runs the binary the project already has rather than reimplementing anything: a linter with two
+implementations is a linter that disagrees with itself, and the one people trust is whichever one CI
+runs.
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `slint.path` | `slint` | The binary, as a path or a name on PATH. |
+| `slint.onSave` | `no-llm` | `nothing`, `no-llm` (static only), or `llm` (static then model). |
+| `slint.onType` | `false` | Run static rules while typing (debounced). Never runs the model. |
+| `slint.llm.provider` | *empty* | OpenAI, OpenRouter, Groq, Ollama, Gemini, or Anthropic. Overrides `slint.toml` when set. |
+| `slint.llm.model` | *empty* | Model id for that provider. |
+| `slint.llm.apiKey` | *empty* | API key (prefer User settings). Passed via env, never on argv. |
+| `slint.arguments` | `[]` | Extra arguments, such as `--rule name/thing=off`. |
+
+**The model pass is off on save by default** (`slint.onSave` is `no-llm`). An editor that spends
+money on every save is an editor people uninstall, and the static rules are the ones that answer
+instantly anyway. Set `slint.onSave` to `llm`, or run `slint --llm` in a terminal / CI, when you want
+the rest.
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `slint: Lint every skill in the workspace` | For after a branch change, or a config edit. |
+| `slint: Lint with model (current skill)` | Static pass, then the model pass on the open skill. |
+| `slint: Lint workspace with model` | Same, for the whole workspace. |
+| `slint: Apply the computed fixes to this skill` | Runs `--fix` on the open skill and reloads it. |
+| `slint: Show Output` | Opens the slint output channel. |
+
+## Any other editor
+
+Anything that can run a command and parse output can host slint. `--format compact` is one line per
+finding in the shape a compiler emits, which most editors already know how to read:
+
+```text
+skills/helper/SKILL.md:10:1: error [bundle/no-dangling-path] The instructions name scripts/cull.py, which is not in the bundle
+```
+
+And `--format json` is the whole report, envelope first, for anything building a richer integration:
+
+```json
+{
+  "ok": false,
+  "summary": { "skills": 1, "errors": 1, "warnings": 6, "infos": 1, "fixable": 1, "fixed": 0 },
+  "data": { "skills": [] }
+}
+```
+
+Data goes to stdout and everything else to stderr, so a pipe is always safe — and findings are not
+failures: slint exits `1` when it found errors, and that run is the useful one.

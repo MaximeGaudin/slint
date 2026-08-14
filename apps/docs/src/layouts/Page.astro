@@ -1,0 +1,79 @@
+---
+/**
+ * Shared shell: sticky signal nav, atmospheric mesh (via CSS), footer.
+ *
+ * Used two ways:
+ * - MDX `layout:` frontmatter (title/description/section arrive as props)
+ * - Astro pages that wrap content in `<Page …>` explicitly
+ */
+export interface Props {
+  title?: string
+  description?: string
+  /** Which nav item is the current one. */
+  section?: 'home' | 'rules' | 'config' | 'plugins' | 'editors' | 'contributing'
+  frontmatter?: {
+    title?: string
+    description?: string
+    section?: Props['section']
+  }
+}
+
+const fm = Astro.props.frontmatter ?? {}
+const title = Astro.props.title ?? fm.title ?? 'slint'
+const description =
+  Astro.props.description ?? fm.description ?? 'The linter for Agent Skills.'
+const section = Astro.props.section ?? fm.section
+
+const nav = [
+  { href: '/rules/', label: 'Rules', key: 'rules' },
+  { href: '/config/', label: 'Config', key: 'config' },
+  { href: '/plugins/', label: 'Plugins', key: 'plugins' },
+  { href: '/editors/', label: 'Editors', key: 'editors' },
+  { href: '/contributing/', label: 'Contributing', key: 'contributing' },
+]
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect fill='%230a1218' width='32' height='32'/><path fill='%2314c4b5' d='M16 4 L28 16 L16 28 L4 16 Z'/></svg>"
+    />
+  </head>
+
+  <body>
+    <header class="top">
+      <a class="mark" href="/">slint</a>
+      <nav>
+        {
+          nav.map((item) => (
+            <a href={item.href} class={section === item.key ? 'current' : undefined}>
+              {item.label}
+            </a>
+          ))
+        }
+        <a href="https://github.com/MaximeGaudin/slint" class="quiet">GitHub</a>
+      </nav>
+    </header>
+
+    <main>
+      <slot />
+    </main>
+
+    <footer>
+      <a class="mark" href="/">slint</a>
+      <p>
+        The linter for Agent Skills — static first, a model only where a model is needed, and every
+        finding cites the document its claim comes from.
+      </p>
+    </footer>
+  </body>
+</html>

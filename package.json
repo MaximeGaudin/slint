@@ -8,10 +8,13 @@
     "dev": "turbo run dev",
     "lint": "turbo run lint",
     "test": "turbo run test",
-    "build:cli": "cargo build -p slint-cli --release",
+    "build:cli": "turbo run build --filter=slint-cli",
     "test:cli": "cargo test --workspace",
     "build:vscode": "turbo run build --filter=slint-vscode",
-    "package:vscode": "turbo run build --filter=slint-vscode && pnpm --filter slint-vscode exec vsce package --no-dependencies"
+    "package:vscode": "turbo run build --filter=slint-vscode && pnpm --filter slint-vscode package",
+    "dev:docs": "turbo run dev --filter=slint-docs",
+    "build:docs": "turbo run build --filter=slint-docs",
+    "sync:docs": "pnpm --filter slint-docs sync"
   },
   "devDependencies": {
     "turbo": "^2.5.4"

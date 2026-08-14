@@ -1,0 +1,55 @@
+---
+import rules from '../data/rules.json'
+
+/**
+ * Numbered pillars that cite live catalogue counts. Kept out of the MDX so the
+ * counts stay tied to `rules.json` without templating noise in the prose file.
+ */
+const total = rules.length
+const staticRules = rules.filter((rule) => !rule.needs_model).length
+const modelRules = total - staticRules
+const fixable = rules.filter((rule) => rule.fixable).length
+---
+
+<ol class="signal-list">
+  <li>
+    <span class="idx">01</span>
+    <div>
+      <h3>Static first</h3>
+      <p>
+        {staticRules} of {total} rules never touch a model. No network, no tokens, no waiting — the
+        whole catalogue runs in milliseconds.
+      </p>
+    </div>
+  </li>
+  <li>
+    <span class="idx">02</span>
+    <div>
+      <h3>Every finding cites a source</h3>
+      <p>
+        A linter that says “wrong” without saying who says so gets argued with. Every rule names the
+        document its claim comes from — including yours, in a plugin.
+      </p>
+    </div>
+  </li>
+  <li>
+    <span class="idx">03</span>
+    <div>
+      <h3>Fixes are computed</h3>
+      <p>
+        {fixable} rules carry a fix that is calculated rather than written. Path separators,
+        executable bits, contents lists — a model never edits your files.
+      </p>
+    </div>
+  </li>
+  <li>
+    <span class="idx">04</span>
+    <div>
+      <h3>It says what it did not do</h3>
+      <p>
+        {modelRules} rules need a reader. Without a provider, the report names them as skipped. A
+        review that quietly missed half its work must never read like a clean one.
+      </p>
+    </div>
+  </li>
+</ol>

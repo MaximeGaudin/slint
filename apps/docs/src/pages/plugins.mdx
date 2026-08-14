@@ -1,0 +1,154 @@
+---
+layout: ../layouts/Page.astro
+title: Writing a slint plugin
+description: Rule packs are data; WebAssembly plugins are code. Both are held to the same standard as the built-in rules.
+section: plugins
+---
+
+<div class="page-intro">
+
+# Plugins
+
+<p class="lead">
+  {
+    'Two kinds, and neither needs its author to know any Rust. A rule pack is a data file, for the common case. A WebAssembly plugin is code, for everything else.'
+  }
+</p>
+
+</div>
+
+Both are held to the standard the built-in catalogue is held to: a namespaced rule name, and a
+citation. A plugin that reports without either is refused rather than trusted — “the linter says so”
+is the failure this tool exists to avoid, and it does not stop being one because the rule came from
+you.
+
+## A rule pack
+
+```bash
+slint init-plugin
+```
+
+That writes a starter you can edit:
+
+```toml
+[[rules]]
+name = "house/no-todo"
+severity = "warning"
+summary = "Instructions carry no TODO markers."
+rationale = "An agent follows what is written. A TODO is a note to a human that reads as an instruction to a machine."
+advice = "Finish the step, or take the line out until it is ready."
+pattern = "TODO|FIXME|XXX"
+target = "body"
+message = "\"{match}\" is a note to a person, in a document a machine follows."
+reference = { title = "House style", url = "https://example.com/style" }
+```
+
+Point at it from your config:
+
+```toml
+[[plugins]]
+path = "./slint-house-rules.toml"
+```
+
+| Field | What it is |
+| --- | --- |
+| `name` | Namespaced, like every other rule: `house/no-todo`. |
+| `severity` | `error`, `warning` or `info`. A config can still override it. |
+| `summary`, `rationale`, `advice` | What it checks, why it matters, what to do. |
+| `pattern` | A regular expression. A match is a finding. |
+| `target` | `body`, `description`, `name` or `files`. |
+| `required` | Inverts it: a finding when the pattern is *not* found. |
+| `message` | Optional. <code>{'{match}'}</code>, <code>{'{name}'}</code> and <code>{'{text}'}</code> are substituted. |
+| `reference` | A title and an https URL. Not optional. |
+
+A required pattern is how a house rule says something has to be present rather than absent — an
+owner, a review date, a section every skill in your organisation is expected to have.
+
+## A WebAssembly plugin
+
+When a regular expression is not enough, write a program. slint runs it through
+[Extism](https://extism.org), which means it can be written in any language that compiles to
+WebAssembly and that it runs sandboxed — no filesystem, no network. Adding one is not a
+supply-chain decision.
+
+Export one function, called `lint`. It is handed the parsed skill as JSON:
+
+```json
+{
+  "version": 1,
+  "skill": {
+    "name": "photo-culling",
+    "description": "Culls a photo shoot…",
+    "body": "## Culling\\n\\n1. Import…",
+    "source": "---\\nname: photo-culling\\n…",
+    "document": "skills/photo-culling/SKILL.md",
+    "metadata": { "license": "MIT" },
+    "files": [{ "path": "scripts/cull.py", "bytes": 812, "executable": true, "text": "…" }]
+  }
+}
+```
+
+And answers with messages:
+
+```json
+{
+  "messages": [
+    {
+      "rule": "team/needs-review",
+      "severity": "info",
+      "message": "This skill has not been through team review.",
+      "advice": "Add a Reviewed-by line once someone has read it.",
+      "line": 4,
+      "reference": { "title": "Team handbook", "url": "https://example.com/handbook" }
+    }
+  ]
+}
+```
+
+In Rust, that is a dozen lines with the Extism PDK:
+
+```rust
+use extism_pdk::*;
+use serde::{Deserialize, Serialize};
+
+#[plugin_fn]
+pub fn lint(input: String) -> FnResult<String> {
+    let parsed: serde_json::Value = serde_json::from_str(&input)?;
+    let body = parsed["skill"]["body"].as_str().unwrap_or_default();
+
+    let messages = if body.contains("Reviewed-by:") {
+        vec![]
+    } else {
+        vec![serde_json::json!({
+            "rule": "team/needs-review",
+            "severity": "info",
+            "message": "This skill has not been through team review.",
+            "advice": "Add a Reviewed-by line once someone has read it.",
+            "reference": { "title": "Team handbook", "url": "https://example.com/handbook" }
+        }))]
+    };
+
+    Ok(serde_json::json!({ "messages": messages }).to_string())
+}
+```
+
+Then point at the built module:
+
+```toml
+[[plugins]]
+path = "./team-rules.wasm"
+```
+
+The extension decides which kind a plugin is, so a config never says the same thing twice. A plugin
+that fails to load, crashes or answers with nonsense becomes a note on the report rather than a
+failed run: your rules not working must not stop the rest of the review.
+
+## Turning a plugin's rules off
+
+They behave like any other rule, which means a config can silence or raise them by name, and a
+document can opt out with a comment:
+
+```toml
+[rules]
+"house/no-todo" = "off"
+```

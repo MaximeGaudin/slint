@@ -17,7 +17,7 @@ It is built for terminals, CI, and editors:
 - **Plugins** — TOML rule packs or sandboxed Wasm (Extism); same citation standard as built-ins
 - **Editor integration** — VS Code / Cursor extension turns findings into diagnostics on save
 
-**Start here:** [Install](#install) · [Quick start](#quick-start) · [Configuration](#configure) · [Model pass](#the-model-half) · [Plugins](#plugins) · [Monorepo layout](#monorepo-layout) · [Full docs](apps/docs/README.md)
+**Start here:** [Install](#install) · [Quick start](#quick-start) · [Configuration](#configure) · [Model pass](#the-model-half) · [Plugins](#plugins) · [Monorepo layout](#monorepo-layout) · [Docs site](apps/docs)
 
 ## Install
 
@@ -155,7 +155,7 @@ pnpm build:vscode
 |------|------------|
 | [`apps/cli`](apps/cli) | `slint` binary (Rust) |
 | [`apps/vscode`](apps/vscode) | VS Code / Cursor extension |
-| [`apps/docs`](apps/docs) | Documentation and product brief |
+| [`apps/docs`](apps/docs) | Astro documentation site (rule catalogue synced from the binary) |
 | [`packages/core`](packages/core) | Shared Rust library (`slint`) used by the CLI |
 
 JS/TS apps use **pnpm workspaces** + **Turborepo**. Rust stays on a **Cargo workspace**.
@@ -168,11 +168,13 @@ pnpm install
 cargo test --workspace    # or: pnpm test:cli
 cargo build --release --package slint-cli
 
-pnpm build                # Turbo: vscode + whatever else is wired
+pnpm build                # Turbo: vscode + docs
 pnpm build:vscode
+pnpm sync:docs            # refresh apps/docs/src/data/rules.json from the CLI
+pnpm dev:docs             # Astro docs at http://localhost:4321
 ```
 
-`slint rules` prints the catalogue. `slint rules --json` is what a documentation site can be built from, so the site and the binary never disagree about what a rule does.
+`slint rules` prints the catalogue. `slint rules --json` feeds the docs site, so the site and the binary never disagree about what a rule does.
 
 More detail: [`apps/docs/README.md`](apps/docs/README.md).
 

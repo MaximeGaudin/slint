@@ -1,0 +1,25 @@
+---
+import Page from '../../layouts/Page.astro'
+import RuleDetail from '../../components/RuleDetail.astro'
+import rules from '../../data/rules.json'
+
+/**
+ * One page per rule. Stays `.astro` because paths come from the catalogue JSON —
+ * not something you'd hand-author as MDX.
+ *
+ * URL is the rule name with its slash flattened, so `bundle/no-dangling-path` lives at
+ * `/rules/bundle-no-dangling-path/`.
+ */
+export function getStaticPaths() {
+  return rules.map((rule) => ({
+    params: { rule: rule.name.replace('/', '-') },
+    props: { rule },
+  }))
+}
+
+const { rule } = Astro.props
+---
+
+<Page title={`${rule.name} — slint`} description={rule.summary} section="rules">
+  <RuleDetail rule={rule} />
+</Page>

@@ -1,0 +1,8 @@
+---
+import rules from '../data/rules.json'
+
+/** Live count of model-pass rules, for prose that should not hard-code the number. */
+const modelRules = rules.filter((rule) => rule.needs_model).length
+---
+
+{modelRules}

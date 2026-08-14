@@ -1,9 +1,18 @@
 {
   "name": "slint-docs",
-  "private": true,
   "version": "0.1.0",
-  "description": "Documentation for the slint Agent Skills linter.",
+  "private": true,
+  "description": "The documentation site for slint, built from the linter's own rule catalogue.",
+  "type": "module",
   "scripts": {
-    "build": "echo \"docs: markdown only for now\""
+    "sync": "node scripts/sync-rules.mjs",
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "check": "astro check"
+  },
+  "dependencies": {
+    "@astrojs/mdx": "^7.0.5",
+    "astro": "^7.2.2"
   }
 }

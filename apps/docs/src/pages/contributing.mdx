@@ -1,0 +1,111 @@
+---
+layout: ../layouts/Page.astro
+title: Contributing to slint
+description: How the crate is laid out, what a new rule has to carry, and why the tests are where the design lives.
+section: contributing
+---
+
+import RuleCount from '../components/RuleCount.astro'
+
+<div class="page-intro">
+
+# Contributing
+
+<p class="lead">
+  slint is a Rust crate with <RuleCount /> rules, a documentation site built from those rules, and an
+  editor extension that runs the binary. Everything a contributor needs to know fits on this page.
+</p>
+
+</div>
+
+## Getting it running
+
+```bash
+git clone https://github.com/MaximeGaudin/slint
+cd slint
+pnpm install
+cargo test --workspace   # the whole suite, including the CLI end to end
+cargo run -p slint-cli -- .
+```
+
+## How it is laid out
+
+| Path | What lives there |
+| --- | --- |
+| `packages/core` | Shared library: skill parsing, rules, engine, LLM pass, plugins, fixes, reporters. |
+| `packages/core/src/skill.rs` | Finding skills on disk and parsing one. Deliberately forgiving: a linter that refuses to read a malformed skill cannot say what is wrong with it. |
+| `packages/core/src/rules/` | One file per area. A rule is a value with metadata and a `check`. |
+| `packages/core/src/engine.rs` | Running the passes in order, in parallel, and honouring suppression comments. |
+| `apps/cli` | The `slint` binary. |
+| `apps/vscode` | VS Code / Cursor extension — runs the binary, does not reimplement it. |
+| `apps/docs` | This site. Prose is MDX; rule pages are generated from `slint rules --json`. |
+
+## Writing a rule
+
+A rule is metadata and a function. The metadata is not optional decoration:
+
+```rust
+static SAYS_WHEN: RuleMeta = RuleMeta {
+    name: "description/says-when",
+    summary: "The description says when to use the skill.",
+    rationale:
+        "Without a trigger clause the agent has to infer relevance from a summary. This is the \
+         single most common reason a skill is never selected.",
+    advice: "Append a trigger clause — \"Use when …\" followed by the situation.",
+    default_severity: Severity::Warning,
+    fixable: false,
+    needs_model: false,
+    reference_title: sources::BEST_PRACTICES.0,
+    reference_url: sources::BEST_PRACTICES.1,
+};
+```
+
+Four things are enforced by tests rather than by review:
+
+- **A citation.** Every rule names a document its claim comes from. A rule without one does not get into the registry.
+- **Advice.** Naming a problem without saying what to do about it is half a rule.
+- **A namespaced name.** `area/thing`, so a config file reads as a sentence.
+- **No model fixes.** A rule that needs a model may not claim to be fixable. Fixes are computed, always.
+
+And one thing is enforced by taste: **prefer static**. If a regular expression can answer it, it
+belongs in `rules/` rather than in the prompt. Every rule moved into the model pass costs every user
+tokens, latency and determinism.
+
+## Tests
+
+The suite is where the design is written down, so a test is named after the behaviour it protects
+rather than after the function it calls:
+
+```rust
+#[test]
+fn a_description_with_no_trigger_clause_is_reported() { … }
+
+#[test]
+fn several_phrasings_all_count_as_a_trigger_clause() { … }
+
+#[test]
+fn a_missing_description_does_not_also_fire_the_softer_rules() { … }
+```
+
+A rule is a pure function of a parsed skill, so testing one needs no files and no config. The helpers
+in `rules::testing` build a skill that passes everything, which leaves a test free to break exactly
+one thing.
+
+## The documentation site
+
+This site never writes down what a rule does. It runs `slint rules --json` and renders the answer,
+so a rationale edited in the binary is the one you are reading. Prose pages are MDX under
+`src/pages/`. After changing a rule:
+
+```bash
+cd apps/docs
+pnpm sync    # re-reads the catalogue from the binary
+pnpm dev
+```
+
+## What would not be taken
+
+- A rule about prose style. Comma placement is not what stops a skill from firing.
+- A rule that cannot cite anything. If the only argument is that it seems better, it is a plugin, not a built-in.
+- A fix written by a model. The value of `--fix` is that it is exact.
+- A second implementation of anything the editor extension or the site could ask the binary for.

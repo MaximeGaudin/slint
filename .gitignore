@@ -10,6 +10,10 @@ npm-debug.log*
 .pnpm-store/
 package-lock.json
 
+# Astro docs
+**/.astro/
+**/dist/
+
 # Turborepo
 .turbo/
 

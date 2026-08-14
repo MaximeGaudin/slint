@@ -1,0 +1,99 @@
+---
+layout: ../layouts/Page.astro
+title: slint — the linter for Agent Skills
+description: Lints SKILL.md files and the bundles beside them. Static first, a model only where a model is needed, and every finding cites its source.
+section: home
+---
+
+import HomeHero from '../components/HomeHero.astro'
+import HomePillars from '../components/HomePillars.astro'
+import ModelRuleCount from '../components/ModelRuleCount.astro'
+
+<HomeHero />
+
+<div class="band">
+  <div class="band-inner">
+
+## What goes wrong with a skill
+
+<p class="lead">
+  {
+    'An agent picks from a description, then follows instructions it cannot question. Two failure modes hide from a diff.'
+  }
+</p>
+
+<ol class="signal-list">
+  <li>
+    <span class="idx">01</span>
+    <div>
+      <h3>Never selected</h3>
+      <p>
+        The description does not say when to fire, or it collides with another skill. The agent
+        routes elsewhere — and your carefully written body never runs.
+      </p>
+    </div>
+  </li>
+  <li>
+    <span class="idx">02</span>
+    <div>
+      <h3>Selected and followed badly</h3>
+      <p>
+        A path that resolves nowhere. A Windows slash in a POSIX bundle. Ambiguity a model will
+        invent answers for. The skill runs — into the wall.
+      </p>
+    </div>
+  </li>
+</ol>
+
+  </div>
+</div>
+
+## Built for how agents actually work
+
+<HomePillars />
+
+<div class="split" id="install">
+  <div>
+
+## Install
+
+```bash
+cargo install slint-cli
+```
+
+Or from this repo: `cargo install --path apps/cli`. Put `~/.cargo/bin` on your `PATH`.
+
+  </div>
+  <div>
+
+## Use
+
+```bash
+slint                         # every skill under .
+slint skills/photo-culling    # or one of them
+slint --fix                   # apply computed fixes
+slint --format json | jq      # data on stdout
+slint rules                   # the catalogue
+slint --llm                   # also run model rules
+```
+
+  </div>
+</div>
+
+Exit codes match the convention other skill linters settled on: `0` clean, `1` errors, `2`
+warnings only, `3` slint itself failed.
+
+## The model half
+
+Ambiguity, terminology drift, whether a plausible request would actually route here — those need a
+reader. One request per skill covers all <ModelRuleCount /> model rules, from OpenAI, Anthropic,
+Gemini, Ollama, OpenRouter, Groq, or anything those wire formats reach through a `base_url`.
+
+Nothing is sent until you pass `--llm`, and bundled file contents are never sent — only names and
+sizes. [Configure a provider →](/config/)
+
+## Written for people who will disagree with it
+
+Every rule can be turned off, raised, or tuned in `slint.toml`; a document can opt out for itself
+with a comment; and the catalogue extends with [plugins](/plugins/) — a data file for the common
+case, WebAssembly for the rest.

@@ -1,0 +1,74 @@
+---
+/**
+ * One rule page body. Content is entirely from the catalogue JSON — the MDX/Astro
+ * route only chooses which rule to show.
+ */
+export interface Props {
+  rule: {
+    name: string
+    summary: string
+    rationale: string
+    advice: string
+    default_severity: string
+    fixable: boolean
+    needs_model: boolean
+    reference_title: string
+    reference_url: string
+  }
+}
+
+const { rule } = Astro.props
+const area = rule.name.split('/')[0]
+---
+
+<a class="back-link" href={`/rules/#${area}`}>← every rule</a>
+
+<div class="rule-header">
+  <h1>{rule.name}</h1>
+  <span class={`badge ${rule.default_severity}`}>{rule.default_severity}</span>
+  {rule.fixable && <span class="badge plain">fixable</span>}
+  {rule.needs_model && <span class="badge plain">needs a model</span>}
+</div>
+
+<p class="lead">{rule.summary}</p>
+
+<h2>Why it matters</h2>
+<p>{rule.rationale}</p>
+
+<h2>What to do about it</h2>
+<p>{rule.advice}</p>
+
+{
+  rule.fixable && (
+    <p>
+      This one is computed rather than written, so <code>slint --fix</code> applies it exactly and
+      without a model.
+    </p>
+  )
+}
+
+{
+  rule.needs_model && (
+    <p>
+      This one cannot be answered from the text. It runs only when a provider is
+      <a href="/config/"> configured</a>, and the report names it as one that did not run when there
+      is none.
+    </p>
+  )
+}
+
+<h2>Turning it off, or up</h2>
+
+<pre><code>{`[rules]
+"${rule.name}" = "off"      # never mention it
+"${rule.name}" = "error"    # fail the build on it`}</code></pre>
+
+<p>Or, for one document only:</p>
+
+<pre><code>{`<!-- slint-disable ${rule.name} -->
+<!-- slint-disable-next-line ${rule.name} -->`}</code></pre>
+
+<a class="citation" href={rule.reference_url}>
+  <strong>{rule.reference_title}</strong>
+  <span>{rule.reference_url}</span>
+</a>
