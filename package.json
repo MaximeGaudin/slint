@@ -2,14 +2,18 @@
   "name": "slint-monorepo",
   "private": true,
   "description": "Monorepo for the slint Agent Skills linter (CLI, VS Code extension, docs).",
-  "workspaces": [
-    "apps/vscode",
-    "apps/docs"
-  ],
+  "packageManager": "pnpm@11.21.0",
   "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
     "build:cli": "cargo build -p slint-cli --release",
     "test:cli": "cargo test --workspace",
-    "build:vscode": "npm run build -w slint-vscode",
-    "package:vscode": "npm run build -w slint-vscode && npm exec -w slint-vscode -- vsce package --no-dependencies"
+    "build:vscode": "turbo run build --filter=slint-vscode",
+    "package:vscode": "turbo run build --filter=slint-vscode && pnpm --filter slint-vscode exec vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "turbo": "^2.5.4"
   }
 }

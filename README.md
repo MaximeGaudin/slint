@@ -2,32 +2,31 @@
 
 The linter for Agent Skills — ESLint-shaped, static-first, optional model pass.
 
-This is a monorepo:
+## Layout
 
 | Path | What it is |
 |------|------------|
-| [`apps/cli`](apps/cli) | `slint` binary (Rust) |
+| [`apps/cli`](apps/cli) | `slint` binary (Rust, Cargo workspace) |
 | [`apps/vscode`](apps/vscode) | VS Code / Cursor extension |
 | [`apps/docs`](apps/docs) | Documentation and product brief |
 | [`packages/core`](packages/core) | Shared Rust library (`slint`) used by the CLI |
 
-## Why not Nx?
-
-The heavy lifting is a Cargo workspace. The VS Code extension is a thin Node shell around the binary. Nx adds little until there are several JS/TS apps with shared packages — we can add it then without reshaping the Rust side.
+JS/TS apps use **pnpm workspaces** + **Turborepo**. Rust stays on a **Cargo workspace** — that is the right tool for the CLI/core crates; Turbo orchestrates the Node side (and can wrap `cargo` scripts later if useful).
 
 ## Quick start
 
 ```bash
+pnpm install
+
 # CLI
 cargo install --path apps/cli
 slint --help
-
-# Tests
-cargo test --workspace
+cargo test --workspace   # or: pnpm test:cli
 
 # VS Code extension
-npm install
-npm run build -w slint-vscode
+pnpm build:vscode
+# or everything Turbo knows about:
+pnpm build
 ```
 
 See [`apps/docs/README.md`](apps/docs/README.md) for usage, rules, and configuration.

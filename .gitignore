@@ -2,17 +2,22 @@
 /target/
 **/*.rs.bk
 
-# Node
+# Node / pnpm
 node_modules/
 **/out/
 *.vsix
 npm-debug.log*
-.DS_Store
+.pnpm-store/
+package-lock.json
+
+# Turborepo
+.turbo/
 
 # Editors / OS
 .idea/
 .vscode/
 *.swp
+.DS_Store
 
 # Env / secrets
 .env
