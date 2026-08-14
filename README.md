@@ -22,11 +22,22 @@ It is built for terminals, CI, and editors:
 ## Install
 
 ```bash
-# From this repo
-cargo install --path apps/cli
+# From this repo (installs `slint` into ~/.cargo/bin)
+pnpm install:cli
+# or: ./scripts/build-install.sh
 
-# Then ensure ~/.cargo/bin is on your PATH (or symlink to ~/.local/bin/slint)
+# Ensure ~/.cargo/bin is on your PATH
 slint --help
+```
+
+Release binaries (after the first GitHub release):
+
+```bash
+# macOS (Apple Silicon)
+curl -fsSL https://github.com/MaximeGaudin/slint/releases/latest/download/slint-darwin-arm64.tar.gz | sudo tar xz -C /usr/local/bin
+
+# Linux (x86_64)
+curl -fsSL https://github.com/MaximeGaudin/slint/releases/latest/download/slint-linux-amd64.tar.gz | sudo tar xz -C /usr/local/bin
 ```
 
 ## Quick start
@@ -165,7 +176,9 @@ JS/TS apps use **pnpm workspaces** + **Turborepo**. Rust stays on a **Cargo work
 ```bash
 pnpm install
 
-cargo test --workspace    # or: pnpm test:cli
+./scripts/check.sh        # fmt + clippy + todos + pnpm lint + tests (mirrors CI)
+./scripts/build-install.sh
+pnpm install:cli          # cargo install --path apps/cli → ~/.cargo/bin/slint
 pnpm coverage:cli         # line/region/function coverage (needs cargo-llvm-cov)
 pnpm coverage:cli:html    # HTML report under coverage/html
 pnpm coverage:cli:lcov    # LCOV at coverage/lcov.info

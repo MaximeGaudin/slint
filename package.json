@@ -9,6 +9,7 @@
     "lint": "turbo run lint && node scripts/check-no-todos.mjs",
     "test": "turbo run test",
     "build:cli": "turbo run build --filter=slint-cli",
+    "install:cli": "cargo install --path apps/cli --force",
     "test:cli": "cargo test --workspace",
     "coverage:cli": "env CARGO_PROFILE_TEST_DEBUG=0 RUST_TEST_THREADS=1 cargo llvm-cov --workspace --summary-only --ignore-filename-regex='/.cargo/|/rustc/'",
     "coverage:cli:html": "env CARGO_PROFILE_TEST_DEBUG=0 RUST_TEST_THREADS=1 cargo llvm-cov --workspace --html --output-dir coverage/html --ignore-filename-regex='/.cargo/|/rustc/'",

@@ -1,0 +1,7 @@
+# Pin the Rust toolchain so every developer and CI use the same rustc/clippy.
+#
+# Workspace MSRV is 1.95 (see root Cargo.toml rust-version).
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

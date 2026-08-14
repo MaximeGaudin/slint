@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+  CARGO_PROFILE_DEV_DEBUG: 0
+
+jobs:
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  check:
+    name: Check (${{ matrix.os }})
+    needs: fmt
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' || github.actor == 'dependabot[bot]' }}
+          cache-on-failure: true
+
+      - name: Clippy
+        if: matrix.os != 'windows-latest'
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Todo / stub comment check
+        if: runner.os != 'Windows'
+        run: node scripts/check-no-todos.mjs
+
+      - name: Test
+        run: cargo test --workspace --locked
+
+  js:
+    name: JS lint
+    needs: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.21.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Lint docs + vscode
+        run: pnpm exec turbo run lint --filter=slint-docs --filter=slint-vscode
+
+  msrv:
+    name: MSRV
+    needs: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' || github.actor == 'dependabot[bot]' }}
+      - name: Check
+        run: cargo check --workspace --locked
+
+  deny:
+    name: cargo-deny
+    needs: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+
+  coverage:
+    name: Coverage
+    needs: fmt
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' || github.actor == 'dependabot[bot]' }}
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Generate coverage
+        env:
+          CARGO_PROFILE_TEST_DEBUG: 0
+          RUST_TEST_THREADS: 1
+        run: >
+          cargo llvm-cov --workspace --locked --summary-only
+          --ignore-filename-regex='/.cargo/|/rustc/'
