@@ -5,6 +5,10 @@
       "cache": false,
       "outputs": []
     },
+    "lint": {
+      "cache": false,
+      "dependsOn": []
+    },
     "test": {
       "cache": false,
       "dependsOn": ["build"]

@@ -5,6 +5,8 @@
   "description": "slint CLI — the linter for Agent Skills.",
   "scripts": {
     "build": "cargo build -p slint-cli --release",
-    "test": "cargo test -p slint-cli"
+    "test": "cargo test -p slint-cli",
+    "lint": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings",
+    "format": "cargo fmt --all"
   }
 }

@@ -10,6 +10,8 @@
     "test": "turbo run test",
     "build:cli": "turbo run build --filter=slint-cli",
     "test:cli": "cargo test --workspace",
+    "lint:cli": "turbo run lint --filter=slint-cli",
+    "format:cli": "pnpm --filter slint-cli format",
     "build:vscode": "turbo run build --filter=slint-vscode",
     "package:vscode": "turbo run build --filter=slint-vscode && pnpm --filter slint-vscode package",
     "dev:docs": "turbo run dev --filter=slint-docs",

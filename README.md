@@ -168,7 +168,9 @@ pnpm install
 cargo test --workspace    # or: pnpm test:cli
 cargo build --release --package slint-cli
 
-pnpm build                # Turbo: vscode + docs
+pnpm lint:cli             # rustfmt check + clippy (-D warnings)
+pnpm format:cli           # rustfmt --all
+pnpm build                # Turbo: CLI + vscode + docs
 pnpm build:vscode
 pnpm sync:docs            # refresh apps/docs/src/data/rules.json from the CLI
 pnpm dev:docs             # Astro docs at http://localhost:4321

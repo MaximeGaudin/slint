@@ -62,7 +62,11 @@ pub fn render(report: &Report, colour: bool) -> String {
                 "  {:>position_width$}  {}  {}\n",
                 "",
                 "       ",
-                paint(&format!("What to do: {}", message.advice), Paint::Dim, colour),
+                paint(
+                    &format!("What to do: {}", message.advice),
+                    Paint::Dim,
+                    colour
+                ),
             ));
 
             if cited.insert(message.rule.as_str()) {

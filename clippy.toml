@@ -1,0 +1,2 @@
+# Workspace Clippy policy. `pnpm lint:cli` (and the CLI turbo lint task) also
+# passes `-D warnings`, so new Clippy hits fail the build rather than accumulate.

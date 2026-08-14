@@ -1,0 +1,2 @@
+# Edition matches the Cargo workspace. Defaults are otherwise fine.
+edition = "2024"
