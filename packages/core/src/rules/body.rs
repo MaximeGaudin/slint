@@ -743,6 +743,7 @@ mod tests {
         assert!(check(&TIME_RULE, &skill).is_empty());
     }
 
+    #[test]
     fn hardcoded_consumer_repo_paths_without_a_fallback_are_a_warning() {
         let skill = skill_with_body(
             r#"
