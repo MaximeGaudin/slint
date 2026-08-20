@@ -181,6 +181,18 @@ static UNDECLARED_TOOL: RuleMeta = RuleMeta {
 /// Known host-private tools that are not portable across Agent Skills runtimes.
 const HOST_SPECIFIC_TOOLS: [&str; 1] = ["AskQuestion"];
 
+static HARDCODED_REPO_PATH: RuleMeta = RuleMeta {
+    name: "body/hardcoded-repo-path",
+    summary: "Do not hard-require consumer-repo paths without a missing-path fallback.",
+    rationale: "Skills move across repos. A fixed docs/ or src/ layout works in one tree and fails elsewhere unless the skill discovers, asks, parameterizes, or stops.",
+    advice: "Keep the default layout as the happy path, then add a Prerequisites gate: if the path is missing, ask the user, accept an override, mark it optional, or stop and explain the expected layout.",
+    default_severity: Severity::Warning,
+    fixable: false,
+    needs_model: false,
+    reference_title: sources::BEST_PRACTICES.0,
+    reference_url: sources::BEST_PRACTICES.1,
+};
+
 struct NotEmpty;
 struct MaxLines;
 struct TokenBudget;
@@ -189,6 +201,7 @@ struct RelativePaths;
 struct NoSecret;
 struct NoTimeBomb;
 struct UndeclaredTool;
+struct HardcodedRepoPath;
 
 impl Rule for NotEmpty {
     fn meta(&self) -> &'static RuleMeta {
@@ -455,6 +468,86 @@ impl Rule for UndeclaredTool {
     }
 }
 
+impl Rule for HardcodedRepoPath {
+    fn meta(&self) -> &'static RuleMeta {
+        &HARDCODED_REPO_PATH
+    }
+
+    fn check(&self, context: &mut RuleContext<'_>) {
+        static BACKTICK_PATH: LazyLock<Regex> = LazyLock::new(|| {
+            Regex::new(r"(?i)`((?:docs|src|app|packages)/[^`]+)`")
+                .expect("the backtick consumer path pattern compiles")
+        });
+        static BARE_PATH: LazyLock<Regex> = LazyLock::new(|| {
+            Regex::new(r"(?i)\b((?:docs|src|app|packages)/[\w./-]+)")
+                .expect("the bare consumer path pattern compiles")
+        });
+
+        let body = context.skill.body.as_str();
+        let body_lower = body.to_ascii_lowercase();
+        let has_fallback = body_lower.contains("does not exist")
+            || body_lower.contains("if missing")
+            || body_lower.contains("if the path is missing")
+            || body_lower.contains("ask the user")
+            || body_lower.contains("optional")
+            || body_lower.contains("override")
+            || body_lower.contains("stop and explain")
+            || body_lower.contains("when absent");
+
+        if has_fallback {
+            return;
+        }
+
+        let mut reported: Vec<String> = Vec::new();
+
+        for (index, line) in body.lines().enumerate() {
+            let mut matches: Vec<(usize, String)> = BACKTICK_PATH
+                .captures_iter(line)
+                .filter_map(|caps| {
+                    let whole = caps.get(0)?;
+                    let path = caps.get(1)?.as_str().to_string();
+                    Some((whole.start(), path))
+                })
+                .collect();
+
+            if matches.is_empty() {
+                matches = BARE_PATH
+                    .captures_iter(line)
+                    .filter_map(|caps| {
+                        let whole = caps.get(0)?;
+                        let path = caps.get(1)?.as_str().to_string();
+                        Some((whole.start(), path))
+                    })
+                    .collect();
+            }
+
+            for (start, path) in matches {
+                let lower = path.to_ascii_lowercase();
+                if lower.starts_with("scripts/")
+                    || lower.starts_with("references/")
+                    || lower.starts_with("assets/")
+                    || lower.starts_with("templates/")
+                {
+                    continue;
+                }
+
+                if reported.iter().any(|seen| seen.eq_ignore_ascii_case(&path)) {
+                    continue;
+                }
+                reported.push(path.clone());
+
+                let document_line = context.skill.document_line(index + 1);
+                context.report(
+                    format!(
+                        "Instructions require repository path \"{path}\" with no fallback if it is missing"
+                    ),
+                    Location::span(document_line, start + 1, path.len()),
+                );
+            }
+        }
+    }
+}
+
 static NOT_EMPTY_RULE: NotEmpty = NotEmpty;
 static MAX_LINES_RULE: MaxLines = MaxLines;
 static TOKEN_RULE: TokenBudget = TokenBudget;
@@ -463,6 +556,7 @@ static RELATIVE_RULE: RelativePaths = RelativePaths;
 static SECRET_RULE: NoSecret = NoSecret;
 static TIME_RULE: NoTimeBomb = NoTimeBomb;
 static UNDECLARED_TOOL_RULE: UndeclaredTool = UndeclaredTool;
+static HARDCODED_REPO_PATH_RULE: HardcodedRepoPath = HardcodedRepoPath;
 
 pub fn rules() -> Vec<&'static dyn Rule> {
     vec![
@@ -474,6 +568,7 @@ pub fn rules() -> Vec<&'static dyn Rule> {
         &SECRET_RULE,
         &TIME_RULE,
         &UNDECLARED_TOOL_RULE,
+        &HARDCODED_REPO_PATH_RULE,
     ]
 }
 
@@ -646,5 +741,66 @@ mod tests {
     fn ordinary_prose_about_time_is_not_a_time_bomb() {
         let skill = skill_with_body("\n## Culling\n\nFlag the keepers before exporting them.\n");
         assert!(check(&TIME_RULE, &skill).is_empty());
+    }
+
+    #[test]
+    fn hardcoded_consumer_repo_paths_without_a_fallback_are_a_warning() {
+        let skill = skill_with_body(
+            r#"
+## Scope
+
+| Path | Role |
+|------|------|
+| `docs/01 - Briefs/*.md` | Source of product truth. Read only. |
+| `docs/Stack.md` | Source of stack truth. Read only. |
+| `docs/02 - Specs/` | The only place this skill writes. |
+
+## Steps
+
+1. List `docs/01 - Briefs/` and read every brief.
+2. Create `docs/02 - Specs/Index.md`.
+"#,
+        );
+        let messages = check(&HARDCODED_REPO_PATH_RULE, &skill);
+
+        assert!(
+            !messages.is_empty(),
+            "expected a warning for hardcoded consumer-repo paths"
+        );
+        assert_eq!(messages[0].severity, Severity::Warning);
+        assert_eq!(messages[0].rule, "body/hardcoded-repo-path");
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.message.contains("docs/01 - Briefs")),
+            "expected the finding to name a required repo path, got {messages:?}"
+        );
+    }
+
+    #[test]
+    fn a_missing_path_fallback_suppresses_the_hardcoded_repo_path_warning() {
+        let skill = skill_with_body(
+            r#"
+## Prerequisites
+
+Default layout: `docs/01 - Briefs/` and `docs/02 - Specs/`.
+If `docs/01 - Briefs/` does not exist, ask the user where briefs live, or stop and explain the expected layout.
+
+## Steps
+
+1. List `docs/01 - Briefs/` only after the path is confirmed.
+"#,
+        );
+
+        assert!(check(&HARDCODED_REPO_PATH_RULE, &skill).is_empty());
+    }
+
+    #[test]
+    fn skill_bundle_paths_are_not_consumer_repo_paths() {
+        let skill = skill_with_body(
+            "\n## Culling\n\n1. Read `scripts/cull.py`.\n2. Follow `references/formats.md`.\n3. Copy `assets/template.md`.\n",
+        );
+
+        assert!(check(&HARDCODED_REPO_PATH_RULE, &skill).is_empty());
     }
 }
