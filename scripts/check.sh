@@ -36,6 +36,13 @@ cargo fmt --all -- --check
 echo "==> cargo clippy --workspace --all-targets -- -D warnings"
 cargo clippy --workspace --all-targets -- -D warnings
 
+echo "==> cargo deny check"
+if ! cargo deny --version >/dev/null 2>&1; then
+  echo "cargo-deny is required (CI runs it). Install with: cargo install cargo-deny --locked" >&2
+  exit 1
+fi
+cargo deny check
+
 echo "==> check-no-todos"
 node scripts/check-no-todos.mjs
 
