@@ -751,4 +751,95 @@ mod tests {
         assert!(found.contains("references/formats.md"));
         assert!(found.contains("assets/logo.png"));
     }
+
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/7 —
+    /// bundled scripts need a Prerequisites (or equivalent) chapter so agents
+    /// see host tools / network needs without reading the script itself.
+    #[test]
+    fn a_skill_with_scripts_and_no_prerequisites_section_is_reported() {
+        let mut skill = skill_with_body(
+            "\n## Script\n\nRun commands via `scripts/fetch.sh`.\n\n## Commands\n\n```bash\nscripts/fetch.sh get\n```\n",
+        );
+        skill.files.push(file(
+            "scripts/fetch.sh",
+            "#!/usr/bin/env bash\ncurl -sf https://example.com/api/demo | python3 -c 'print(1)'\n",
+            true,
+        ));
+
+        let messages: Vec<_> = crate::engine::lint_skill(&skill, &crate::config::Config::default())
+            .into_iter()
+            .filter(|message| message.rule == "bundle/script-prerequisites")
+            .collect();
+
+        assert_eq!(messages.len(), 1, "expected one prerequisites finding, got {messages:?}");
+        assert_eq!(messages[0].severity, Severity::Warning);
+        assert!(
+            messages[0]
+                .message
+                .to_ascii_lowercase()
+                .contains("prerequisite")
+                || messages[0]
+                    .message
+                    .to_ascii_lowercase()
+                    .contains("requirement"),
+            "expected the finding to name the missing section, got {}",
+            messages[0].message
+        );
+    }
+
+    #[test]
+    fn a_prerequisites_section_satisfies_the_script_prerequisites_rule() {
+        let mut skill = skill_with_body(
+            "\n## Prerequisites\n\nRequires bash, curl, python3, and network access to example.com.\n\n## Script\n\nRun `scripts/fetch.sh`.\n",
+        );
+        skill.files.push(file(
+            "scripts/fetch.sh",
+            "#!/usr/bin/env bash\ncurl -sf https://example.com/api/demo\n",
+            true,
+        ));
+
+        let messages: Vec<_> = crate::engine::lint_skill(&skill, &crate::config::Config::default())
+            .into_iter()
+            .filter(|message| message.rule == "bundle/script-prerequisites")
+            .collect();
+
+        assert!(
+            messages.is_empty(),
+            "expected Prerequisites to satisfy the rule, got {messages:?}"
+        );
+    }
+
+    #[test]
+    fn requirements_and_compatibility_headings_count_as_prerequisites() {
+        for heading in ["## Requirements", "## Compatibility"] {
+            let mut skill = skill_with_body(&format!(
+                "\n{heading}\n\nNeeds curl.\n\n## Script\n\nRun `scripts/fetch.sh`.\n"
+            ));
+            skill
+                .files
+                .push(file("scripts/fetch.sh", "#!/usr/bin/env bash\n", true));
+
+            let messages: Vec<_> =
+                crate::engine::lint_skill(&skill, &crate::config::Config::default())
+                    .into_iter()
+                    .filter(|message| message.rule == "bundle/script-prerequisites")
+                    .collect();
+
+            assert!(
+                messages.is_empty(),
+                "expected {heading} to satisfy the rule, got {messages:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_skill_without_scripts_does_not_need_prerequisites() {
+        let skill = skill_with_body("\n## Steps\n\n1. Import the files.\n");
+        let messages: Vec<_> = crate::engine::lint_skill(&skill, &crate::config::Config::default())
+            .into_iter()
+            .filter(|message| message.rule == "bundle/script-prerequisites")
+            .collect();
+
+        assert!(messages.is_empty());
+    }
 }
