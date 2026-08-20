@@ -579,8 +579,7 @@ impl Rule for ImperativeInstructions {
                 .expect("the passive-instruction pattern compiles")
         });
         static HEDGE: LazyLock<Regex> = LazyLock::new(|| {
-            Regex::new(r"(?i)\b(generally|usually|ideally)\b")
-                .expect("the hedge pattern compiles")
+            Regex::new(r"(?i)\b(generally|usually|ideally)\b").expect("the hedge pattern compiles")
         });
 
         let mut in_fence = false;
@@ -599,7 +598,10 @@ impl Rule for ImperativeInstructions {
 
             if let Some(found) = SOFT.find(line) {
                 context.report(
-                    format!("\"{}\" is conversational instead of a direct order", found.as_str()),
+                    format!(
+                        "\"{}\" is conversational instead of a direct order",
+                        found.as_str()
+                    ),
                     Location::span(document_line, found.start() + 1, found.len()),
                 );
                 continue;
@@ -607,7 +609,10 @@ impl Rule for ImperativeInstructions {
 
             if let Some(found) = PASSIVE.find(line) {
                 context.report(
-                    format!("\"{}\" is passive instead of a direct order", found.as_str()),
+                    format!(
+                        "\"{}\" is passive instead of a direct order",
+                        found.as_str()
+                    ),
                     Location::span(document_line, found.start() + 1, found.len()),
                 );
                 continue;
@@ -903,7 +908,9 @@ Feel free to rewrite the brief once you have enough answers.\n",
         assert_eq!(messages[0].rule, "body/imperative-instructions");
         assert_eq!(messages[0].severity, Severity::Warning);
         assert!(
-            messages.iter().any(|m| m.message.to_ascii_lowercase().contains("you might")),
+            messages
+                .iter()
+                .any(|m| m.message.to_ascii_lowercase().contains("you might")),
             "{messages:?}"
         );
     }
@@ -922,8 +929,9 @@ Feel free to rewrite the brief once you have enough answers.\n",
 
     #[test]
     fn a_passive_procedure_is_reported() {
-        let skill =
-            skill_with_body("\n## Workflow\n\n1. Authentication should be checked on every endpoint.\n");
+        let skill = skill_with_body(
+            "\n## Workflow\n\n1. Authentication should be checked on every endpoint.\n",
+        );
         let messages = check(&IMPERATIVE_RULE, &skill);
 
         assert_eq!(messages.len(), 1);
