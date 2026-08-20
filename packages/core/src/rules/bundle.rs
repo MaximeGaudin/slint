@@ -142,6 +142,18 @@ static DECLARED_DEPENDENCIES: RuleMeta = RuleMeta {
     reference_url: sources::BEST_PRACTICES.1,
 };
 
+static SCRIPT_PREREQUISITES: RuleMeta = RuleMeta {
+    name: "bundle/script-prerequisites",
+    summary: "Skills that ship scripts must document runtime needs in a Prerequisites section.",
+    rationale: "Scripts often need host tools, interpreters, or network access that only show up when reading the script. Agents following SKILL.md alone will miss those requirements and fail mid-run.",
+    advice: "Add a Prerequisites (or Requirements / Compatibility) section that names the host tools, runtimes, and other non-obvious environment needs the scripts require.",
+    default_severity: Severity::Warning,
+    fixable: false,
+    needs_model: false,
+    reference_title: sources::SPECIFICATION.0,
+    reference_url: sources::SPECIFICATION.1,
+};
+
 fn paths_in(text: &str) -> BTreeSet<String> {
     BUNDLED_REFERENCE
         .captures_iter(text)
@@ -179,6 +191,7 @@ struct Executable;
 struct FlatReferences;
 struct ContentsList;
 struct DeclaredDependencies;
+struct ScriptPrerequisites;
 
 impl Rule for NoDangling {
     fn meta(&self) -> &'static RuleMeta {
@@ -417,6 +430,47 @@ impl Rule for DeclaredDependencies {
     }
 }
 
+impl Rule for ScriptPrerequisites {
+    fn meta(&self) -> &'static RuleMeta {
+        &SCRIPT_PREREQUISITES
+    }
+
+    fn check(&self, context: &mut RuleContext<'_>) {
+        let has_scripts = context
+            .skill
+            .files
+            .iter()
+            .any(|file| file.path.starts_with("scripts/"));
+
+        if !has_scripts || has_prerequisites_section(&context.skill.body) {
+            return;
+        }
+
+        let line = context.skill.frontmatter_lines.saturating_add(1).max(1);
+        context.report(
+            "This skill ships scripts but SKILL.md has no Prerequisites section",
+            Location::at(line, 1),
+        );
+    }
+}
+
+fn has_prerequisites_section(body: &str) -> bool {
+    body.lines().any(|line| {
+        let trimmed = line.trim();
+        if !trimmed.starts_with('#') {
+            return false;
+        }
+
+        let heading = trimmed.trim_start_matches('#').trim().to_ascii_lowercase();
+        matches!(
+            heading.as_str(),
+            "prerequisites" | "requirements" | "compatibility"
+        ) || heading.starts_with("prerequisites ")
+            || heading.starts_with("requirements ")
+            || heading.starts_with("compatibility ")
+    })
+}
+
 fn undeclared_imports(script: &str, body: &str) -> Vec<String> {
     let mentioned = format!("{body}\n{}", script.to_ascii_lowercase());
 
@@ -492,6 +546,7 @@ static EXECUTABLE_RULE: Executable = Executable;
 static FLAT_RULE: FlatReferences = FlatReferences;
 static CONTENTS_RULE: ContentsList = ContentsList;
 static DEPENDENCIES_RULE: DeclaredDependencies = DeclaredDependencies;
+static PREREQUISITES_RULE: ScriptPrerequisites = ScriptPrerequisites;
 
 pub fn rules() -> Vec<&'static dyn Rule> {
     vec![
@@ -501,6 +556,7 @@ pub fn rules() -> Vec<&'static dyn Rule> {
         &FLAT_RULE,
         &CONTENTS_RULE,
         &DEPENDENCIES_RULE,
+        &PREREQUISITES_RULE,
     ]
 }
 
@@ -771,7 +827,11 @@ mod tests {
             .filter(|message| message.rule == "bundle/script-prerequisites")
             .collect();
 
-        assert_eq!(messages.len(), 1, "expected one prerequisites finding, got {messages:?}");
+        assert_eq!(
+            messages.len(),
+            1,
+            "expected one prerequisites finding, got {messages:?}"
+        );
         assert_eq!(messages[0].severity, Severity::Warning);
         assert!(
             messages[0]
