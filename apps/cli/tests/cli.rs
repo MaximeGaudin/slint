@@ -386,3 +386,26 @@ fn a_rule_that_fires_twice_is_cited_once() {
         "and the source is printed once:\n{text}"
     );
 }
+
+#[test]
+fn an_undeclared_host_specific_tool_in_the_body_is_reported() {
+    // Reproduces https://github.com/MaximeGaudin/slint/issues/3: a skill that hard-requires
+    // Cursor's AskQuestion tool without listing it in allowed-tools and without a portable fallback.
+    let temporary = tempfile::tempdir().unwrap();
+    write(
+        temporary.path(),
+        "grill-brief",
+        "---\nname: grill-brief\ndescription: Interrogates briefs with batched questions until they are spec-ready. Use when grilling briefs.\n---\n\n# Grill Brief\n\n2. Ask a batch of 3 to 6 multiple-choice questions with the AskQuestion tool. Rules for every batch:\n   - Use `allow_multiple: true` for questions that are genuinely a set.\n",
+    );
+
+    let text = stdout(&slint(&[temporary.path().to_str().unwrap(), "--no-llm"]));
+
+    assert!(
+        text.contains("body/undeclared-tool"),
+        "expected undeclared host tool finding:\n{text}"
+    );
+    assert!(
+        text.contains("AskQuestion"),
+        "finding should name the tool:\n{text}"
+    );
+}
