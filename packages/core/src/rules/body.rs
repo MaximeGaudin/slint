@@ -166,6 +166,21 @@ static NO_TIME_BOMB: RuleMeta = RuleMeta {
     reference_url: sources::BEST_PRACTICES.1,
 };
 
+static UNDECLARED_TOOL: RuleMeta = RuleMeta {
+    name: "body/undeclared-tool",
+    summary: "Host-specific tools in the body must be declared in allowed-tools or given a portable fallback.",
+    rationale: "Hard-requiring a product-private tool (for example Cursor's AskQuestion) without listing it or providing a chat fallback makes the skill stall or invent fake tool calls on other hosts.",
+    advice: "Add the tool to frontmatter allowed-tools, or rewrite the step in host-agnostic terms with a fallback when the tool is missing (for example: ask the same questions conversationally).",
+    default_severity: Severity::Warning,
+    fixable: false,
+    needs_model: false,
+    reference_title: sources::SPECIFICATION.0,
+    reference_url: sources::SPECIFICATION.1,
+};
+
+/// Known host-private tools that are not portable across Agent Skills runtimes.
+const HOST_SPECIFIC_TOOLS: [&str; 1] = ["AskQuestion"];
+
 struct NotEmpty;
 struct MaxLines;
 struct TokenBudget;
@@ -173,6 +188,7 @@ struct PosixPaths;
 struct RelativePaths;
 struct NoSecret;
 struct NoTimeBomb;
+struct UndeclaredTool;
 
 impl Rule for NotEmpty {
     fn meta(&self) -> &'static RuleMeta {
@@ -374,6 +390,71 @@ impl Rule for NoTimeBomb {
     }
 }
 
+impl Rule for UndeclaredTool {
+    fn meta(&self) -> &'static RuleMeta {
+        &UNDECLARED_TOOL
+    }
+
+    fn check(&self, context: &mut RuleContext<'_>) {
+        let allowed = context
+            .skill
+            .metadata
+            .get("allowed-tools")
+            .map(|value| value.as_str())
+            .unwrap_or("");
+        let body = context.skill.body.as_str();
+        let body_lower = body.to_ascii_lowercase();
+        let has_fallback = body_lower.contains("not available")
+            || body_lower.contains("when available")
+            || body_lower.contains("if unavailable")
+            || body_lower.contains("ask conversationally")
+            || body_lower.contains("ask these questions conversationally")
+            || body_lower.contains("otherwise ask");
+
+        if has_fallback {
+            return;
+        }
+
+        for tool in HOST_SPECIFIC_TOOLS {
+            if !body.contains(tool) {
+                continue;
+            }
+
+            if allowed
+                .split_whitespace()
+                .any(|token| token.eq_ignore_ascii_case(tool))
+            {
+                continue;
+            }
+
+            for (index, line) in body.lines().enumerate() {
+                if !line.contains(tool) {
+                    continue;
+                }
+
+                let lower = line.to_ascii_lowercase();
+                if lower.contains("do not use")
+                    || lower.contains("don't use")
+                    || lower.contains("never use")
+                    || lower.contains("avoid using")
+                {
+                    continue;
+                }
+
+                let document_line = context.skill.document_line(index + 1);
+                let column = line.find(tool).map(|offset| offset + 1).unwrap_or(1);
+                context.report(
+                    format!(
+                        "Instructions require tool \"{tool}\" but it is not listed in allowed-tools"
+                    ),
+                    Location::at(document_line, column),
+                );
+                break;
+            }
+        }
+    }
+}
+
 static NOT_EMPTY_RULE: NotEmpty = NotEmpty;
 static MAX_LINES_RULE: MaxLines = MaxLines;
 static TOKEN_RULE: TokenBudget = TokenBudget;
@@ -381,6 +462,7 @@ static POSIX_RULE: PosixPaths = PosixPaths;
 static RELATIVE_RULE: RelativePaths = RelativePaths;
 static SECRET_RULE: NoSecret = NoSecret;
 static TIME_RULE: NoTimeBomb = NoTimeBomb;
+static UNDECLARED_TOOL_RULE: UndeclaredTool = UndeclaredTool;
 
 pub fn rules() -> Vec<&'static dyn Rule> {
     vec![
@@ -391,6 +473,7 @@ pub fn rules() -> Vec<&'static dyn Rule> {
         &RELATIVE_RULE,
         &SECRET_RULE,
         &TIME_RULE,
+        &UNDECLARED_TOOL_RULE,
     ]
 }
 
