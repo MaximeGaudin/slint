@@ -567,7 +567,65 @@ impl Rule for ImperativeInstructions {
         &IMPERATIVE_INSTRUCTIONS
     }
 
-    fn check(&self, _context: &mut RuleContext<'_>) {}
+    fn check(&self, context: &mut RuleContext<'_>) {
+        static SOFT: LazyLock<Regex> = LazyLock::new(|| {
+            Regex::new(
+                r"(?i)\b(you might(?: want)?|you may want|feel free|consider |try to|it would be|perhaps|when you feel|if you think|as you see fit)\b",
+            )
+            .expect("the soft-instruction pattern compiles")
+        });
+        static PASSIVE: LazyLock<Regex> = LazyLock::new(|| {
+            Regex::new(r"(?i)\b([A-Za-z][A-Za-z0-9_-]*(?:\s+[A-Za-z][A-Za-z0-9_-]*){0,3}\s+should be\s+[A-Za-z]+(?:ed|en|t)?)\b")
+                .expect("the passive-instruction pattern compiles")
+        });
+        static HEDGE: LazyLock<Regex> = LazyLock::new(|| {
+            Regex::new(r"(?i)\b(generally|usually|ideally)\b")
+                .expect("the hedge pattern compiles")
+        });
+
+        let mut in_fence = false;
+
+        for (index, line) in context.skill.body.lines().enumerate() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("```") {
+                in_fence = !in_fence;
+                continue;
+            }
+            if in_fence || trimmed.starts_with('#') {
+                continue;
+            }
+
+            let document_line = context.skill.document_line(index + 1);
+
+            if let Some(found) = SOFT.find(line) {
+                context.report(
+                    format!("\"{}\" is conversational instead of a direct order", found.as_str()),
+                    Location::span(document_line, found.start() + 1, found.len()),
+                );
+                continue;
+            }
+
+            if let Some(found) = PASSIVE.find(line) {
+                context.report(
+                    format!("\"{}\" is passive instead of a direct order", found.as_str()),
+                    Location::span(document_line, found.start() + 1, found.len()),
+                );
+                continue;
+            }
+
+            let hedges: Vec<_> = HEDGE.find_iter(line).collect();
+            if hedges.len() >= 3 {
+                let first = hedges[0];
+                context.report(
+                    format!(
+                        "\"{}\" stacks hedges instead of giving a direct order",
+                        first.as_str()
+                    ),
+                    Location::span(document_line, first.start() + 1, first.len()),
+                );
+            }
+        }
+    }
 }
 
 static NOT_EMPTY_RULE: NotEmpty = NotEmpty;
