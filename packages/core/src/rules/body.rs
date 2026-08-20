@@ -181,6 +181,18 @@ static UNDECLARED_TOOL: RuleMeta = RuleMeta {
 /// Known host-private tools that are not portable across Agent Skills runtimes.
 const HOST_SPECIFIC_TOOLS: [&str; 1] = ["AskQuestion"];
 
+static HARDCODED_REPO_PATH: RuleMeta = RuleMeta {
+    name: "body/hardcoded-repo-path",
+    summary: "Do not hard-require consumer-repo paths without a missing-path fallback.",
+    rationale: "Skills move across repos. A fixed docs/ or src/ layout works in one tree and fails elsewhere unless the skill discovers, asks, parameterizes, or stops.",
+    advice: "Keep the default layout as the happy path, then add a Prerequisites gate: if the path is missing, ask the user, accept an override, mark it optional, or stop and explain the expected layout.",
+    default_severity: Severity::Warning,
+    fixable: false,
+    needs_model: false,
+    reference_title: sources::BEST_PRACTICES.0,
+    reference_url: sources::BEST_PRACTICES.1,
+};
+
 struct NotEmpty;
 struct MaxLines;
 struct TokenBudget;
@@ -189,6 +201,7 @@ struct RelativePaths;
 struct NoSecret;
 struct NoTimeBomb;
 struct UndeclaredTool;
+struct HardcodedRepoPath;
 
 impl Rule for NotEmpty {
     fn meta(&self) -> &'static RuleMeta {
@@ -455,6 +468,14 @@ impl Rule for UndeclaredTool {
     }
 }
 
+impl Rule for HardcodedRepoPath {
+    fn meta(&self) -> &'static RuleMeta {
+        &HARDCODED_REPO_PATH
+    }
+
+    fn check(&self, _context: &mut RuleContext<'_>) {}
+}
+
 static NOT_EMPTY_RULE: NotEmpty = NotEmpty;
 static MAX_LINES_RULE: MaxLines = MaxLines;
 static TOKEN_RULE: TokenBudget = TokenBudget;
@@ -463,6 +484,7 @@ static RELATIVE_RULE: RelativePaths = RelativePaths;
 static SECRET_RULE: NoSecret = NoSecret;
 static TIME_RULE: NoTimeBomb = NoTimeBomb;
 static UNDECLARED_TOOL_RULE: UndeclaredTool = UndeclaredTool;
+static HARDCODED_REPO_PATH_RULE: HardcodedRepoPath = HardcodedRepoPath;
 
 pub fn rules() -> Vec<&'static dyn Rule> {
     vec![
@@ -474,6 +496,7 @@ pub fn rules() -> Vec<&'static dyn Rule> {
         &SECRET_RULE,
         &TIME_RULE,
         &UNDECLARED_TOOL_RULE,
+        &HARDCODED_REPO_PATH_RULE,
     ]
 }
 
@@ -646,5 +669,65 @@ mod tests {
     fn ordinary_prose_about_time_is_not_a_time_bomb() {
         let skill = skill_with_body("\n## Culling\n\nFlag the keepers before exporting them.\n");
         assert!(check(&TIME_RULE, &skill).is_empty());
+    }
+
+    fn hardcoded_consumer_repo_paths_without_a_fallback_are_a_warning() {
+        let skill = skill_with_body(
+            r#"
+## Scope
+
+| Path | Role |
+|------|------|
+| `docs/01 - Briefs/*.md` | Source of product truth. Read only. |
+| `docs/Stack.md` | Source of stack truth. Read only. |
+| `docs/02 - Specs/` | The only place this skill writes. |
+
+## Steps
+
+1. List `docs/01 - Briefs/` and read every brief.
+2. Create `docs/02 - Specs/Index.md`.
+"#,
+        );
+        let messages = check(&HARDCODED_REPO_PATH_RULE, &skill);
+
+        assert!(
+            !messages.is_empty(),
+            "expected a warning for hardcoded consumer-repo paths"
+        );
+        assert_eq!(messages[0].severity, Severity::Warning);
+        assert_eq!(messages[0].rule, "body/hardcoded-repo-path");
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.message.contains("docs/01 - Briefs")),
+            "expected the finding to name a required repo path, got {messages:?}"
+        );
+    }
+
+    #[test]
+    fn a_missing_path_fallback_suppresses_the_hardcoded_repo_path_warning() {
+        let skill = skill_with_body(
+            r#"
+## Prerequisites
+
+Default layout: `docs/01 - Briefs/` and `docs/02 - Specs/`.
+If `docs/01 - Briefs/` does not exist, ask the user where briefs live, or stop and explain the expected layout.
+
+## Steps
+
+1. List `docs/01 - Briefs/` only after the path is confirmed.
+"#,
+        );
+
+        assert!(check(&HARDCODED_REPO_PATH_RULE, &skill).is_empty());
+    }
+
+    #[test]
+    fn skill_bundle_paths_are_not_consumer_repo_paths() {
+        let skill = skill_with_body(
+            "\n## Culling\n\n1. Read `scripts/cull.py`.\n2. Follow `references/formats.md`.\n3. Copy `assets/template.md`.\n",
+        );
+
+        assert!(check(&HARDCODED_REPO_PATH_RULE, &skill).is_empty());
     }
 }
