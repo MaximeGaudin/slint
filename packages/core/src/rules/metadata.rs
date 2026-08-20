@@ -141,4 +141,60 @@ mod tests {
             skill::parse("---\nname: a\ndescription: b\nteam: photography\n---\n\nBody.\n");
         assert!(check(&KEY_RULE, &parsed).is_empty());
     }
+
+    /// Regression for #2: product-specific top-level keys are not agentskills.io fields.
+    fn unknown_field_messages(source: &str) -> Vec<crate::diagnostics::Message> {
+        let parsed = skill::parse(source);
+        crate::engine::lint_skill(&parsed, &crate::config::Config::default())
+            .into_iter()
+            .filter(|message| message.rule == "frontmatter/unknown-field")
+            .collect()
+    }
+
+    #[test]
+    fn disable_model_invocation_is_an_unknown_field() {
+        let messages = unknown_field_messages(
+            "---\nname: a\ndescription: b\ndisable-model-invocation: true\n---\n\nBody.\n",
+        );
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].severity, Severity::Warning);
+        assert!(messages[0].message.contains("disable-model-invocation"));
+    }
+
+    #[test]
+    fn compatibility_is_a_recognized_field() {
+        let messages = unknown_field_messages(
+            "---\nname: a\ndescription: b\ncompatibility: Requires git 2.0+\n---\n\nBody.\n",
+        );
+
+        assert!(messages.is_empty());
+    }
+
+    #[test]
+    fn top_level_version_is_an_unknown_field() {
+        let messages =
+            unknown_field_messages("---\nname: a\ndescription: b\nversion: \"1.0\"\n---\n\nBody.\n");
+
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].message.contains("version"));
+    }
+
+    #[test]
+    fn product_options_under_metadata_are_not_unknown_fields() {
+        let messages = unknown_field_messages(
+            "---\nname: a\ndescription: b\nmetadata:\n  disable-model-invocation: \"true\"\n---\n\nBody.\n",
+        );
+
+        assert!(messages.is_empty());
+    }
+
+    #[test]
+    fn an_ordinary_custom_key_is_an_unknown_field() {
+        let messages =
+            unknown_field_messages("---\nname: a\ndescription: b\nteam: photography\n---\n\nBody.\n");
+
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].message.contains("team"));
+    }
 }
