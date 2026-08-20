@@ -193,6 +193,19 @@ static HARDCODED_REPO_PATH: RuleMeta = RuleMeta {
     reference_url: sources::BEST_PRACTICES.1,
 };
 
+static IMPERATIVE_INSTRUCTIONS: RuleMeta = RuleMeta {
+    name: "body/imperative-instructions",
+    summary: "Write instructional steps as direct orders, not conversational or passive advice.",
+    rationale: "Soft phrasing (\"you might\", \"consider\", \"feel free\") lets weaker models skip or paraphrase steps. Imperative procedures keep runs consistent across hosts and model tiers.",
+    advice: "Rewrite as an imperative procedure (\"Check X\", \"List Y\", \"Write Z\"). Avoid \"you might\", \"consider\", \"feel free\", \"it would be helpful\", and stacked hedges like \"generally usually ideally\".",
+    default_severity: Severity::Warning,
+    fixable: false,
+    needs_model: false,
+    reference_title: sources::BEST_PRACTICES.0,
+    reference_url: sources::BEST_PRACTICES.1,
+};
+
+
 struct NotEmpty;
 struct MaxLines;
 struct TokenBudget;
@@ -202,6 +215,7 @@ struct NoSecret;
 struct NoTimeBomb;
 struct UndeclaredTool;
 struct HardcodedRepoPath;
+struct ImperativeInstructions;
 
 impl Rule for NotEmpty {
     fn meta(&self) -> &'static RuleMeta {
@@ -548,6 +562,14 @@ impl Rule for HardcodedRepoPath {
     }
 }
 
+impl Rule for ImperativeInstructions {
+    fn meta(&self) -> &'static RuleMeta {
+        &IMPERATIVE_INSTRUCTIONS
+    }
+
+    fn check(&self, _context: &mut RuleContext<'_>) {}
+}
+
 static NOT_EMPTY_RULE: NotEmpty = NotEmpty;
 static MAX_LINES_RULE: MaxLines = MaxLines;
 static TOKEN_RULE: TokenBudget = TokenBudget;
@@ -557,6 +579,7 @@ static SECRET_RULE: NoSecret = NoSecret;
 static TIME_RULE: NoTimeBomb = NoTimeBomb;
 static UNDECLARED_TOOL_RULE: UndeclaredTool = UndeclaredTool;
 static HARDCODED_REPO_PATH_RULE: HardcodedRepoPath = HardcodedRepoPath;
+static IMPERATIVE_RULE: ImperativeInstructions = ImperativeInstructions;
 
 pub fn rules() -> Vec<&'static dyn Rule> {
     vec![
@@ -569,6 +592,7 @@ pub fn rules() -> Vec<&'static dyn Rule> {
         &TIME_RULE,
         &UNDECLARED_TOOL_RULE,
         &HARDCODED_REPO_PATH_RULE,
+        &IMPERATIVE_RULE,
     ]
 }
 
@@ -802,5 +826,72 @@ If `docs/01 - Briefs/` does not exist, ask the user where briefs live, or stop a
         );
 
         assert!(check(&HARDCODED_REPO_PATH_RULE, &skill).is_empty());
+    }
+
+    #[test]
+    fn conversational_workflow_steps_are_reported() {
+        let skill = skill_with_body(
+            "\n## Workflow\n\n\
+You might want to start by looking through the briefs folder if you can.\n\
+Consider auditing each brief for gaps. It would be helpful to ask clarifying questions.\n\
+Feel free to rewrite the brief once you have enough answers.\n",
+        );
+        let messages = check(&IMPERATIVE_RULE, &skill);
+
+        assert!(
+            messages.len() >= 3,
+            "expected soft markers to fire, got {messages:?}"
+        );
+        assert_eq!(messages[0].rule, "body/imperative-instructions");
+        assert_eq!(messages[0].severity, Severity::Warning);
+        assert!(
+            messages.iter().any(|m| m.message.to_ascii_lowercase().contains("you might")),
+            "{messages:?}"
+        );
+    }
+
+    #[test]
+    fn imperative_workflow_steps_pass() {
+        let skill = skill_with_body(
+            "\n## Workflow\n\n\
+1. List `docs/01 - Briefs/` and read every file in numeric order.\n\
+2. For each brief, report a one-line verdict and a blocking-gap count.\n\
+3. Ask a batch of 3–6 multiple-choice questions for the current brief.\n\
+4. Write the answers into the brief immediately.\n",
+        );
+        assert!(check(&IMPERATIVE_RULE, &skill).is_empty());
+    }
+
+    #[test]
+    fn a_passive_procedure_is_reported() {
+        let skill =
+            skill_with_body("\n## Workflow\n\n1. Authentication should be checked on every endpoint.\n");
+        let messages = check(&IMPERATIVE_RULE, &skill);
+
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].message.contains("should be checked"));
+    }
+
+    #[test]
+    fn stacked_hedges_in_one_step_are_reported() {
+        let skill = skill_with_body(
+            "\n## Workflow\n\n1. Generally usually ideally run the export after culling.\n",
+        );
+        let messages = check(&IMPERATIVE_RULE, &skill);
+
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].message.contains("hedge") || messages[0].message.contains("Generally"));
+    }
+
+    #[test]
+    fn soft_language_inside_a_fenced_example_is_ignored() {
+        let skill = skill_with_body(
+            "\n## Workflow\n\n\
+1. Write the brief.\n\n\
+```markdown\n\
+You might want to start by looking through the briefs folder.\n\
+```\n",
+        );
+        assert!(check(&IMPERATIVE_RULE, &skill).is_empty());
     }
 }
