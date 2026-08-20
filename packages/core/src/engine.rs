@@ -345,6 +345,55 @@ mod tests {
         assert!(suppressions.file.is_empty());
     }
 
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/8 —
+    /// example-only paths live inside fenced blocks; a disable-next-line
+    /// immediately before the opening fence must cover every line in that fence.
+    #[test]
+    fn a_disable_next_line_before_a_fence_covers_lines_inside_the_fence() {
+        let suppressions = Suppressions::read(
+            "one\n<!-- slint-disable-next-line bundle/no-dangling-path -->\n```bash\nscripts/run.sh --help\n```\n",
+        );
+
+        assert!(
+            suppressions
+                .lines
+                .iter()
+                .any(|(line, rule)| *line == 4 && rule == "bundle/no-dangling-path"),
+            "expected the path line inside the fence to be suppressed, got {suppressions:?}"
+        );
+        assert!(suppressions.file.is_empty());
+    }
+
+    #[test]
+    fn a_disable_next_line_before_a_fence_silences_dangling_path_in_a_real_run() {
+        let temporary = tempfile::tempdir().unwrap();
+        write_skill(
+            temporary.path(),
+            "demo-example-path-ignore",
+            "---\nname: demo-example-path-ignore\ndescription: Demo skill showing an example-only path with an ESLint-style ignore comment. Use when testing inline rule suppression.\n---\n\n# Demo example path ignore\n\n## Workflow\n\n<!-- slint-disable-next-line bundle/no-dangling-path -->\n```bash\nscripts/run.sh --help\n```\n",
+        );
+
+        let report = run(
+            &[temporary.path().to_path_buf()],
+            &Config::default(),
+            &[],
+            Passes {
+                plugins: false,
+                model: false,
+            },
+        )
+        .unwrap();
+
+        assert!(
+            !report.skills[0]
+                .messages
+                .iter()
+                .any(|one| one.rule == "bundle/no-dangling-path"),
+            "expected fence-scoped disable-next-line to silence dangling path, got {:?}",
+            report.skills[0].messages
+        );
+    }
+
     #[test]
     fn several_rules_can_be_named_in_one_comment() {
         let suppressions =
