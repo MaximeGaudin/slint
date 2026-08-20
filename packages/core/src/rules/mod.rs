@@ -46,6 +46,10 @@ pub mod sources {
         "The AgentSkill specification",
         "https://agentskills.io/specification",
     );
+    pub const OPTIONAL_DIRECTORIES: (&str, &str) = (
+        "The AgentSkill specification — Optional directories",
+        "https://agentskills.io/specification#optional-directories",
+    );
     pub const PAPER: (&str, &str) = (
         "Authoring Agent Skills: a software-engineering approach",
         "https://arxiv.org/html/2607.25032v1",
@@ -117,19 +121,39 @@ impl<'a> RuleContext<'a> {
     /// Reports against `SKILL.md`.
     pub fn report(&mut self, message: impl Into<String>, location: Location) {
         let file = self.skill.document.clone();
-        self.push(message, location, file, None);
+        self.push(message, location, file, None, None, None);
     }
 
     /// Reports against `SKILL.md`, with a fix that is computed rather than written.
     pub fn report_fixable(&mut self, message: impl Into<String>, location: Location, fix: Fix) {
         let file = self.skill.document.clone();
-        self.push(message, location, file, Some(fix));
+        self.push(message, location, file, Some(fix), None, None);
     }
 
     /// Reports against a bundled file.
     pub fn report_in_file(&mut self, path: &str, message: impl Into<String>, location: Location) {
         let file = format!("{}/{path}", self.skill.directory.display());
-        self.push(message, location, file, None);
+        self.push(message, location, file, None, None, None);
+    }
+
+    /// Reports against a bundled file with finding-specific advice and citation.
+    pub fn report_in_file_with(
+        &mut self,
+        path: &str,
+        message: impl Into<String>,
+        location: Location,
+        advice: impl Into<String>,
+        reference: Reference,
+    ) {
+        let file = format!("{}/{path}", self.skill.directory.display());
+        self.push(
+            message,
+            location,
+            file,
+            None,
+            Some(advice.into()),
+            Some(reference),
+        );
     }
 
     pub fn report_fixable_in_file(
@@ -140,7 +164,7 @@ impl<'a> RuleContext<'a> {
         fix: Fix,
     ) {
         let file = format!("{}/{path}", self.skill.directory.display());
-        self.push(message, location, file, Some(fix));
+        self.push(message, location, file, Some(fix), None, None);
     }
 
     fn push(
@@ -149,17 +173,19 @@ impl<'a> RuleContext<'a> {
         location: Location,
         file: String,
         fix: Option<Fix>,
+        advice: Option<String>,
+        reference: Option<Reference>,
     ) {
         self.messages.push(Message {
             rule: self.meta.name.to_string(),
             severity: self.severity,
             message: message.into(),
-            advice: self.meta.advice.to_string(),
+            advice: advice.unwrap_or_else(|| self.meta.advice.to_string()),
             location,
             source: Source::Static,
             file,
             fix,
-            reference: self.meta.reference(),
+            reference: reference.unwrap_or_else(|| self.meta.reference()),
             confidence: 1.0,
         });
     }
