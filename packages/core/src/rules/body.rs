@@ -205,7 +205,6 @@ static IMPERATIVE_INSTRUCTIONS: RuleMeta = RuleMeta {
     reference_url: sources::BEST_PRACTICES.1,
 };
 
-
 struct NotEmpty;
 struct MaxLines;
 struct TokenBudget;
