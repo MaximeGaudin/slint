@@ -210,8 +210,9 @@ mod tests {
 
     #[test]
     fn top_level_version_is_an_unknown_field() {
-        let messages =
-            unknown_field_messages("---\nname: a\ndescription: b\nversion: \"1.0\"\n---\n\nBody.\n");
+        let messages = unknown_field_messages(
+            "---\nname: a\ndescription: b\nversion: \"1.0\"\n---\n\nBody.\n",
+        );
 
         assert_eq!(messages.len(), 1);
         assert!(messages[0].message.contains("version"));
@@ -228,8 +229,9 @@ mod tests {
 
     #[test]
     fn an_ordinary_custom_key_is_an_unknown_field() {
-        let messages =
-            unknown_field_messages("---\nname: a\ndescription: b\nteam: photography\n---\n\nBody.\n");
+        let messages = unknown_field_messages(
+            "---\nname: a\ndescription: b\nteam: photography\n---\n\nBody.\n",
+        );
 
         assert_eq!(messages.len(), 1);
         assert!(messages[0].message.contains("team"));
