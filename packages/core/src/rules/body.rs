@@ -473,7 +473,79 @@ impl Rule for HardcodedRepoPath {
         &HARDCODED_REPO_PATH
     }
 
-    fn check(&self, _context: &mut RuleContext<'_>) {}
+    fn check(&self, context: &mut RuleContext<'_>) {
+        static BACKTICK_PATH: LazyLock<Regex> = LazyLock::new(|| {
+            Regex::new(r"(?i)`((?:docs|src|app|packages)/[^`]+)`")
+                .expect("the backtick consumer path pattern compiles")
+        });
+        static BARE_PATH: LazyLock<Regex> = LazyLock::new(|| {
+            Regex::new(r"(?i)\b((?:docs|src|app|packages)/[\w./-]+)")
+                .expect("the bare consumer path pattern compiles")
+        });
+
+        let body = context.skill.body.as_str();
+        let body_lower = body.to_ascii_lowercase();
+        let has_fallback = body_lower.contains("does not exist")
+            || body_lower.contains("if missing")
+            || body_lower.contains("if the path is missing")
+            || body_lower.contains("ask the user")
+            || body_lower.contains("optional")
+            || body_lower.contains("override")
+            || body_lower.contains("stop and explain")
+            || body_lower.contains("when absent");
+
+        if has_fallback {
+            return;
+        }
+
+        let mut reported: Vec<String> = Vec::new();
+
+        for (index, line) in body.lines().enumerate() {
+            let mut matches: Vec<(usize, String)> = BACKTICK_PATH
+                .captures_iter(line)
+                .filter_map(|caps| {
+                    let whole = caps.get(0)?;
+                    let path = caps.get(1)?.as_str().to_string();
+                    Some((whole.start(), path))
+                })
+                .collect();
+
+            if matches.is_empty() {
+                matches = BARE_PATH
+                    .captures_iter(line)
+                    .filter_map(|caps| {
+                        let whole = caps.get(0)?;
+                        let path = caps.get(1)?.as_str().to_string();
+                        Some((whole.start(), path))
+                    })
+                    .collect();
+            }
+
+            for (start, path) in matches {
+                let lower = path.to_ascii_lowercase();
+                if lower.starts_with("scripts/")
+                    || lower.starts_with("references/")
+                    || lower.starts_with("assets/")
+                    || lower.starts_with("templates/")
+                {
+                    continue;
+                }
+
+                if reported.iter().any(|seen| seen.eq_ignore_ascii_case(&path)) {
+                    continue;
+                }
+                reported.push(path.clone());
+
+                let document_line = context.skill.document_line(index + 1);
+                context.report(
+                    format!(
+                        "Instructions require repository path \"{path}\" with no fallback if it is missing"
+                    ),
+                    Location::span(document_line, start + 1, path.len()),
+                );
+            }
+        }
+    }
 }
 
 static NOT_EMPTY_RULE: NotEmpty = NotEmpty;
