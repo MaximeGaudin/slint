@@ -1,7 +1,7 @@
 {
   "name": "slint-cli",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "slint CLI — the linter for Agent Skills.",
   "scripts": {
     "build": "cargo build -p slint-cli --release",

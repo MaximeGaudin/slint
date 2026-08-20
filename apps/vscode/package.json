@@ -2,7 +2,7 @@
   "name": "slint-vscode",
   "displayName": "slint - Agent Skills linter",
   "description": "Lints SKILL.md files as you save them, with the source of every rule one hover away.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "skillos",
   "private": true,
   "license": "MIT",
