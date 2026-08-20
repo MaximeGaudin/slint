@@ -92,12 +92,18 @@ pub struct Suppressions {
 impl Suppressions {
     pub fn read(source: &str) -> Self {
         let mut suppressions = Suppressions::default();
+        let lines: Vec<&str> = source.lines().collect();
 
-        for (index, line) in source.lines().enumerate() {
+        for (index, line) in lines.iter().enumerate() {
             if let Some(found) = DISABLE_LINE.captures(line) {
-                for rule in split_rules(&found[1]) {
-                    // The comment is on the line before the one it covers.
-                    suppressions.lines.push((index + 2, rule));
+                let rules = split_rules(&found[1]);
+                // Normally the next line only. When that line opens a fenced
+                // code block, cover every line inside the fence too — example
+                // paths live on the lines after ```, not on the fence marker.
+                for covered in lines_covered_by_disable_next(&lines, index) {
+                    for rule in &rules {
+                        suppressions.lines.push((covered, rule.clone()));
+                    }
                 }
                 continue;
             }
@@ -130,6 +136,38 @@ fn split_rules(text: &str) -> Vec<String> {
         .filter(|part| !part.is_empty())
         .map(|part| part.to_string())
         .collect()
+}
+
+/// 1-based document lines silenced by a disable-next-line on `comment_index` (0-based).
+fn lines_covered_by_disable_next(lines: &[&str], comment_index: usize) -> Vec<usize> {
+    let next = comment_index + 1;
+    if next >= lines.len() {
+        return Vec::new();
+    }
+
+    let opener = lines[next].trim_start();
+    let Some(marker) = fence_opener(opener) else {
+        return vec![next + 1];
+    };
+
+    let mut covered = vec![next + 1];
+    for (offset, line) in lines.iter().enumerate().skip(next + 1) {
+        covered.push(offset + 1);
+        if line.trim_start().starts_with(marker) {
+            break;
+        }
+    }
+    covered
+}
+
+fn fence_opener(line: &str) -> Option<&'static str> {
+    if line.starts_with("```") {
+        Some("```")
+    } else if line.starts_with("~~~") {
+        Some("~~~")
+    } else {
+        None
+    }
 }
 
 /// Every static rule that is on, against one skill.
@@ -343,6 +381,55 @@ mod tests {
             vec![(3, "body/posix-paths".to_string())]
         );
         assert!(suppressions.file.is_empty());
+    }
+
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/8 —
+    /// example-only paths live inside fenced blocks; a disable-next-line
+    /// immediately before the opening fence must cover every line in that fence.
+    #[test]
+    fn a_disable_next_line_before_a_fence_covers_lines_inside_the_fence() {
+        let suppressions = Suppressions::read(
+            "one\n<!-- slint-disable-next-line bundle/no-dangling-path -->\n```bash\nscripts/run.sh --help\n```\n",
+        );
+
+        assert!(
+            suppressions
+                .lines
+                .iter()
+                .any(|(line, rule)| *line == 4 && rule == "bundle/no-dangling-path"),
+            "expected the path line inside the fence to be suppressed, got {suppressions:?}"
+        );
+        assert!(suppressions.file.is_empty());
+    }
+
+    #[test]
+    fn a_disable_next_line_before_a_fence_silences_dangling_path_in_a_real_run() {
+        let temporary = tempfile::tempdir().unwrap();
+        write_skill(
+            temporary.path(),
+            "demo-example-path-ignore",
+            "---\nname: demo-example-path-ignore\ndescription: Demo skill showing an example-only path with an ESLint-style ignore comment. Use when testing inline rule suppression.\n---\n\n# Demo example path ignore\n\n## Workflow\n\n<!-- slint-disable-next-line bundle/no-dangling-path -->\n```bash\nscripts/run.sh --help\n```\n",
+        );
+
+        let report = run(
+            &[temporary.path().to_path_buf()],
+            &Config::default(),
+            &[],
+            Passes {
+                plugins: false,
+                model: false,
+            },
+        )
+        .unwrap();
+
+        assert!(
+            !report.skills[0]
+                .messages
+                .iter()
+                .any(|one| one.rule == "bundle/no-dangling-path"),
+            "expected fence-scoped disable-next-line to silence dangling path, got {:?}",
+            report.skills[0].messages
+        );
     }
 
     #[test]
