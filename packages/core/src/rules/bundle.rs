@@ -584,9 +584,7 @@ mod tests {
         let mut skill = skill_with_body(
             "\n## Steps\n\nCopy the skeleton from [TEMPLATE.md](TEMPLATE.md) when writing a file.\n",
         );
-        skill
-            .files
-            .push(file("TEMPLATE.md", "# Template\n", false));
+        skill.files.push(file("TEMPLATE.md", "# Template\n", false));
 
         let messages = check(&UNUSED_RULE, &skill);
 
@@ -610,10 +608,7 @@ mod tests {
             messages[0].advice
         );
         assert!(
-            messages[0]
-                .reference
-                .url
-                .contains("optional-directories"),
+            messages[0].reference.url.contains("optional-directories"),
             "cite the Agent Skills optional directories: {}",
             messages[0].reference.url
         );
