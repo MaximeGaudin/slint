@@ -92,12 +92,18 @@ pub struct Suppressions {
 impl Suppressions {
     pub fn read(source: &str) -> Self {
         let mut suppressions = Suppressions::default();
+        let lines: Vec<&str> = source.lines().collect();
 
-        for (index, line) in source.lines().enumerate() {
+        for (index, line) in lines.iter().enumerate() {
             if let Some(found) = DISABLE_LINE.captures(line) {
-                for rule in split_rules(&found[1]) {
-                    // The comment is on the line before the one it covers.
-                    suppressions.lines.push((index + 2, rule));
+                let rules = split_rules(&found[1]);
+                // Normally the next line only. When that line opens a fenced
+                // code block, cover every line inside the fence too — example
+                // paths live on the lines after ```, not on the fence marker.
+                for covered in lines_covered_by_disable_next(&lines, index) {
+                    for rule in &rules {
+                        suppressions.lines.push((covered, rule.clone()));
+                    }
                 }
                 continue;
             }
@@ -130,6 +136,38 @@ fn split_rules(text: &str) -> Vec<String> {
         .filter(|part| !part.is_empty())
         .map(|part| part.to_string())
         .collect()
+}
+
+/// 1-based document lines silenced by a disable-next-line on `comment_index` (0-based).
+fn lines_covered_by_disable_next(lines: &[&str], comment_index: usize) -> Vec<usize> {
+    let next = comment_index + 1;
+    if next >= lines.len() {
+        return Vec::new();
+    }
+
+    let opener = lines[next].trim_start();
+    let Some(marker) = fence_opener(opener) else {
+        return vec![next + 1];
+    };
+
+    let mut covered = vec![next + 1];
+    for (offset, line) in lines.iter().enumerate().skip(next + 1) {
+        covered.push(offset + 1);
+        if line.trim_start().starts_with(marker) {
+            break;
+        }
+    }
+    covered
+}
+
+fn fence_opener(line: &str) -> Option<&'static str> {
+    if line.starts_with("```") {
+        Some("```")
+    } else if line.starts_with("~~~") {
+        Some("~~~")
+    } else {
+        None
+    }
 }
 
 /// Every static rule that is on, against one skill.
