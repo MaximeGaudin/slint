@@ -1,9 +1,9 @@
 # slint
 
-![slint banner](docs/assets/readme-banner.svg)
+slint banner
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-edition%202024-orange.svg)](Cargo.toml)
+[License: MIT](LICENSE)
+[Rust](Cargo.toml)
 
 **The linter for Agent Skills.** A skill is an instruction document an agent picks from a description and then follows without being able to ask a question. Two things go wrong with them, and neither is visible in a diff: the skill is **never selected**, or it is **selected and followed badly**. `slint` is a linter for both.
 
@@ -40,6 +40,8 @@ curl -fsSL https://github.com/MaximeGaudin/slint/releases/latest/download/slint-
 curl -fsSL https://github.com/MaximeGaudin/slint/releases/latest/download/slint-linux-amd64.tar.gz | sudo tar xz -C /usr/local/bin
 ```
 
+
+
 ## Quick start
 
 ```bash
@@ -71,15 +73,19 @@ skills/helper  1 error, 2 warnings
 
 Exit codes match the convention other skill linters settled on, so a CI script written for one works here: `0` clean, `1` errors, `2` warnings only, `3` slint itself failed.
 
-| Flag | What it does |
-|------|--------------|
-| `--fix` | Apply every computed fix, then lint again. |
-| `--format` | `stylish` (default), `json`, `github`, `compact`. |
+
+| Flag                | What it does                                        |
+| ------------------- | --------------------------------------------------- |
+| `--fix`             | Apply every computed fix, then lint again.          |
+| `--format`          | `stylish` (default), `json`, `github`, `compact`.   |
 | `--rule name=level` | Override one rule (`off`, `info`, `warn`, `error`). |
-| `--max-warnings N` | Fail when there are more warnings than this. |
-| `--llm` | Run the rules that need a model. Off by default. |
-| `--no-plugins` | Skip plugins, whatever the config says. |
-| `--quiet` | Errors only. |
+| `--max-warnings N`  | Fail when there are more warnings than this.        |
+| `--llm`             | Run the rules that need a model. Off by default.    |
+| `--no-plugins`      | Skip plugins, whatever the config says.             |
+| `--quiet`           | Errors only.                                        |
+
+
+
 
 ## What makes it different
 
@@ -121,6 +127,8 @@ A document can also opt out of a rule for itself:
 <!-- slint-disable-next-line body/posix-paths -->
 ```
 
+
+
 ## The model half
 
 The rules a regular expression cannot answer — ambiguity, terminology drift, whether a plausible request would actually route here — need a reader. slint uses [genai](https://github.com/jeremychone/rust-genai) for that, so OpenAI, Anthropic, Gemini, Ollama, OpenRouter and Groq are supported natively, and `base_url` points any of those wire formats at a gateway or a self-hosted server.
@@ -152,7 +160,7 @@ Both are held to the same standard as the built-in catalogue: a namespaced rule 
 
 ## Editors
 
-[`apps/vscode`](apps/vscode) is a VS Code / Cursor extension that runs slint on save (and optionally the model pass), merges static and model diagnostics, and shows citations on hover.
+`[apps/vscode](apps/vscode)` is a VS Code / Cursor extension that runs slint on save (and optionally the model pass), merges static and model diagnostics, and shows citations on hover.
 
 ```bash
 pnpm install
@@ -160,14 +168,18 @@ pnpm build:vscode
 # package + install the .vsix into Cursor / VS Code
 ```
 
+
+
 ## Monorepo layout
 
-| Path | What it is |
-|------|------------|
-| [`apps/cli`](apps/cli) | `slint` binary (Rust) |
-| [`apps/vscode`](apps/vscode) | VS Code / Cursor extension |
-| [`apps/docs`](apps/docs) | Astro documentation site (rule catalogue synced from the binary) |
-| [`packages/core`](packages/core) | Shared Rust library (`slint`) used by the CLI |
+
+| Path                             | What it is                                                       |
+| -------------------------------- | ---------------------------------------------------------------- |
+| `[apps/cli](apps/cli)`           | `slint` binary (Rust)                                            |
+| `[apps/vscode](apps/vscode)`     | VS Code / Cursor extension                                       |
+| `[apps/docs](apps/docs)`         | Astro documentation site (rule catalogue synced from the binary) |
+| `[packages/core](packages/core)` | Shared Rust library (`slint`) used by the CLI                    |
+
 
 JS/TS apps use **pnpm workspaces** + **Turborepo**. Rust stays on a **Cargo workspace**.
 
@@ -176,7 +188,7 @@ JS/TS apps use **pnpm workspaces** + **Turborepo**. Rust stays on a **Cargo work
 ```bash
 pnpm install
 
-./scripts/check.sh        # fmt + clippy + todos + pnpm lint + tests (mirrors CI)
+./scripts/check.sh        # fmt + clippy + cargo-deny + todos + pnpm lint + tests (mirrors CI)
 ./scripts/build-install.sh
 pnpm install:cli          # cargo install --path apps/cli → ~/.cargo/bin/slint
 pnpm coverage:cli         # line/region/function coverage (needs cargo-llvm-cov)
@@ -185,7 +197,7 @@ pnpm coverage:cli:lcov    # LCOV at coverage/lcov.info
 cargo build --release --package slint-cli
 
 pnpm lint                 # CLI + vscode + docs (+ no TODO/FIXME/stubs)
-pnpm lint:cli             # rustfmt + clippy (-D warnings, deny todo!/unimplemented!/dbg!)
+pnpm lint:cli             # rustfmt + clippy + cargo-deny (-D warnings, deny todo!/unimplemented!/dbg!)
 pnpm lint:vscode          # biome + tsc --noEmit
 pnpm lint:docs            # biome + astro check
 pnpm format               # rustfmt + biome --write (cli/vscode/docs)
@@ -198,11 +210,11 @@ pnpm sync:docs            # refresh apps/docs/src/data/rules.json from the CLI
 pnpm dev:docs             # Astro docs at http://localhost:4321
 ```
 
-Coverage needs [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) and the `llvm-tools-preview` rustup component (`rustup component add llvm-tools-preview && cargo install cargo-llvm-cov --locked`).
+Coverage needs `[cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov)` and the `llvm-tools-preview` rustup component (`rustup component add llvm-tools-preview && cargo install cargo-llvm-cov --locked`).
 
 `slint rules` prints the catalogue. `slint rules --json` feeds the docs site, so the site and the binary never disagree about what a rule does.
 
-More detail: [`apps/docs/README.md`](apps/docs/README.md).
+More detail: `[apps/docs/README.md](apps/docs/README.md)`.
 
 ## License
 
