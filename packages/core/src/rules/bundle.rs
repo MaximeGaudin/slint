@@ -535,8 +535,52 @@ mod tests {
 
         assert_eq!(messages.len(), 1);
         assert!(messages[0].message.contains("references/formats.md"));
+        assert!(messages[0].message.contains("Nothing refers to"));
         // Never fixable: deleting a file in a batch is how a fixed path loses the file it points at.
         assert!(messages[0].fix.is_none());
+    }
+
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/1 —
+    /// a root companion already linked from SKILL.md must be diagnosed as
+    /// layout (outside standard dirs), not as an unreferenced file.
+    #[test]
+    fn a_root_companion_linked_from_skill_md_is_reported_as_misplaced() {
+        let mut skill = skill_with_body(
+            "\n## Steps\n\nCopy the skeleton from [TEMPLATE.md](TEMPLATE.md) when writing a file.\n",
+        );
+        skill
+            .files
+            .push(file("TEMPLATE.md", "# Template\n", false));
+
+        let messages = check(&UNUSED_RULE, &skill);
+
+        assert_eq!(messages.len(), 1);
+        assert!(
+            messages[0]
+                .message
+                .contains("outside the standard skill directories"),
+            "expected a layout diagnosis, got: {}",
+            messages[0].message
+        );
+        assert!(
+            !messages[0].message.contains("Nothing refers to"),
+            "must not look like an unused-file diagnosis when the real issue is layout"
+        );
+        assert!(
+            messages[0].advice.contains("scripts/")
+                && messages[0].advice.contains("references/")
+                && messages[0].advice.contains("assets/"),
+            "advice should tell authors where to move the file: {}",
+            messages[0].advice
+        );
+        assert!(
+            messages[0]
+                .reference
+                .url
+                .contains("optional-directories"),
+            "cite the Agent Skills optional directories: {}",
+            messages[0].reference.url
+        );
     }
 
     #[test]
