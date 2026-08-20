@@ -3,15 +3,15 @@
 use crate::diagnostics::{Location, Severity};
 use crate::rules::{Rule, RuleContext, RuleMeta, sources};
 
-/// Keys the format defines. Anything else is the author's own, which is allowed and worth naming
-/// carefully rather than forbidding.
-const KNOWN: [&str; 6] = [
+/// Top-level frontmatter fields recognized by the Agent Skills specification.
+/// Product-specific options belong under `metadata`, not as new top-level keys.
+const SPEC_FIELDS: [&str; 6] = [
     "name",
     "description",
     "license",
-    "version",
-    "allowed-tools",
+    "compatibility",
     "metadata",
+    "allowed-tools",
 ];
 
 static FRONTMATTER: RuleMeta = RuleMeta {
@@ -38,8 +38,21 @@ static KEY_FORMAT: RuleMeta = RuleMeta {
     reference_url: sources::SPECIFICATION.1,
 };
 
+static UNKNOWN_FIELD: RuleMeta = RuleMeta {
+    name: "frontmatter/unknown-field",
+    summary: "Top-level frontmatter keys must be agentskills.io fields (or live under metadata).",
+    rationale: "Product-specific keys at the top level (for example Cursor's disable-model-invocation) are invisible or rejected on other hosts. The spec keeps the top-level set closed and puts extras under metadata.",
+    advice: "Remove the key, or move product-specific options under metadata (example: metadata.disable-model-invocation). Recognized top-level fields: name, description, license, compatibility, metadata, allowed-tools.",
+    default_severity: Severity::Warning,
+    fixable: false,
+    needs_model: false,
+    reference_title: sources::SPECIFICATION.0,
+    reference_url: sources::SPECIFICATION.1,
+};
+
 struct Frontmatter;
 struct KeyFormat;
+struct UnknownField;
 
 impl Rule for Frontmatter {
     fn meta(&self) -> &'static RuleMeta {
@@ -76,7 +89,7 @@ impl Rule for KeyFormat {
             }
 
             let lower = key.to_ascii_lowercase();
-            if key != lower && KNOWN.contains(&lower.as_str()) {
+            if key != lower && SPEC_FIELDS.contains(&lower.as_str()) {
                 context.report(
                     format!("\"{key}\" shadows the defined field \"{lower}\""),
                     Location::at(line, 1),
@@ -86,11 +99,35 @@ impl Rule for KeyFormat {
     }
 }
 
+impl Rule for UnknownField {
+    fn meta(&self) -> &'static RuleMeta {
+        &UNKNOWN_FIELD
+    }
+
+    fn check(&self, context: &mut RuleContext<'_>) {
+        let keys: Vec<String> = context.skill.metadata.keys().cloned().collect();
+
+        for key in keys {
+            let lower = key.to_ascii_lowercase();
+            if SPEC_FIELDS.contains(&lower.as_str()) {
+                continue;
+            }
+
+            let line = context.skill.frontmatter_line(&key);
+            context.report(
+                format!("\"{key}\" is not a recognized agentskills.io frontmatter field"),
+                Location::at(line, 1),
+            );
+        }
+    }
+}
+
 static FRONTMATTER_RULE: Frontmatter = Frontmatter;
 static KEY_RULE: KeyFormat = KeyFormat;
+static UNKNOWN_FIELD_RULE: UnknownField = UnknownField;
 
 pub fn rules() -> Vec<&'static dyn Rule> {
-    vec![&FRONTMATTER_RULE, &KEY_RULE]
+    vec![&FRONTMATTER_RULE, &KEY_RULE, &UNKNOWN_FIELD_RULE]
 }
 
 #[cfg(test)]
@@ -140,5 +177,63 @@ mod tests {
         let parsed =
             skill::parse("---\nname: a\ndescription: b\nteam: photography\n---\n\nBody.\n");
         assert!(check(&KEY_RULE, &parsed).is_empty());
+    }
+
+    /// Regression for #2: product-specific top-level keys are not agentskills.io fields.
+    fn unknown_field_messages(source: &str) -> Vec<crate::diagnostics::Message> {
+        let parsed = skill::parse(source);
+        crate::engine::lint_skill(&parsed, &crate::config::Config::default())
+            .into_iter()
+            .filter(|message| message.rule == "frontmatter/unknown-field")
+            .collect()
+    }
+
+    #[test]
+    fn disable_model_invocation_is_an_unknown_field() {
+        let messages = unknown_field_messages(
+            "---\nname: a\ndescription: b\ndisable-model-invocation: true\n---\n\nBody.\n",
+        );
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].severity, Severity::Warning);
+        assert!(messages[0].message.contains("disable-model-invocation"));
+    }
+
+    #[test]
+    fn compatibility_is_a_recognized_field() {
+        let messages = unknown_field_messages(
+            "---\nname: a\ndescription: b\ncompatibility: Requires git 2.0+\n---\n\nBody.\n",
+        );
+
+        assert!(messages.is_empty());
+    }
+
+    #[test]
+    fn top_level_version_is_an_unknown_field() {
+        let messages = unknown_field_messages(
+            "---\nname: a\ndescription: b\nversion: \"1.0\"\n---\n\nBody.\n",
+        );
+
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].message.contains("version"));
+    }
+
+    #[test]
+    fn product_options_under_metadata_are_not_unknown_fields() {
+        let messages = unknown_field_messages(
+            "---\nname: a\ndescription: b\nmetadata:\n  disable-model-invocation: \"true\"\n---\n\nBody.\n",
+        );
+
+        assert!(messages.is_empty());
+    }
+
+    #[test]
+    fn an_ordinary_custom_key_is_an_unknown_field() {
+        let messages = unknown_field_messages(
+            "---\nname: a\ndescription: b\nteam: photography\n---\n\nBody.\n",
+        );
+
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].message.contains("team"));
     }
 }
