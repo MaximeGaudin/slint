@@ -31,7 +31,7 @@ impl Default for Passes {
     fn default() -> Self {
         Passes {
             plugins: true,
-            model: true,
+            model: false,
         }
     }
 }
@@ -374,7 +374,10 @@ mod tests {
 
     #[test]
     fn default_passes_do_not_opt_into_the_model_pass() {
-        assert!(!Passes::default().model, "default Passes must keep the paid model pass off");
+        assert!(
+            !Passes::default().model,
+            "default Passes must keep the paid model pass off"
+        );
         assert!(Passes::default().plugins);
     }
 
