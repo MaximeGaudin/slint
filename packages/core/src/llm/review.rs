@@ -554,6 +554,25 @@ mod tests {
     }
 
     #[test]
+    fn a_control_character_in_a_model_finding_is_not_printed_to_the_terminal() {
+        // A SKILL.md body can prompt-inject the reviewing model into emitting ANSI escapes in its
+        // JSON "message" field. Those are untrusted text, so they must not survive into a Message
+        // that a terminal renderer will print verbatim.
+        let skill = good_skill();
+        let answer = r#"[{"rule":"llm/no-ambiguity","message":"\u001b[2J\u001b[H PWNED"}]"#;
+
+        let (messages, _) = parse_response(answer, &skill, &Config::default(), "fake/model");
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].source, Source::Model);
+        assert!(
+            !messages[0].message.contains('\u{1b}'),
+            "an ANSI escape in model text must be stripped, got: {:?}",
+            messages[0].message
+        );
+    }
+
+    #[test]
     fn a_rule_turned_off_in_the_config_is_not_reported_even_if_the_model_finds_it() {
         let skill = good_skill();
         let mut config = Config::default();
