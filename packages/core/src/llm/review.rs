@@ -10,7 +10,7 @@ use serde::Deserialize;
 
 use crate::config::{Config, LlmConfig};
 use crate::diagnostics::{Location, Message, Source};
-use crate::llm::provider::{Chat, GenAiChat, Prompt};
+use crate::llm::provider::{Chat, FindingsFormat, GenAiChat, Prompt, findings_format_for};
 use crate::llm::rules;
 use crate::skill::Skill;
 
@@ -54,7 +54,8 @@ Answer with a JSON array and nothing else. Each element is an object with:\n\
   line        1-based line in SKILL.md when the finding is about a line\n\
   confidence  0 to 1\n\
 \n\
-An empty array is correct for a well-written skill. Do not report anything a regex could find (lengths, paths, missing files, credentials). Do not invent line numbers."
+An empty array is correct for a well-written skill. Do not report anything a regex could find (lengths, paths, missing files, credentials). Do not invent line numbers.\n\
+If the API requires a JSON object root, wrap the same array as {{\"findings\":[...]}}."
     )
 }
 
@@ -112,17 +113,78 @@ fn truncate(body: &str, max_bytes: usize) -> (String, Option<String>) {
     )
 }
 
-/// Turns what the model said into messages, dropping anything that does not check out.
-pub fn parse_response(
-    text: &str,
-    skill: &Skill,
-    config: &Config,
-    model: &str,
-) -> (Vec<Message>, Vec<String>) {
-    let mut notes = Vec::new();
+/// Locates successive top-level JSON arrays in `text`, respecting strings and nesting.
+///
+/// Models often wrap the array in prose or a fenced block with a preamble; prefix/suffix fence
+/// trimming alone leaves that preamble and `serde_json` fails with "expected value at line 1".
+fn json_arrays(text: &str) -> impl Iterator<Item = &str> {
+    let mut from = 0;
+    std::iter::from_fn(move || {
+        let bytes = text.as_bytes().get(from..)?;
+        let mut start = None;
+        let mut depth = 0i32;
+        let mut in_string = false;
+        let mut escape = false;
 
-    // Models fence JSON more often than not, and refusing a fenced array would mean throwing away
-    // a correct answer over punctuation.
+        for (i, &b) in bytes.iter().enumerate() {
+            if in_string {
+                if escape {
+                    escape = false;
+                } else if b == b'\\' {
+                    escape = true;
+                } else if b == b'"' {
+                    in_string = false;
+                }
+                continue;
+            }
+
+            match b {
+                b'"' => in_string = true,
+                b'[' => {
+                    if depth == 0 {
+                        start = Some(i);
+                    }
+                    depth += 1;
+                }
+                b']' => {
+                    if depth == 0 {
+                        continue;
+                    }
+                    depth -= 1;
+                    if depth == 0 {
+                        let local = start?;
+                        let abs_start = from + local;
+                        let abs_end = from + i;
+                        from = abs_end + 1;
+                        return text.get(abs_start..=abs_end);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        None
+    })
+}
+
+/// Turns a model reply into the finding list, recovering arrays buried in prose or fences.
+fn parse_findings(text: &str) -> Result<Vec<RawFinding>, serde_json::Error> {
+    // Prefer the first array that deserializes as findings (bare, fenced, or after preamble).
+    let mut last_error = None;
+    for array in json_arrays(text) {
+        match serde_json::from_str::<Vec<RawFinding>>(array) {
+            Ok(parsed) => return Ok(parsed),
+            Err(failure) => last_error = Some(failure),
+        }
+    }
+
+    // JsonMode / structured-output APIs often require an object root; the prompt allows
+    // {"findings":[...]} for that case when no bare array is present.
+    #[derive(Deserialize)]
+    struct Wrapped {
+        findings: Vec<RawFinding>,
+    }
+
     let cleaned = text
         .trim()
         .trim_start_matches("```json")
@@ -130,15 +192,80 @@ pub fn parse_response(
         .trim_end_matches("```")
         .trim();
 
-    let raw: Vec<RawFinding> = match serde_json::from_str(cleaned) {
-        Ok(parsed) => parsed,
-        Err(failure) => {
-            notes.push(format!(
-                "The model's answer was not the JSON array the prompt asked for, so nothing from it was used ({failure})."
-            ));
-            return (Vec::new(), notes);
-        }
-    };
+    if let Ok(wrapped) = serde_json::from_str::<Wrapped>(cleaned) {
+        return Ok(wrapped.findings);
+    }
+
+    if let Some(failure) = last_error {
+        return Err(failure);
+    }
+
+    serde_json::from_str(cleaned)
+}
+
+fn reply_snippet(text: &str) -> String {
+    const MAX: usize = 80;
+    let flat: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() <= MAX {
+        flat
+    } else {
+        let truncated: String = flat.chars().take(MAX).collect();
+        format!("{truncated}…")
+    }
+}
+
+/// Marker error: the model pass was requested and the reply stayed unparseable after retry.
+///
+/// The engine treats this as a hard failure (non-zero) rather than a soft note that drops findings.
+#[derive(Debug)]
+pub struct UnparseableFindings {
+    pub detail: String,
+}
+
+impl std::fmt::Display for UnparseableFindings {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.detail)
+    }
+}
+
+impl std::error::Error for UnparseableFindings {}
+
+/// Whether an error from the model pass should abort the run when `--llm` was requested.
+pub fn is_unparseable_findings(failure: &anyhow::Error) -> bool {
+    failure.downcast_ref::<UnparseableFindings>().is_some()
+}
+
+const RETRY_REMINDER: &str = "\n\nSTRICT REMINDER: Your previous reply was not valid findings JSON. \
+Reply with only a JSON object {\"findings\":[...]} (or a bare JSON array of finding objects), \
+with no prose, markdown fences, or thinking. An empty findings array is correct for a clean skill.";
+
+/// Turns what the model said into messages, dropping anything that does not check out.
+pub fn parse_response(
+    text: &str,
+    skill: &Skill,
+    config: &Config,
+    model: &str,
+) -> (Vec<Message>, Vec<String>) {
+    match parse_response_inner(text, skill, config, model) {
+        Ok(result) => result,
+        Err(failure) => (
+            Vec::new(),
+            vec![format!(
+                "The model's answer was not the JSON array the prompt asked for, so nothing from it was used ({failure}). Reply started with: {}",
+                reply_snippet(text)
+            )],
+        ),
+    }
+}
+
+fn parse_response_inner(
+    text: &str,
+    skill: &Skill,
+    config: &Config,
+    model: &str,
+) -> Result<(Vec<Message>, Vec<String>), serde_json::Error> {
+    let mut notes = Vec::new();
+    let raw = parse_findings(text)?;
 
     let lines = skill.source.lines().count().max(1);
     let mut messages = Vec::new();
@@ -181,7 +308,7 @@ pub fn parse_response(
         ));
     }
 
-    (messages, notes)
+    Ok((messages, notes))
 }
 
 /// Reviews one skill with whatever the config points at.
@@ -197,20 +324,61 @@ pub fn review_with(
     config: &Config,
     llm: &LlmConfig,
 ) -> Result<(Vec<Message>, Vec<String>)> {
+    let format = findings_format_for(llm.provider);
     let (user, truncation) = user_prompt(skill, llm.max_input_bytes);
     let prompt = Prompt {
         system: system_prompt(),
         user,
     };
 
-    let answer = client.complete(&prompt)?;
-    let (messages, mut notes) = parse_response(&answer, skill, config, &client.describe());
+    let (messages, mut notes) = review_once(client, &prompt, format, skill, config)?;
 
     if let Some(note) = truncation {
         notes.push(note);
     }
 
     Ok((messages, notes))
+}
+
+fn review_once(
+    client: &dyn Chat,
+    prompt: &Prompt,
+    format: FindingsFormat,
+    skill: &Skill,
+    config: &Config,
+) -> Result<(Vec<Message>, Vec<String>)> {
+    let model = client.describe();
+    let first = client.complete_findings(prompt, format)?;
+
+    match parse_response_inner(&first, skill, config, &model) {
+        Ok(parsed) => Ok(parsed),
+        Err(first_failure) => {
+            let mut retry = prompt.clone();
+            retry.user.push_str(RETRY_REMINDER);
+            let second = client.complete_findings(&retry, format)?;
+
+            match parse_response_inner(&second, skill, config, &model) {
+                Ok((messages, mut notes)) => {
+                    notes.push(format!(
+                        "Retried once after an unparseable model reply ({first_failure})."
+                    ));
+                    Ok((messages, notes))
+                }
+                Err(second_failure) => Err(UnparseableFindings {
+                    detail: format!(
+                        "The model reply was not valid findings JSON after one retry \
+                         ({second_failure}). First reply started with: {}. \
+                         Second reply started with: {}. \
+                         Check that the model supports structured output or tool calls, \
+                         or try a different model.",
+                        reply_snippet(&first),
+                        reply_snippet(&second)
+                    ),
+                }
+                .into()),
+            }
+        }
+    }
 }
 
 /// Which model rules are on, for the note a static-only run leaves behind.
@@ -327,6 +495,39 @@ mod tests {
     }
 
     #[test]
+    fn a_fenced_array_with_a_prose_preamble_still_yields_findings() {
+        // Models often add thinking/preamble before a fenced array; prefix-only fence trim
+        // used to leave non-JSON text and drop every finding (#15).
+        let skill = good_skill();
+        let answer = "Here is my review:\n\n```json\n[{\"rule\":\"llm/no-ambiguity\",\"message\":\"Step 2 can be read two ways.\",\"line\":8,\"confidence\":0.7}]\n```\n";
+
+        let (messages, notes) = parse_response(answer, &skill, &Config::default(), "fake/model");
+
+        assert_eq!(
+            messages.len(),
+            1,
+            "findings must not be discarded: {notes:?}"
+        );
+        assert_eq!(messages[0].rule, "llm/no-ambiguity");
+        assert!(
+            notes.is_empty(),
+            "a recoverable reply must not leave only a parse note: {notes:?}"
+        );
+    }
+
+    #[test]
+    fn a_findings_object_wrapper_is_accepted_for_json_mode_apis() {
+        let skill = good_skill();
+        let answer = r#"{"findings":[{"rule":"llm/output-example","message":"No example."}]}"#;
+
+        let (messages, notes) = parse_response(answer, &skill, &Config::default(), "fake/model");
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].rule, "llm/output-example");
+        assert!(notes.is_empty());
+    }
+
+    #[test]
     fn a_finding_naming_a_rule_that_does_not_exist_is_dropped_and_counted() {
         let skill = good_skill();
         let answer = r#"[{"rule":"llm/invented","message":"Something."},{"rule":"llm/failure-path","message":"Step 3 can fail."}]"#;
@@ -422,5 +623,148 @@ mod tests {
 
         assert!(!names.contains(&"llm/output-example"));
         assert!(names.contains(&"llm/trigger-coverage"));
+    }
+
+    /// Fake that returns successive answers, so retry behaviour can be tested without a network.
+    struct SequenceFake {
+        answers: std::sync::Mutex<Vec<String>>,
+        calls: std::sync::Mutex<usize>,
+    }
+
+    impl SequenceFake {
+        fn new(answers: Vec<String>) -> Self {
+            Self {
+                answers: std::sync::Mutex::new(answers),
+                calls: std::sync::Mutex::new(0),
+            }
+        }
+
+        fn calls(&self) -> usize {
+            *self.calls.lock().unwrap()
+        }
+    }
+
+    impl Chat for SequenceFake {
+        fn complete(&self, _prompt: &Prompt) -> Result<String> {
+            *self.calls.lock().unwrap() += 1;
+            let mut answers = self.answers.lock().unwrap();
+            if answers.is_empty() {
+                anyhow::bail!("SequenceFake has no more answers");
+            }
+            Ok(answers.remove(0))
+        }
+
+        fn describe(&self) -> String {
+            "fake/sequence".into()
+        }
+    }
+
+    #[test]
+    fn review_retries_once_when_the_first_reply_is_not_findings_json() {
+        let skill = good_skill();
+        let client = SequenceFake::new(vec![
+            "I looked and it seems fine.".into(),
+            r#"[{"rule":"llm/failure-path","message":"Step 2 can fail silently."}]"#.into(),
+        ]);
+
+        let (messages, _notes) =
+            review_with(&client, &skill, &Config::default(), &LlmConfig::default())
+                .expect("a recoverable second reply must succeed");
+
+        assert_eq!(
+            client.calls(),
+            2,
+            "must retry exactly once after a parse failure"
+        );
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].rule, "llm/failure-path");
+    }
+
+    #[test]
+    fn review_hard_fails_when_replies_stay_unparseable() {
+        let skill = good_skill();
+        let client = SequenceFake::new(vec!["still not json".into(), "also not json".into()]);
+
+        let failure = review_with(&client, &skill, &Config::default(), &LlmConfig::default())
+            .expect_err("unparseable replies under an explicit model pass must hard-fail");
+
+        assert_eq!(
+            client.calls(),
+            2,
+            "must attempt one retry before hard-failing"
+        );
+        let text = format!("{failure:#}");
+        assert!(
+            text.contains("not")
+                && (text.contains("JSON") || text.contains("json") || text.contains("findings")),
+            "error must be actionable about the bad reply: {text}"
+        );
+    }
+
+    #[test]
+    fn a_schema_or_tool_style_findings_object_produces_messages_via_review() {
+        // Structured-output and forced-tool paths both surface an object root
+        // {"findings":[...]} rather than a bare array; review must accept that.
+        let skill = good_skill();
+        let client = Fake {
+            answer: r#"{"findings":[{"rule":"llm/no-ambiguity","message":"Step 2 can be read two ways.","line":8,"confidence":0.7}]}"#.into(),
+        };
+
+        let (messages, notes) =
+            review_with(&client, &skill, &Config::default(), &LlmConfig::default()).unwrap();
+
+        assert_eq!(messages.len(), 1, "notes={notes:?}");
+        assert_eq!(messages[0].rule, "llm/no-ambiguity");
+        assert!(notes.is_empty());
+    }
+
+    #[test]
+    fn review_requests_findings_with_the_provider_format() {
+        use crate::llm::provider::{FindingsFormat, findings_format_for};
+        use std::sync::Mutex;
+
+        struct FormatSpy {
+            seen: Mutex<Option<FindingsFormat>>,
+            answer: String,
+        }
+
+        impl Chat for FormatSpy {
+            fn complete(&self, _prompt: &Prompt) -> Result<String> {
+                anyhow::bail!("review must call complete_findings, not complete");
+            }
+
+            fn complete_findings(
+                &self,
+                _prompt: &Prompt,
+                format: FindingsFormat,
+            ) -> Result<String> {
+                *self.seen.lock().unwrap() = Some(format);
+                Ok(self.answer.clone())
+            }
+
+            fn describe(&self) -> String {
+                "fake/spy".into()
+            }
+        }
+
+        let skill = good_skill();
+        let llm = LlmConfig {
+            provider: crate::config::Provider::Groq,
+            ..LlmConfig::default()
+        };
+        let client = FormatSpy {
+            seen: Mutex::new(None),
+            answer: r#"{"findings":[{"rule":"llm/output-example","message":"No example."}]}"#
+                .into(),
+        };
+
+        let (messages, _) = review_with(&client, &skill, &Config::default(), &llm).unwrap();
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(
+            *client.seen.lock().unwrap(),
+            Some(findings_format_for(crate::config::Provider::Groq)),
+            "review must pass the provider's findings format into complete_findings"
+        );
     }
 }

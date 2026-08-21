@@ -259,21 +259,46 @@ pub fn run(
     // The model pass, last and optional. One request per skill, in parallel: the skills do not
     // share state, and waiting on them one after another is how a workspace review feels broken.
     // A provider that is unreachable leaves a note on that skill rather than an error on the run —
-    // the static half already produced something worth reading.
+    // the static half already produced something worth reading. An unparseable reply after retry,
+    // when the model pass was explicitly requested, hard-fails the run instead of silently
+    // dropping every finding.
     if passes.model && config.llm.is_configured() {
-        let outcomes: Vec<(Vec<Message>, Vec<String>)> = skills
+        enum ModelOutcome {
+            Ok(Vec<Message>, Vec<String>),
+            Soft(String),
+            Hard(anyhow::Error),
+        }
+
+        let outcomes: Vec<ModelOutcome> = skills
             .par_iter()
             .map(|one| match llm::review(one, config) {
-                Ok((messages, notes)) => (messages, notes),
+                Ok((messages, notes)) => ModelOutcome::Ok(messages, notes),
+                Err(failure) if llm::is_unparseable_findings(&failure) => {
+                    ModelOutcome::Hard(failure)
+                }
                 // The whole chain, and what to do about it. "asking openrouter::…" on its own
                 // tells the reader that something failed and nothing about which part.
-                Err(failure) => (Vec::new(), vec![model_failure(&config.llm, &failure)]),
+                Err(failure) => ModelOutcome::Soft(model_failure(&config.llm, &failure)),
             })
             .collect();
 
-        for (report, (messages, notes)) in per_skill.iter_mut().zip(outcomes) {
-            report.messages.extend(messages);
-            report.notes.extend(notes);
+        let mut hard_fail = None;
+        for (report, outcome) in per_skill.iter_mut().zip(outcomes) {
+            match outcome {
+                ModelOutcome::Ok(messages, notes) => {
+                    report.messages.extend(messages);
+                    report.notes.extend(notes);
+                }
+                ModelOutcome::Soft(note) => report.notes.push(note),
+                ModelOutcome::Hard(failure) => {
+                    report.notes.push(model_failure(&config.llm, &failure));
+                    hard_fail = Some(failure);
+                }
+            }
+        }
+
+        if let Some(failure) = hard_fail {
+            return Err(failure);
         }
     } else if passes.model && !config.llm.is_configured() {
         // Asked for, and impossible: say exactly what is missing and where it goes.
