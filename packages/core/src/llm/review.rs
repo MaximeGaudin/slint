@@ -54,7 +54,8 @@ Answer with a JSON array and nothing else. Each element is an object with:\n\
   line        1-based line in SKILL.md when the finding is about a line\n\
   confidence  0 to 1\n\
 \n\
-An empty array is correct for a well-written skill. Do not report anything a regex could find (lengths, paths, missing files, credentials). Do not invent line numbers."
+An empty array is correct for a well-written skill. Do not report anything a regex could find (lengths, paths, missing files, credentials). Do not invent line numbers.\n\
+If the API requires a JSON object root, wrap the same array as {{\"findings\":[...]}}."
     )
 }
 
@@ -112,6 +113,107 @@ fn truncate(body: &str, max_bytes: usize) -> (String, Option<String>) {
     )
 }
 
+/// Locates successive top-level JSON arrays in `text`, respecting strings and nesting.
+///
+/// Models often wrap the array in prose or a fenced block with a preamble; prefix/suffix fence
+/// trimming alone leaves that preamble and `serde_json` fails with "expected value at line 1".
+fn json_arrays(text: &str) -> impl Iterator<Item = &str> {
+    let mut from = 0;
+    std::iter::from_fn(move || {
+        let bytes = text.as_bytes().get(from..)?;
+        let mut start = None;
+        let mut depth = 0i32;
+        let mut in_string = false;
+        let mut escape = false;
+
+        for (i, &b) in bytes.iter().enumerate() {
+            if in_string {
+                if escape {
+                    escape = false;
+                } else if b == b'\\' {
+                    escape = true;
+                } else if b == b'"' {
+                    in_string = false;
+                }
+                continue;
+            }
+
+            match b {
+                b'"' => in_string = true,
+                b'[' => {
+                    if depth == 0 {
+                        start = Some(i);
+                    }
+                    depth += 1;
+                }
+                b']' => {
+                    if depth == 0 {
+                        continue;
+                    }
+                    depth -= 1;
+                    if depth == 0 {
+                        let local = start?;
+                        let abs_start = from + local;
+                        let abs_end = from + i;
+                        from = abs_end + 1;
+                        return text.get(abs_start..=abs_end);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        None
+    })
+}
+
+/// Turns a model reply into the finding list, recovering arrays buried in prose or fences.
+fn parse_findings(text: &str) -> Result<Vec<RawFinding>, serde_json::Error> {
+    // Prefer the first array that deserializes as findings (bare, fenced, or after preamble).
+    let mut last_error = None;
+    for array in json_arrays(text) {
+        match serde_json::from_str::<Vec<RawFinding>>(array) {
+            Ok(parsed) => return Ok(parsed),
+            Err(failure) => last_error = Some(failure),
+        }
+    }
+
+    // JsonMode / structured-output APIs often require an object root; the prompt allows
+    // {"findings":[...]} for that case when no bare array is present.
+    #[derive(Deserialize)]
+    struct Wrapped {
+        findings: Vec<RawFinding>,
+    }
+
+    let cleaned = text
+        .trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+
+    if let Ok(wrapped) = serde_json::from_str::<Wrapped>(cleaned) {
+        return Ok(wrapped.findings);
+    }
+
+    if let Some(failure) = last_error {
+        return Err(failure);
+    }
+
+    serde_json::from_str(cleaned)
+}
+
+fn reply_snippet(text: &str) -> String {
+    const MAX: usize = 80;
+    let flat: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() <= MAX {
+        flat
+    } else {
+        let truncated: String = flat.chars().take(MAX).collect();
+        format!("{truncated}…")
+    }
+}
+
 /// Turns what the model said into messages, dropping anything that does not check out.
 pub fn parse_response(
     text: &str,
@@ -121,20 +223,12 @@ pub fn parse_response(
 ) -> (Vec<Message>, Vec<String>) {
     let mut notes = Vec::new();
 
-    // Models fence JSON more often than not, and refusing a fenced array would mean throwing away
-    // a correct answer over punctuation.
-    let cleaned = text
-        .trim()
-        .trim_start_matches("```json")
-        .trim_start_matches("```")
-        .trim_end_matches("```")
-        .trim();
-
-    let raw: Vec<RawFinding> = match serde_json::from_str(cleaned) {
+    let raw: Vec<RawFinding> = match parse_findings(text) {
         Ok(parsed) => parsed,
         Err(failure) => {
             notes.push(format!(
-                "The model's answer was not the JSON array the prompt asked for, so nothing from it was used ({failure})."
+                "The model's answer was not the JSON array the prompt asked for, so nothing from it was used ({failure}). Reply started with: {}",
+                reply_snippet(text)
             ));
             return (Vec::new(), notes);
         }
@@ -335,12 +429,28 @@ mod tests {
 
         let (messages, notes) = parse_response(answer, &skill, &Config::default(), "fake/model");
 
-        assert_eq!(messages.len(), 1, "findings must not be discarded: {notes:?}");
+        assert_eq!(
+            messages.len(),
+            1,
+            "findings must not be discarded: {notes:?}"
+        );
         assert_eq!(messages[0].rule, "llm/no-ambiguity");
         assert!(
             notes.is_empty(),
             "a recoverable reply must not leave only a parse note: {notes:?}"
         );
+    }
+
+    #[test]
+    fn a_findings_object_wrapper_is_accepted_for_json_mode_apis() {
+        let skill = good_skill();
+        let answer = r#"{"findings":[{"rule":"llm/output-example","message":"No example."}]}"#;
+
+        let (messages, notes) = parse_response(answer, &skill, &Config::default(), "fake/model");
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].rule, "llm/output-example");
+        assert!(notes.is_empty());
     }
 
     #[test]

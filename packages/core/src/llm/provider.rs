@@ -8,7 +8,7 @@
 //! against a fake and lets a future provider arrive without touching a rule.
 
 use anyhow::{Context, Result, bail};
-use genai::chat::{ChatOptions, ChatRequest};
+use genai::chat::{ChatOptions, ChatRequest, ChatResponseFormat};
 use genai::resolver::{AuthData, AuthResolver, Endpoint, ServiceTargetResolver};
 use genai::{Client, ModelIden, ServiceTarget};
 use serde::Serialize;
@@ -154,7 +154,12 @@ impl Chat for GenAiChat {
 
         // Temperature zero: a linter that reports different findings on the same text twice is a
         // linter nobody can put in CI.
-        let options = ChatOptions::default().with_temperature(0.0);
+        // JsonMode when the adapter supports it: prefer a forced JSON body over free prose so
+        // parse_response is less likely to see thinking/preamble. Providers that ignore the format
+        // still work; robust array extraction remains the fallback.
+        let options = ChatOptions::default()
+            .with_temperature(0.0)
+            .with_response_format(ChatResponseFormat::JsonMode);
 
         let response = self
             .runtime
