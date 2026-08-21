@@ -307,6 +307,11 @@ pub fn parse(source: &str) -> Skill {
         match key.as_str() {
             "name" => skill.name = value,
             "description" => skill.description = value,
+            "allowed-tools" => {
+                skill
+                    .metadata
+                    .insert(key, parse_flow_sequence(&value).unwrap_or(value));
+            }
             _ => {
                 skill.metadata.insert(key, value);
             }
@@ -328,6 +333,23 @@ pub fn parse(source: &str) -> Skill {
     skill.body = normalised[offset..].to_string();
 
     skill
+}
+
+/// Normalize a YAML flow sequence (`[a, b]`) to a space-separated string of
+/// items, so membership checks on the stored value work for either form.
+/// Returns `None` when the value is not a flow sequence.
+fn parse_flow_sequence(value: &str) -> Option<String> {
+    let value = value.trim();
+    let inner = value.strip_prefix('[')?.strip_suffix(']')?;
+    let items = inner
+        .split(',')
+        .map(|item| item.trim().trim_matches(|c| c == '"' || c == '\''))
+        .filter(|item| !item.is_empty())
+        .collect::<Vec<_>>();
+    if items.is_empty() {
+        return None;
+    }
+    Some(items.join(" "))
 }
 
 /// The byte offset where the given 0-based line index starts.
