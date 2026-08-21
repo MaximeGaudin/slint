@@ -327,6 +327,23 @@ mod tests {
     }
 
     #[test]
+    fn a_fenced_array_with_a_prose_preamble_still_yields_findings() {
+        // Models often add thinking/preamble before a fenced array; prefix-only fence trim
+        // used to leave non-JSON text and drop every finding (#15).
+        let skill = good_skill();
+        let answer = "Here is my review:\n\n```json\n[{\"rule\":\"llm/no-ambiguity\",\"message\":\"Step 2 can be read two ways.\",\"line\":8,\"confidence\":0.7}]\n```\n";
+
+        let (messages, notes) = parse_response(answer, &skill, &Config::default(), "fake/model");
+
+        assert_eq!(messages.len(), 1, "findings must not be discarded: {notes:?}");
+        assert_eq!(messages[0].rule, "llm/no-ambiguity");
+        assert!(
+            notes.is_empty(),
+            "a recoverable reply must not leave only a parse note: {notes:?}"
+        );
+    }
+
+    #[test]
     fn a_finding_naming_a_rule_that_does_not_exist_is_dropped_and_counted() {
         let skill = good_skill();
         let answer = r#"[{"rule":"llm/invented","message":"Something."},{"rule":"llm/failure-path","message":"Step 3 can fail."}]"#;
