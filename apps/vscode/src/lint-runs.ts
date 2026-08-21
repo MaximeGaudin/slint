@@ -1,13 +1,11 @@
 /**
  * Tracks overlapping lint runs per target.
  *
- * A newer lint for the same directory must cancel the previous child process and must not let a
- * late "superseded" finish overwrite the status bar with a stuck spinner.
+ * A newer lint for the same directory cancels the previous child process and must not let a late
+ * "superseded" finish overwrite the status bar with a stuck spinner.
  */
 
-export type StatusUpdate =
-  | { type: 'noop' }
-  | { type: 'set'; text: string; detail?: string }
+export type StatusUpdate = { type: 'noop' } | { type: 'set'; text: string; detail?: string }
 
 export class LintRunCoordinator {
   private readonly generations = new Map<string, number>()
@@ -16,10 +14,11 @@ export class LintRunCoordinator {
 
   /**
    * Bump the generation for `target` and return a signal for the new child process.
-   * Any previous run for the same target should be aborted.
+   * Any previous run for the same target is aborted.
    */
   begin(target: string): { generation: number; signal: AbortSignal } {
-    // Intentionally buggy (#20): previous signal is not aborted, so the old slint keeps running.
+    this.controllers.get(target)?.abort()
+
     const controller = new AbortController()
     this.controllers.set(target, controller)
 
@@ -43,11 +42,7 @@ export class LintRunCoordinator {
    * When `superseded` is true, a newer run owns the UI — never publish a final spinner that says
    * the run was superseded (that is how the bar gets stuck).
    */
-  markFinished(result: {
-    superseded?: boolean
-    text?: string
-    detail?: string
-  }): StatusUpdate {
+  markFinished(result: { superseded?: boolean; text?: string; detail?: string }): StatusUpdate {
     this.inflight = Math.max(0, this.inflight - 1)
 
     if (this.inflight > 0) {
@@ -58,14 +53,8 @@ export class LintRunCoordinator {
       }
     }
 
-    // Intentionally buggy (#20): superseded finishes still set a spinning "superseded" status,
-    // which overwrites the newer run's final result when the old process ends last.
     if (result.superseded) {
-      return {
-        type: 'set',
-        text: '$(sync~spin) slint',
-        detail: 'A newer lint superseded this run',
-      }
+      return { type: 'noop' }
     }
 
     return {

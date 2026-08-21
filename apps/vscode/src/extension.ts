@@ -3,6 +3,7 @@ import * as path from 'node:path'
 import { promisify } from 'node:util'
 import * as vscode from 'vscode'
 import { ignoreEditsForFinding, ruleIdFromCode } from './ignore.js'
+import { LintRunCoordinator, type StatusUpdate } from './lint-runs.js'
 
 const run = promisify(execFile)
 
@@ -52,10 +53,8 @@ let diagnostics: vscode.DiagnosticCollection
 let output: vscode.OutputChannel
 let status: vscode.StatusBarItem
 let pending: NodeJS.Timeout | undefined
-/** How many lint runs are in flight — status stays "running" until the last one finishes. */
-let inflight = 0
-/** Per-target generation so a slow model pass from save N cannot overwrite save N+1. */
-const generations = new Map<string, number>()
+/** Cancels superseded child processes and keeps the status bar honest across overlapping runs. */
+const runs = new LintRunCoordinator()
 /** Last static envelope per target — merged back in when the model pass publishes so static never vanishes. */
 const lastStatic = new Map<string, Envelope>()
 
@@ -207,15 +206,15 @@ async function lintWorkspace(options: { model: boolean }): Promise<void> {
  * needs no network is how people conclude the static rules "stopped working".
  */
 async function lint(target: string, options: { model: boolean }): Promise<void> {
-  const generation = (generations.get(target) ?? 0) + 1
-  generations.set(target, generation)
+  const { generation, signal } = runs.begin(target)
 
   const staticResult = await runPass(
     target,
     { model: false, followWithModel: options.model },
     generation,
+    signal,
   )
-  if (!staticResult || generations.get(target) !== generation) return
+  if (!staticResult || !runs.isCurrent(target, generation)) return
 
   if (!options.model) return
 
@@ -225,7 +224,7 @@ async function lint(target: string, options: { model: boolean }): Promise<void> 
   )
   output.appendLine(`→ ${path.basename(target)} · model`)
 
-  await runPass(target, { model: true, followWithModel: false }, generation)
+  await runPass(target, { model: true, followWithModel: false }, generation, signal)
 }
 
 /**
@@ -236,12 +235,13 @@ async function runPass(
   target: string,
   options: { model: boolean; followWithModel: boolean },
   generation: number,
+  signal: AbortSignal,
 ): Promise<Envelope | undefined> {
   const binary = setting<string>('path') ?? 'slint'
   const { argv, env } = spawnFor(target, options)
   const label = path.basename(target)
 
-  inflight += 1
+  runs.markStarted()
   if (!options.model) {
     setStatus('$(sync~spin) slint', `Linting ${label}…`)
     output.appendLine(`→ ${label} · static`)
@@ -250,9 +250,15 @@ async function runPass(
   let stdout: string
 
   try {
-    const result = await run(binary, argv, { maxBuffer: 16 * 1024 * 1024, env })
+    const result = await run(binary, argv, { maxBuffer: 16 * 1024 * 1024, env, signal })
     stdout = result.stdout
   } catch (failure) {
+    if (isAbortError(failure) || signal.aborted || !runs.isCurrent(target, generation)) {
+      output.appendLine(`· ${label} · cancelled (newer lint started)`)
+      applyStatus(runs.markFinished({ superseded: true }))
+      return undefined
+    }
+
     const error = failure as { stdout?: string; code?: number; message?: string }
 
     // Findings are not failures: slint exits 1/2 when it found problems, and that run is the useful
@@ -270,8 +276,8 @@ async function runPass(
     stdout = error.stdout
   }
 
-  if (generations.get(target) !== generation) {
-    finishStatus('$(sync~spin) slint', 'A newer lint superseded this run')
+  if (!runs.isCurrent(target, generation)) {
+    applyStatus(runs.markFinished({ superseded: true }))
     return undefined
   }
 
@@ -305,13 +311,19 @@ async function runPass(
 
   if (options.followWithModel) {
     // Model pass is about to start — free this slot without clearing the "running" feel.
-    inflight = Math.max(0, inflight - 1)
+    runs.releaseSlot()
     setStatus(`$(check) slint: ${summary}`, 'Static done — model pass starting…')
   } else {
     finishFromSummaryText(summary, envelope.summary.skills)
   }
 
   return envelope
+}
+
+function isAbortError(failure: unknown): boolean {
+  if (!failure || typeof failure !== 'object') return false
+  const error = failure as { name?: string; code?: string }
+  return error.name === 'AbortError' || error.code === 'ABORT_ERR'
 }
 
 function summarizePublished(envelope: Envelope, staticSeed?: Envelope): string {
@@ -355,13 +367,12 @@ function summarize(summary: Envelope['summary']): string {
 }
 
 function finishStatus(text: string, detail?: string): void {
-  inflight = Math.max(0, inflight - 1)
-  if (inflight > 0) {
-    setStatus('$(sync~spin) slint', `${inflight} lint run(s) still in progress`)
-    return
-  }
+  applyStatus(runs.markFinished({ text, detail }))
+}
 
-  setStatus(text, detail)
+function applyStatus(update: StatusUpdate): void {
+  if (update.type === 'noop') return
+  setStatus(update.text, update.detail)
 }
 
 function finishFromSummaryText(text: string, skills: number): void {
