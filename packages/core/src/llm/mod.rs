@@ -12,5 +12,7 @@ pub mod provider;
 pub mod review;
 pub mod rules;
 
-pub use provider::{Chat, GenAiChat, Prompt};
-pub use review::{parse_response, review, review_with};
+pub use provider::{Chat, FindingsFormat, GenAiChat, Prompt, findings_format_for};
+pub use review::{
+    UnparseableFindings, is_unparseable_findings, parse_response, review, review_with,
+};

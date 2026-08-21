@@ -10,7 +10,7 @@ use serde::Deserialize;
 
 use crate::config::{Config, LlmConfig};
 use crate::diagnostics::{Location, Message, Source};
-use crate::llm::provider::{Chat, GenAiChat, Prompt};
+use crate::llm::provider::{Chat, FindingsFormat, GenAiChat, Prompt, findings_format_for};
 use crate::llm::rules;
 use crate::skill::Skill;
 
@@ -214,6 +214,31 @@ fn reply_snippet(text: &str) -> String {
     }
 }
 
+/// Marker error: the model pass was requested and the reply stayed unparseable after retry.
+///
+/// The engine treats this as a hard failure (non-zero) rather than a soft note that drops findings.
+#[derive(Debug)]
+pub struct UnparseableFindings {
+    pub detail: String,
+}
+
+impl std::fmt::Display for UnparseableFindings {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.detail)
+    }
+}
+
+impl std::error::Error for UnparseableFindings {}
+
+/// Whether an error from the model pass should abort the run when `--llm` was requested.
+pub fn is_unparseable_findings(failure: &anyhow::Error) -> bool {
+    failure.downcast_ref::<UnparseableFindings>().is_some()
+}
+
+const RETRY_REMINDER: &str = "\n\nSTRICT REMINDER: Your previous reply was not valid findings JSON. \
+Reply with only a JSON object {\"findings\":[...]} (or a bare JSON array of finding objects), \
+with no prose, markdown fences, or thinking. An empty findings array is correct for a clean skill.";
+
 /// Turns what the model said into messages, dropping anything that does not check out.
 pub fn parse_response(
     text: &str,
@@ -221,18 +246,26 @@ pub fn parse_response(
     config: &Config,
     model: &str,
 ) -> (Vec<Message>, Vec<String>) {
-    let mut notes = Vec::new();
-
-    let raw: Vec<RawFinding> = match parse_findings(text) {
-        Ok(parsed) => parsed,
-        Err(failure) => {
-            notes.push(format!(
+    match parse_response_inner(text, skill, config, model) {
+        Ok(result) => result,
+        Err(failure) => (
+            Vec::new(),
+            vec![format!(
                 "The model's answer was not the JSON array the prompt asked for, so nothing from it was used ({failure}). Reply started with: {}",
                 reply_snippet(text)
-            ));
-            return (Vec::new(), notes);
-        }
-    };
+            )],
+        ),
+    }
+}
+
+fn parse_response_inner(
+    text: &str,
+    skill: &Skill,
+    config: &Config,
+    model: &str,
+) -> Result<(Vec<Message>, Vec<String>), serde_json::Error> {
+    let mut notes = Vec::new();
+    let raw = parse_findings(text)?;
 
     let lines = skill.source.lines().count().max(1);
     let mut messages = Vec::new();
@@ -275,7 +308,7 @@ pub fn parse_response(
         ));
     }
 
-    (messages, notes)
+    Ok((messages, notes))
 }
 
 /// Reviews one skill with whatever the config points at.
@@ -291,20 +324,61 @@ pub fn review_with(
     config: &Config,
     llm: &LlmConfig,
 ) -> Result<(Vec<Message>, Vec<String>)> {
+    let format = findings_format_for(llm.provider);
     let (user, truncation) = user_prompt(skill, llm.max_input_bytes);
     let prompt = Prompt {
         system: system_prompt(),
         user,
     };
 
-    let answer = client.complete(&prompt)?;
-    let (messages, mut notes) = parse_response(&answer, skill, config, &client.describe());
+    let (messages, mut notes) = review_once(client, &prompt, format, skill, config)?;
 
     if let Some(note) = truncation {
         notes.push(note);
     }
 
     Ok((messages, notes))
+}
+
+fn review_once(
+    client: &dyn Chat,
+    prompt: &Prompt,
+    format: FindingsFormat,
+    skill: &Skill,
+    config: &Config,
+) -> Result<(Vec<Message>, Vec<String>)> {
+    let model = client.describe();
+    let first = client.complete_findings(prompt, format)?;
+
+    match parse_response_inner(&first, skill, config, &model) {
+        Ok(parsed) => Ok(parsed),
+        Err(first_failure) => {
+            let mut retry = prompt.clone();
+            retry.user.push_str(RETRY_REMINDER);
+            let second = client.complete_findings(&retry, format)?;
+
+            match parse_response_inner(&second, skill, config, &model) {
+                Ok((messages, mut notes)) => {
+                    notes.push(format!(
+                        "Retried once after an unparseable model reply ({first_failure})."
+                    ));
+                    Ok((messages, notes))
+                }
+                Err(second_failure) => Err(UnparseableFindings {
+                    detail: format!(
+                        "The model reply was not valid findings JSON after one retry \
+                         ({second_failure}). First reply started with: {}. \
+                         Second reply started with: {}. \
+                         Check that the model supports structured output or tool calls, \
+                         or try a different model.",
+                        reply_snippet(&first),
+                        reply_snippet(&second)
+                    ),
+                }
+                .into()),
+            }
+        }
+    }
 }
 
 /// Which model rules are on, for the note a static-only run leaves behind.
@@ -597,7 +671,11 @@ mod tests {
             review_with(&client, &skill, &Config::default(), &LlmConfig::default())
                 .expect("a recoverable second reply must succeed");
 
-        assert_eq!(client.calls(), 2, "must retry exactly once after a parse failure");
+        assert_eq!(
+            client.calls(),
+            2,
+            "must retry exactly once after a parse failure"
+        );
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].rule, "llm/failure-path");
     }
@@ -605,18 +683,20 @@ mod tests {
     #[test]
     fn review_hard_fails_when_replies_stay_unparseable() {
         let skill = good_skill();
-        let client = SequenceFake::new(vec![
-            "still not json".into(),
-            "also not json".into(),
-        ]);
+        let client = SequenceFake::new(vec!["still not json".into(), "also not json".into()]);
 
         let failure = review_with(&client, &skill, &Config::default(), &LlmConfig::default())
             .expect_err("unparseable replies under an explicit model pass must hard-fail");
 
-        assert_eq!(client.calls(), 2, "must attempt one retry before hard-failing");
+        assert_eq!(
+            client.calls(),
+            2,
+            "must attempt one retry before hard-failing"
+        );
         let text = format!("{failure:#}");
         assert!(
-            text.contains("not") && (text.contains("JSON") || text.contains("json") || text.contains("findings")),
+            text.contains("not")
+                && (text.contains("JSON") || text.contains("json") || text.contains("findings")),
             "error must be actionable about the bad reply: {text}"
         );
     }
@@ -668,11 +748,14 @@ mod tests {
         }
 
         let skill = good_skill();
-        let mut llm = LlmConfig::default();
-        llm.provider = crate::config::Provider::Groq;
+        let llm = LlmConfig {
+            provider: crate::config::Provider::Groq,
+            ..LlmConfig::default()
+        };
         let client = FormatSpy {
             seen: Mutex::new(None),
-            answer: r#"{"findings":[{"rule":"llm/output-example","message":"No example."}]}"#.into(),
+            answer: r#"{"findings":[{"rule":"llm/output-example","message":"No example."}]}"#
+                .into(),
         };
 
         let (messages, _) = review_with(&client, &skill, &Config::default(), &llm).unwrap();

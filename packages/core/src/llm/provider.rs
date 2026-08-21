@@ -8,10 +8,11 @@
 //! against a fake and lets a future provider arrive without touching a rule.
 
 use anyhow::{Context, Result, bail};
-use genai::chat::{ChatOptions, ChatRequest, ChatResponseFormat};
+use genai::chat::{ChatOptions, ChatRequest, ChatResponseFormat, JsonSpec, Tool, ToolChoice};
 use genai::resolver::{AuthData, AuthResolver, Endpoint, ServiceTargetResolver};
 use genai::{Client, ModelIden, ServiceTarget};
 use serde::Serialize;
+use serde_json::json;
 
 use crate::config::{LlmConfig, Provider};
 
@@ -34,11 +35,44 @@ pub enum FindingsFormat {
 }
 
 /// Preferred findings format for a configured provider (genai adapter capabilities).
-///
-/// Stub: always JsonMode until the structured-output ladder is implemented.
-pub fn findings_format_for(_provider: Provider) -> FindingsFormat {
-    FindingsFormat::JsonMode
+pub fn findings_format_for(provider: Provider) -> FindingsFormat {
+    match provider {
+        // Native JsonSpec wiring in genai.
+        Provider::Openai | Provider::Anthropic | Provider::Gemini => FindingsFormat::JsonSchema,
+        // OpenAI-compatible: json_schema support varies by model; forced tool is more reliable.
+        Provider::Groq | Provider::Openrouter => FindingsFormat::Tool,
+        // Ollama adapter only maps JsonMode today.
+        Provider::Ollama | Provider::None => FindingsFormat::JsonMode,
+    }
 }
+
+/// JSON Schema for `{"findings":[...]}` — object root required by json_schema APIs.
+pub fn findings_json_schema() -> serde_json::Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "findings": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "rule": { "type": "string" },
+                        "message": { "type": "string" },
+                        "line": { "type": ["integer", "null"] },
+                        "confidence": { "type": ["number", "null"] }
+                    },
+                    // Strict json_schema (OpenAI) requires every property to be listed here.
+                    "required": ["rule", "message", "line", "confidence"],
+                    "additionalProperties": false
+                }
+            }
+        },
+        "required": ["findings"],
+        "additionalProperties": false
+    })
+}
+
+const REPORT_FINDINGS_TOOL: &str = "report_findings";
 
 /// Anything that can answer a prompt.
 ///
@@ -92,6 +126,7 @@ pub fn model_spec(config: &LlmConfig) -> Result<String> {
 pub struct GenAiChat {
     client: Client,
     model: String,
+    provider: Provider,
     runtime: tokio::runtime::Runtime,
 }
 
@@ -125,6 +160,7 @@ impl GenAiChat {
         Ok(GenAiChat {
             client,
             model,
+            provider: config.provider,
             runtime,
         })
     }
@@ -169,30 +205,73 @@ fn build_client(config: &LlmConfig) -> Result<Client> {
     Ok(builder.build())
 }
 
+fn base_request(prompt: &Prompt) -> ChatRequest {
+    ChatRequest::default()
+        .with_system(prompt.system.clone())
+        .append_message(genai::chat::ChatMessage::user(prompt.user.clone()))
+}
+
+fn extract_findings_body(response: genai::chat::ChatResponse) -> Result<String> {
+    // Forced tool path: arguments are already the findings object.
+    if let Some(call) = response.tool_calls().into_iter().next() {
+        return serde_json::to_string(&call.fn_arguments)
+            .context("serializing report_findings tool arguments");
+    }
+
+    response
+        .first_text()
+        .map(|text| text.to_string())
+        .context("the provider answered with no text and no tool call")
+}
+
 impl Chat for GenAiChat {
     fn complete(&self, prompt: &Prompt) -> Result<String> {
-        let request = ChatRequest::default()
-            .with_system(prompt.system.clone())
-            .append_message(genai::chat::ChatMessage::user(prompt.user.clone()));
+        self.complete_findings(prompt, findings_format_for(self.provider))
+    }
 
+    fn complete_findings(&self, prompt: &Prompt, format: FindingsFormat) -> Result<String> {
         // Temperature zero: a linter that reports different findings on the same text twice is a
         // linter nobody can put in CI.
-        // JsonMode when the adapter supports it: prefer a forced JSON body over free prose so
-        // parse_response is less likely to see thinking/preamble. Providers that ignore the format
-        // still work; robust array extraction remains the fallback.
-        let options = ChatOptions::default()
-            .with_temperature(0.0)
-            .with_response_format(ChatResponseFormat::JsonMode);
+        let (request, options) = match format {
+            FindingsFormat::JsonSchema => {
+                let request = base_request(prompt);
+                let options = ChatOptions::default()
+                    .with_temperature(0.0)
+                    .with_response_format(ChatResponseFormat::JsonSpec(JsonSpec::new(
+                        "skill_findings",
+                        findings_json_schema(),
+                    )));
+                (request, options)
+            }
+            FindingsFormat::Tool => {
+                let tool = Tool::new(REPORT_FINDINGS_TOOL)
+                    .with_description(
+                        "Report skill review findings. Call exactly once with the findings array \
+                         (empty when the skill is clean).",
+                    )
+                    .with_schema(findings_json_schema())
+                    .with_strict(true);
+                let request = base_request(prompt).with_tools(vec![tool]);
+                let options = ChatOptions::default()
+                    .with_temperature(0.0)
+                    .with_tool_choice(ToolChoice::tool(REPORT_FINDINGS_TOOL));
+                (request, options)
+            }
+            FindingsFormat::JsonMode => {
+                let request = base_request(prompt);
+                let options = ChatOptions::default()
+                    .with_temperature(0.0)
+                    .with_response_format(ChatResponseFormat::JsonMode);
+                (request, options)
+            }
+        };
 
         let response = self
             .runtime
             .block_on(self.client.exec_chat(&self.model, request, Some(&options)))
             .with_context(|| format!("asking {}", self.model))?;
 
-        response
-            .first_text()
-            .map(|text| text.to_string())
-            .context("the provider answered with no text at all")
+        extract_findings_body(response)
     }
 
     fn describe(&self) -> String {
@@ -251,6 +330,18 @@ mod tests {
         assert_eq!(
             findings_format_for(Provider::Ollama),
             FindingsFormat::JsonMode
+        );
+    }
+
+    #[test]
+    fn findings_json_schema_is_an_object_with_a_findings_array() {
+        let schema = findings_json_schema();
+        assert_eq!(schema["type"], "object");
+        assert_eq!(schema["properties"]["findings"]["type"], "array");
+        assert!(
+            schema["required"]
+                .as_array()
+                .is_some_and(|required| required.iter().any(|value| value == "findings"))
         );
     }
 
