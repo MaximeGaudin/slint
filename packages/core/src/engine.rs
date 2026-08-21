@@ -373,6 +373,12 @@ mod tests {
     }
 
     #[test]
+    fn default_passes_do_not_opt_into_the_model_pass() {
+        assert!(!Passes::default().model, "default Passes must keep the paid model pass off");
+        assert!(Passes::default().plugins);
+    }
+
+    #[test]
     fn a_rule_turned_off_does_not_run_at_all() {
         let skill = skill_with_body("\n## Culling\n\nRead scripts\\notes.md.\n");
 
