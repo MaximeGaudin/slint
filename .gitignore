@@ -31,3 +31,7 @@ package-lock.json
 # Env / secrets
 .env
 .env.*
+
+# Parallel agent fix worktrees / shared caches (see .cursor/skills/fix-github-issue)
+.worktrees/
+.shared/
