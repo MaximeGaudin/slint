@@ -22,12 +22,35 @@ pub struct Prompt {
     pub user: String,
 }
 
+/// How findings are forced from the provider (schema → tool → json_object).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FindingsFormat {
+    /// `ChatResponseFormat::JsonSpec` / provider `json_schema`.
+    JsonSchema,
+    /// Forced `report_findings` tool/function call.
+    Tool,
+    /// `ChatResponseFormat::JsonMode` (`json_object`) plus robust text parse.
+    JsonMode,
+}
+
+/// Preferred findings format for a configured provider (genai adapter capabilities).
+///
+/// Stub: always JsonMode until the structured-output ladder is implemented.
+pub fn findings_format_for(_provider: Provider) -> FindingsFormat {
+    FindingsFormat::JsonMode
+}
+
 /// Anything that can answer a prompt.
 ///
 /// A trait rather than a function so the review pass can be tested without a network, which is most
 /// of what makes this half of the tool testable at all.
 pub trait Chat {
     fn complete(&self, prompt: &Prompt) -> Result<String>;
+    /// Ask for findings using `format`; default delegates to [`Chat::complete`].
+    fn complete_findings(&self, prompt: &Prompt, format: FindingsFormat) -> Result<String> {
+        let _ = format;
+        self.complete(prompt)
+    }
     /// What the report says the review was produced with.
     fn describe(&self) -> String;
 }
@@ -201,6 +224,34 @@ mod tests {
         assert_eq!(adapter_name(Provider::Gemini), Some("gemini"));
         assert_eq!(adapter_name(Provider::Anthropic), Some("anthropic"));
         assert_eq!(adapter_name(Provider::None), None);
+    }
+
+    #[test]
+    fn findings_format_ladder_prefers_schema_then_tool_then_json_mode() {
+        // Adapters with first-class JsonSpec support.
+        assert_eq!(
+            findings_format_for(Provider::Openai),
+            FindingsFormat::JsonSchema
+        );
+        assert_eq!(
+            findings_format_for(Provider::Anthropic),
+            FindingsFormat::JsonSchema
+        );
+        assert_eq!(
+            findings_format_for(Provider::Gemini),
+            FindingsFormat::JsonSchema
+        );
+        // OpenAI-compatible hosts where json_schema is uneven; force a tool instead.
+        assert_eq!(findings_format_for(Provider::Groq), FindingsFormat::Tool);
+        assert_eq!(
+            findings_format_for(Provider::Openrouter),
+            FindingsFormat::Tool
+        );
+        // Ollama adapter only wires JsonMode today.
+        assert_eq!(
+            findings_format_for(Provider::Ollama),
+            FindingsFormat::JsonMode
+        );
     }
 
     #[test]

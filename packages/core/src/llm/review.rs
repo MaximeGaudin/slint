@@ -550,4 +550,138 @@ mod tests {
         assert!(!names.contains(&"llm/output-example"));
         assert!(names.contains(&"llm/trigger-coverage"));
     }
+
+    /// Fake that returns successive answers, so retry behaviour can be tested without a network.
+    struct SequenceFake {
+        answers: std::sync::Mutex<Vec<String>>,
+        calls: std::sync::Mutex<usize>,
+    }
+
+    impl SequenceFake {
+        fn new(answers: Vec<String>) -> Self {
+            Self {
+                answers: std::sync::Mutex::new(answers),
+                calls: std::sync::Mutex::new(0),
+            }
+        }
+
+        fn calls(&self) -> usize {
+            *self.calls.lock().unwrap()
+        }
+    }
+
+    impl Chat for SequenceFake {
+        fn complete(&self, _prompt: &Prompt) -> Result<String> {
+            *self.calls.lock().unwrap() += 1;
+            let mut answers = self.answers.lock().unwrap();
+            if answers.is_empty() {
+                anyhow::bail!("SequenceFake has no more answers");
+            }
+            Ok(answers.remove(0))
+        }
+
+        fn describe(&self) -> String {
+            "fake/sequence".into()
+        }
+    }
+
+    #[test]
+    fn review_retries_once_when_the_first_reply_is_not_findings_json() {
+        let skill = good_skill();
+        let client = SequenceFake::new(vec![
+            "I looked and it seems fine.".into(),
+            r#"[{"rule":"llm/failure-path","message":"Step 2 can fail silently."}]"#.into(),
+        ]);
+
+        let (messages, _notes) =
+            review_with(&client, &skill, &Config::default(), &LlmConfig::default())
+                .expect("a recoverable second reply must succeed");
+
+        assert_eq!(client.calls(), 2, "must retry exactly once after a parse failure");
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].rule, "llm/failure-path");
+    }
+
+    #[test]
+    fn review_hard_fails_when_replies_stay_unparseable() {
+        let skill = good_skill();
+        let client = SequenceFake::new(vec![
+            "still not json".into(),
+            "also not json".into(),
+        ]);
+
+        let failure = review_with(&client, &skill, &Config::default(), &LlmConfig::default())
+            .expect_err("unparseable replies under an explicit model pass must hard-fail");
+
+        assert_eq!(client.calls(), 2, "must attempt one retry before hard-failing");
+        let text = format!("{failure:#}");
+        assert!(
+            text.contains("not") && (text.contains("JSON") || text.contains("json") || text.contains("findings")),
+            "error must be actionable about the bad reply: {text}"
+        );
+    }
+
+    #[test]
+    fn a_schema_or_tool_style_findings_object_produces_messages_via_review() {
+        // Structured-output and forced-tool paths both surface an object root
+        // {"findings":[...]} rather than a bare array; review must accept that.
+        let skill = good_skill();
+        let client = Fake {
+            answer: r#"{"findings":[{"rule":"llm/no-ambiguity","message":"Step 2 can be read two ways.","line":8,"confidence":0.7}]}"#.into(),
+        };
+
+        let (messages, notes) =
+            review_with(&client, &skill, &Config::default(), &LlmConfig::default()).unwrap();
+
+        assert_eq!(messages.len(), 1, "notes={notes:?}");
+        assert_eq!(messages[0].rule, "llm/no-ambiguity");
+        assert!(notes.is_empty());
+    }
+
+    #[test]
+    fn review_requests_findings_with_the_provider_format() {
+        use crate::llm::provider::{FindingsFormat, findings_format_for};
+        use std::sync::Mutex;
+
+        struct FormatSpy {
+            seen: Mutex<Option<FindingsFormat>>,
+            answer: String,
+        }
+
+        impl Chat for FormatSpy {
+            fn complete(&self, _prompt: &Prompt) -> Result<String> {
+                anyhow::bail!("review must call complete_findings, not complete");
+            }
+
+            fn complete_findings(
+                &self,
+                _prompt: &Prompt,
+                format: FindingsFormat,
+            ) -> Result<String> {
+                *self.seen.lock().unwrap() = Some(format);
+                Ok(self.answer.clone())
+            }
+
+            fn describe(&self) -> String {
+                "fake/spy".into()
+            }
+        }
+
+        let skill = good_skill();
+        let mut llm = LlmConfig::default();
+        llm.provider = crate::config::Provider::Groq;
+        let client = FormatSpy {
+            seen: Mutex::new(None),
+            answer: r#"{"findings":[{"rule":"llm/output-example","message":"No example."}]}"#.into(),
+        };
+
+        let (messages, _) = review_with(&client, &skill, &Config::default(), &llm).unwrap();
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(
+            *client.seen.lock().unwrap(),
+            Some(findings_format_for(crate::config::Provider::Groq)),
+            "review must pass the provider's findings format into complete_findings"
+        );
+    }
 }
