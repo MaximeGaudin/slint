@@ -494,6 +494,17 @@ mod tests {
     }
 
     #[test]
+    fn a_malformed_ignore_glob_names_the_pattern_and_fails() {
+        let failure = match build_ignore(&["[invalid-glob".to_string()]) {
+            Err(failure) => failure.to_string(),
+            Ok(_) => panic!("a malformed glob has to be an error"),
+        };
+
+        assert!(failure.contains("bad ignore pattern"));
+        assert!(failure.contains("[invalid-glob"));
+    }
+
+    #[test]
     fn a_path_to_the_document_itself_resolves_to_its_directory() {
         let temporary = tempfile::tempdir().unwrap();
         let directory = temporary.path().join("photo-culling");
