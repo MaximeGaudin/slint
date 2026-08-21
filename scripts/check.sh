@@ -54,6 +54,8 @@ if [ "$RUN_JS" -eq 1 ]; then
   echo "==> pnpm lint (biome + tsc + astro check)"
   # Turbo package lints already invoke check-no-todos; skip the root double-run.
   pnpm exec turbo run lint
+  echo "==> pnpm test (vscode unit tests)"
+  pnpm exec turbo run test --filter=slint-vscode
 else
   echo "==> pnpm lint (skipped via --no-js)"
 fi

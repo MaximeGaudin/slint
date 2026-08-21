@@ -31,15 +31,79 @@ export function ruleIdFromCode(
   return undefined
 }
 
+export function disableNextLineComment(ruleId: string): string {
+  return `<!-- slint-disable-next-line ${ruleId} -->\n`
+}
+
+export function disableFileComment(ruleId: string): string {
+  return `<!-- slint-disable ${ruleId} -->\n`
+}
+
 /**
- * Builds the Ignore quick-fix edits for one finding.
- *
- * Stubbed empty until the Ignore actions are implemented (#16).
+ * 0-based line where a disable-next-line comment should be inserted so that
+ * `findingLine` (0-based) is covered — before a fence opener when the finding
+ * sits inside a fenced block, otherwise on the finding line itself.
  */
-export function ignoreEditsForFinding(_options: {
+export function insertAtLineForDisableNext(lines: string[], findingLine: number): number {
+  let openAt: number | undefined
+  let openMarker: string | undefined
+
+  for (let i = 0; i <= findingLine; i++) {
+    const trimmed = (lines[i] ?? '').trimStart()
+    if (openAt === undefined) {
+      if (trimmed.startsWith('```')) {
+        openAt = i
+        openMarker = '```'
+      } else if (trimmed.startsWith('~~~')) {
+        openAt = i
+        openMarker = '~~~'
+      }
+      continue
+    }
+
+    if (openMarker && trimmed.startsWith(openMarker)) {
+      if (i < findingLine) {
+        openAt = undefined
+        openMarker = undefined
+      }
+    }
+  }
+
+  return openAt ?? findingLine
+}
+
+/** 0-based line after YAML frontmatter, or 0 when there is none. */
+export function insertAtLineForFileDisable(lines: string[]): number {
+  if ((lines[0] ?? '').trim() !== '---') return 0
+
+  for (let i = 1; i < lines.length; i++) {
+    if ((lines[i] ?? '').trim() === '---') return i + 1
+  }
+
+  return 0
+}
+
+/** Builds the Ignore quick-fix edits for one finding. */
+export function ignoreEditsForFinding(options: {
   ruleId: string
   findingLine: number
   documentText: string
 }): IgnoreEdit[] {
-  return []
+  const { ruleId, findingLine, documentText } = options
+  const lines = documentText.split(/\r?\n/)
+
+  return [
+    {
+      kind: 'next-line',
+      title: `Ignore '${ruleId}' for this line`,
+      insertAtLine: insertAtLineForDisableNext(lines, findingLine),
+      text: disableNextLineComment(ruleId),
+    },
+    {
+      kind: 'file',
+      title: `Ignore '${ruleId}' for this file`,
+      insertAtLine: insertAtLineForFileDisable(lines),
+      text: disableFileComment(ruleId),
+    },
+  ]
 }

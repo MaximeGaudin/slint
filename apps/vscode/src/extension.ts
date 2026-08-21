@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process'
 import * as path from 'node:path'
 import { promisify } from 'node:util'
 import * as vscode from 'vscode'
+import { ignoreEditsForFinding, ruleIdFromCode } from './ignore.js'
 
 const run = promisify(execFile)
 
@@ -77,6 +78,14 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
     vscode.commands.registerCommand('slint.fixDocument', () => fixActiveDocument()),
     vscode.commands.registerCommand('slint.showOutput', () => output.show(true)),
+  )
+
+  context.subscriptions.push(
+    vscode.languages.registerCodeActionsProvider(
+      { language: 'markdown', pattern: '**/SKILL.md' },
+      new IgnoreCodeActionProvider(),
+      { providedCodeActionKinds: IgnoreCodeActionProvider.providedCodeActionKinds },
+    ),
   )
 
   context.subscriptions.push(
@@ -487,6 +496,43 @@ function severityOf(severity: Finding['severity']): vscode.DiagnosticSeverity {
       return vscode.DiagnosticSeverity.Warning
     default:
       return vscode.DiagnosticSeverity.Information
+  }
+}
+
+/** Quick Fix entries that insert `slint-disable` / `slint-disable-next-line` comments. */
+class IgnoreCodeActionProvider implements vscode.CodeActionProvider {
+  static readonly providedCodeActionKinds = [vscode.CodeActionKind.QuickFix]
+
+  provideCodeActions(
+    document: vscode.TextDocument,
+    _range: vscode.Range | vscode.Selection,
+    context: vscode.CodeActionContext,
+  ): vscode.CodeAction[] {
+    if (!isSkill(document)) return []
+
+    const actions: vscode.CodeAction[] = []
+
+    for (const diagnostic of context.diagnostics) {
+      if (diagnostic.source !== 'slint' && diagnostic.source !== 'slint-model') continue
+
+      const ruleId = ruleIdFromCode(diagnostic.code)
+      if (!ruleId) continue
+
+      for (const edit of ignoreEditsForFinding({
+        ruleId,
+        findingLine: diagnostic.range.start.line,
+        documentText: document.getText(),
+      })) {
+        const action = new vscode.CodeAction(edit.title, vscode.CodeActionKind.QuickFix)
+        action.diagnostics = [diagnostic]
+        action.isPreferred = edit.kind === 'next-line'
+        action.edit = new vscode.WorkspaceEdit()
+        action.edit.insert(document.uri, new vscode.Position(edit.insertAtLine, 0), edit.text)
+        actions.push(action)
+      }
+    }
+
+    return actions
   }
 }
 

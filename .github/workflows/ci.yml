@@ -68,6 +68,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Lint docs + vscode
         run: pnpm exec turbo run lint --filter=slint-docs --filter=slint-vscode
+      - name: Test vscode
+        run: pnpm exec turbo run test --filter=slint-vscode
 
   msrv:
     name: MSRV
