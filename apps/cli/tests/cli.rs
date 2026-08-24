@@ -40,6 +40,39 @@ fn a_clean_base_exits_zero_and_says_so() {
     assert!(stdout(&output).contains("Nothing to report"));
 }
 
+/// Regression for https://github.com/MaximeGaudin/slint/issues/118 —
+/// a path with no skills at all used to print the identical "Nothing to report" success line and
+/// exit 0, so a typo'd CI path passed forever.
+#[test]
+fn a_path_with_no_skills_fails_the_run_and_says_nothing_was_linted() {
+    let temporary = tempfile::tempdir().unwrap();
+
+    let output = slint(&[temporary.path().to_str().unwrap(), "--no-llm"]);
+
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "linting nothing is not a clean pass: {stderr}"
+    );
+    assert!(
+        stderr.contains("no SKILL.md"),
+        "the failure must name what is missing: {stderr}"
+    );
+    assert!(
+        !stdout(&output).contains("Nothing to report"),
+        "the clean-pass line must not be printed"
+    );
+
+    // A plain file that is not a skill is the same outcome.
+    let stray = temporary.path().join("notes.txt");
+    fs::write(&stray, "hello\n").unwrap();
+
+    let output = slint(&[stray.to_str().unwrap(), "--no-llm"]);
+
+    assert_eq!(output.status.code(), Some(3), "a plain file is not a skill");
+}
+
 #[test]
 fn an_error_exits_one() {
     let temporary = tempfile::tempdir().unwrap();
