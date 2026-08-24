@@ -959,4 +959,18 @@ You might want to start by looking through the briefs folder.\n\
         );
         assert!(check(&IMPERATIVE_RULE, &skill).is_empty());
     }
+
+    #[test]
+    fn a_flow_sequence_allowed_tool_is_not_undeclared() {
+        // Regression for https://github.com/MaximeGaudin/slint/issues/288: allowed-tools written as
+        // a YAML flow sequence `[AskQuestion, Read]` must still be read as declaring AskQuestion.
+        let skill = crate::skill::parse(
+            "---\nname: grill-brief\ndescription: Interrogates briefs with batched questions until they are spec-ready. Use when grilling briefs.\nallowed-tools: [AskQuestion, Read]\n---\n\n## Grill Brief\n\n1. Ask a batch of questions with the AskQuestion tool.\n",
+        );
+
+        assert!(
+            check(&UNDECLARED_TOOL_RULE, &skill).is_empty(),
+            "expected flow-sequence allowed-tools to declare AskQuestion"
+        );
+    }
 }
