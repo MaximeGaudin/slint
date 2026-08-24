@@ -90,6 +90,28 @@ impl ProjectRule for DistinctDescriptions {
         &DISTINCT_DESCRIPTIONS
     }
 
+    fn options_error(&self, options: &serde_json::Value) -> Option<String> {
+        let serde_json::Value::Object(map) = options else {
+            return Some("the options must be a table, for example { similarity = 0.8 }".into());
+        };
+
+        let unknown: Vec<String> = map
+            .keys()
+            .filter(|key| key.as_str() != "similarity")
+            .map(|key| format!("`{key}`"))
+            .collect();
+
+        if !unknown.is_empty() {
+            return Some(format!("unknown option {}, expected `similarity`", unknown.join(", ")));
+        }
+
+        match options.get("similarity") {
+            None | Some(serde_json::Value::Null) => None,
+            Some(value) if value.as_f64().is_some() => None,
+            Some(value) => Some(format!("`similarity` must be a number, not {value}")),
+        }
+    }
+
     fn check(&self, skills: &[Skill], config: &Config, severity: Severity) -> Vec<Message> {
         let threshold = config
             .options_for(DISTINCT_DESCRIPTIONS.name)
@@ -205,6 +227,26 @@ mod tests {
             DISTINCT_RULE
                 .check(&skills, &config, Severity::Warning)
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_typo_d_similarity_option_is_named_not_silently_ignored() {
+        assert_eq!(
+            DISTINCT_RULE
+                .options_error(&serde_json::json!({ "similarit": 0.9 }))
+                .as_deref(),
+            Some("unknown option `similarit`, expected `similarity`")
+        );
+        assert_eq!(
+            DISTINCT_RULE
+                .options_error(&serde_json::json!({ "similarity": "high" }))
+                .as_deref(),
+            Some("`similarity` must be a number, not \"high\"")
+        );
+        assert_eq!(
+            DISTINCT_RULE.options_error(&serde_json::json!({ "similarity": 0.9 })),
+            None
         );
     }
 

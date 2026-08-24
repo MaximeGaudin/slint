@@ -204,6 +204,38 @@ pub fn lint_project(skills: &[Skill], config: &Config) -> Vec<Message> {
     messages
 }
 
+/// What is wrong with the options the config gave a built-in rule, once per run.
+///
+/// Deserialising is the rule's own business, because the shape of the options is the rule's own
+/// type — so the rule says what is wrong. Plugin rules are left alone: their options, if any,
+/// belong to the plugin.
+fn option_notes(config: &Config) -> Vec<String> {
+    let mut notes = Vec::new();
+
+    for (name, setting) in &config.rules {
+        let Some(options) = setting.options() else {
+            continue;
+        };
+
+        let problem = rules::registry()
+            .iter()
+            .find(|rule| rule.meta().name == *name)
+            .and_then(|rule| rule.options_error(options))
+            .or_else(|| {
+                rules::project_registry()
+                    .iter()
+                    .find(|rule| rule.meta().name == *name)
+                    .and_then(|rule| rule.options_error(options))
+            });
+
+        if let Some(problem) = problem {
+            notes.push(format!("{name}: {problem} — the rule ran with its defaults."));
+        }
+    }
+
+    notes
+}
+
 /// Reads, lints and reports on every skill under the given paths.
 pub fn run(
     paths: &[PathBuf],
@@ -246,6 +278,15 @@ pub fn run(
             }
         })
         .collect();
+
+    // The config's own options, checked once for the whole run: a typo'd key used to fall back
+    // to the built-in default without a word, which is how a limit nobody chose ends up in the
+    // report.
+    for note in option_notes(config) {
+        for report in &mut per_skill {
+            report.notes.push(note.clone());
+        }
+    }
 
     for message in lint_project(&skills, config) {
         if let Some(report) = per_skill

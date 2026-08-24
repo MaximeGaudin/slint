@@ -199,6 +199,14 @@ impl<'a> RuleContext<'a> {
 pub trait Rule: Sync + Send {
     fn meta(&self) -> &'static RuleMeta;
     fn check(&self, context: &mut RuleContext<'_>);
+
+    /// What is wrong with the options the config gave this rule, when there is something wrong.
+    ///
+    /// Rules without options keep the default: there is nothing in the config to misspell, and a
+    /// rule that cannot be tuned should not be able to be misconfigured either.
+    fn options_error(&self, _options: &serde_json::Value) -> Option<String> {
+        None
+    }
 }
 
 /// A rule that can only be answered by looking at every skill at once.
@@ -208,6 +216,11 @@ pub trait Rule: Sync + Send {
 pub trait ProjectRule: Sync + Send {
     fn meta(&self) -> &'static RuleMeta;
     fn check(&self, skills: &[Skill], config: &Config, severity: Severity) -> Vec<Message>;
+
+    /// The options this rule reads from the config, checked the same way a `Rule`'s are.
+    fn options_error(&self, _options: &serde_json::Value) -> Option<String> {
+        None
+    }
 }
 
 /// Every rule that reads one skill.

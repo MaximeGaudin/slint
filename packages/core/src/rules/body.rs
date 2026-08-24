@@ -57,7 +57,7 @@ pub static SECRETS: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
 });
 
 #[derive(Debug, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 struct LineOptions {
     /// Past this, an agent starts skimming rather than reading.
     max: usize,
@@ -70,7 +70,7 @@ impl Default for LineOptions {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 struct TokenOptions {
     /// The published guidance for a skill body.
     max: usize,
@@ -247,6 +247,10 @@ impl Rule for MaxLines {
         &MAX_LINES
     }
 
+    fn options_error(&self, options: &serde_json::Value) -> Option<String> {
+        serde_json::from_value::<LineOptions>(options.clone()).err().map(|error| error.to_string())
+    }
+
     fn check(&self, context: &mut RuleContext<'_>) {
         let options: LineOptions = context.option();
         let lines = context.skill.body.lines().count();
@@ -276,6 +280,10 @@ pub fn estimate_tokens(text: &str) -> usize {
 impl Rule for TokenBudget {
     fn meta(&self) -> &'static RuleMeta {
         &TOKEN_BUDGET
+    }
+
+    fn options_error(&self, options: &serde_json::Value) -> Option<String> {
+        serde_json::from_value::<TokenOptions>(options.clone()).err().map(|error| error.to_string())
     }
 
     fn check(&self, context: &mut RuleContext<'_>) {

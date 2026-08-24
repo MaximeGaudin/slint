@@ -33,7 +33,7 @@ static MARKUP: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"<[^>]+>").expect("the markup pattern compiles"));
 
 #[derive(Debug, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 struct LengthOptions {
     /// Below this, a description cannot carry both what it does and when to use it.
     min: usize,
@@ -218,6 +218,10 @@ impl Rule for NoMarkup {
 impl Rule for MinLength {
     fn meta(&self) -> &'static RuleMeta {
         &MIN_LENGTH
+    }
+
+    fn options_error(&self, options: &serde_json::Value) -> Option<String> {
+        serde_json::from_value::<LengthOptions>(options.clone()).err().map(|error| error.to_string())
     }
 
     fn check(&self, context: &mut RuleContext<'_>) {
