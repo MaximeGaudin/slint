@@ -571,6 +571,55 @@ mod tests {
         assert!(note.contains("--llm"), "{note}");
     }
 
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/294 —
+    /// a typo'd option key used to fall back to the built-in default without a word,
+    /// so the author believed they had changed a limit that never moved.
+    #[test]
+    fn a_typo_d_rule_option_is_named_in_the_report_not_silently_ignored() {
+        let temporary = tempfile::tempdir().unwrap();
+        let body: String = (0..603).map(|step| format!("Step {step}: do one thing.\n")).collect();
+        write_skill(
+            temporary.path(),
+            "long-form",
+            &format!(
+                "---\nname: long-form\ndescription: Restores vintage film scanners step by step, from disassembly to calibration. Use when a scanner needs a full rebuild.\n---\n\n{body}"
+            ),
+        );
+
+        let mut config = Config::default();
+        config.rules.insert(
+            "body/max-lines".into(),
+            RuleSetting::Tuned(Severity::Warning, serde_json::json!({ "maxx": 5000 })),
+        );
+
+        let report = run(
+            &[temporary.path().to_path_buf()],
+            &config,
+            &[],
+            Passes {
+                plugins: false,
+                model: false,
+            },
+        )
+        .unwrap();
+
+        let note = report.skills[0].notes.join(" ");
+        assert!(note.contains("maxx"), "the typo'd key is not named: {note}");
+        assert!(
+            note.contains("defaults"),
+            "the note must say the rule ran with its defaults: {note}"
+        );
+
+        // The finding still reports the limit that actually applied.
+        let message = report
+            .skills[0]
+            .messages
+            .iter()
+            .find(|one| one.rule == "body/max-lines")
+            .expect("body/max-lines should have fired at 603 lines");
+        assert!(message.message.contains("500"), "{}", message.message);
+    }
+
     #[test]
     fn asking_for_the_model_pass_with_no_provider_says_what_is_missing() {
         let temporary = tempfile::tempdir().unwrap();
