@@ -150,6 +150,8 @@ fn run(cli: &Cli) -> Result<u8> {
         plugin::load_all(&config)?
     };
 
+    config::check_rule_names(&config, &plugins)?;
+
     let passes = Passes {
         plugins: !cli.no_plugins,
         model: cli.model_pass(),
