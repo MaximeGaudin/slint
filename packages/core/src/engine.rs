@@ -95,20 +95,27 @@ impl Suppressions {
         let lines: Vec<&str> = source.lines().collect();
 
         for (index, line) in lines.iter().enumerate() {
-            if let Some(found) = DISABLE_LINE.captures(line) {
-                let rules = split_rules(&found[1]);
+            // Every directive on the line, not just the first: two comments on one line are as
+            // legal as two rules in one comment. All the next-line forms here point at the same
+            // line, so their rule lists merge.
+            let mut next_line = Vec::new();
+            for found in DISABLE_LINE.captures_iter(line) {
+                next_line.extend(split_rules(&found[1]));
+            }
+
+            if !next_line.is_empty() {
                 // Normally the next line only. When that line opens a fenced
                 // code block, cover every line inside the fence too — example
                 // paths live on the lines after ```, not on the fence marker.
                 for covered in lines_covered_by_disable_next(&lines, index) {
-                    for rule in &rules {
+                    for rule in &next_line {
                         suppressions.lines.push((covered, rule.clone()));
                     }
                 }
                 continue;
             }
 
-            if let Some(found) = DISABLE_FILE.captures(line) {
+            for found in DISABLE_FILE.captures_iter(line) {
                 for rule in split_rules(&found[1]) {
                     suppressions.file.insert(rule);
                 }
