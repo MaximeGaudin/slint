@@ -197,6 +197,31 @@ fn a_config_file_is_found_by_walking_up_from_the_path_being_linted() {
     assert!(!stdout(&output).contains("name/not-generic"));
 }
 
+/// Regression for https://github.com/MaximeGaudin/slint/issues/26 —
+/// `[rule]` instead of `[rules]` used to load as if the config file were empty, and the run
+/// went on as if no config had been written.
+#[test]
+fn a_mis_spelled_top_level_section_fails_the_run_and_names_it() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(
+        temporary.path().join("slint.toml"),
+        "[rule]\n\"name/not-generic\" = \"off\"\n",
+    )
+    .unwrap();
+
+    write(temporary.path(), "photo-culling", GOOD);
+
+    let output = slint(&[temporary.path().to_str().unwrap(), "--no-llm"]);
+
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "a misspelled section must fail the run: {stderr}"
+    );
+    assert!(stderr.contains("rule"), "{stderr}");
+}
+
 #[test]
 fn a_rule_pack_named_by_the_config_runs_beside_the_built_in_rules() {
     let temporary = tempfile::tempdir().unwrap();

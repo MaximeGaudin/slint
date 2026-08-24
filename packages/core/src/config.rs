@@ -507,4 +507,19 @@ mod tests {
         assert_eq!(config.llm.provider, Provider::None);
         assert!(!config.llm.is_configured());
     }
+
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/26 —
+    /// a section name off by one used to load as if the file were empty, so the whole config
+    /// silently did nothing.
+    #[test]
+    fn a_mis_spelled_top_level_section_is_refused_rather_than_silently_dropped() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("slint.toml");
+        fs::write(&path, "[rule]\n\"name/not-generic\" = \"off\"\n").unwrap();
+
+        let failure = load(&path).unwrap_err().to_string();
+
+        assert!(failure.contains("unknown field `rule`"), "{failure}");
+        assert!(failure.contains("rules"), "{failure}");
+    }
 }
