@@ -475,6 +475,46 @@ mod tests {
         assert!(suppressions.file.contains("name/not-generic"));
     }
 
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/274 —
+    /// a second directive on the same line used to be dropped: only the first match was read.
+    #[test]
+    fn every_disable_comment_on_a_line_takes_effect() {
+        let suppressions = Suppressions::read(
+            "<!-- slint-disable body/posix-paths --> <!-- slint-disable name/not-generic -->\n",
+        );
+
+        assert!(suppressions.file.contains("body/posix-paths"));
+        assert!(
+            suppressions.file.contains("name/not-generic"),
+            "the second directive on the line must take effect too: {:?}",
+            suppressions.file
+        );
+    }
+
+    #[test]
+    fn every_disable_next_line_comment_on_a_line_takes_effect() {
+        let suppressions = Suppressions::read(
+            "one\n<!-- slint-disable-next-line body/posix-paths --> <!-- slint-disable-next-line body/no-secret -->\ntwo\n",
+        );
+
+        assert!(
+            suppressions
+                .lines
+                .iter()
+                .any(|(line, rule)| *line == 3 && rule == "body/posix-paths"),
+            "{:?}",
+            suppressions.lines
+        );
+        assert!(
+            suppressions
+                .lines
+                .iter()
+                .any(|(line, rule)| *line == 3 && rule == "body/no-secret"),
+            "the second directive on the line must take effect too: {:?}",
+            suppressions.lines
+        );
+    }
+
     #[test]
     fn running_over_a_tree_reports_every_skill_it_finds() {
         let temporary = tempfile::tempdir().unwrap();
