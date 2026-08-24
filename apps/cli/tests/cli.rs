@@ -88,6 +88,35 @@ fn a_warning_budget_turns_warnings_into_a_failed_run() {
     assert_eq!(output.status.code(), Some(1));
 }
 
+/// Regression for https://github.com/MaximeGaudin/slint/issues/22 —
+/// --quiet used to strip the warnings from the report before the exit code was computed,
+/// so `--quiet --max-warnings 0` passed a run that the same budget fails without --quiet.
+#[test]
+fn a_quiet_run_still_enforces_the_warning_budget() {
+    let temporary = tempfile::tempdir().unwrap();
+    write(
+        temporary.path(),
+        "helper",
+        "---\nname: helper\ndescription: Culls a photo shoot in Lightroom by flagging the keepers and rejecting the rest. Use when triaging RAW files after a session.\n---\n\n## Helper\n\n1. Import the files.\n",
+    );
+
+    let output = slint(&[
+        temporary.path().to_str().unwrap(),
+        "--no-llm",
+        "--quiet",
+        "--max-warnings",
+        "0",
+    ]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "--quiet must not defeat --max-warnings"
+    );
+    // And --quiet still does what it says: the warning itself is not printed.
+    assert!(!stdout(&output).contains("name/not-generic"));
+}
+
 #[test]
 fn a_rule_can_be_turned_off_from_the_command_line() {
     let temporary = tempfile::tempdir().unwrap();
