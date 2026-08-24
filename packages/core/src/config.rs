@@ -167,7 +167,11 @@ pub struct Config {
 }
 
 /// The file, before the severities are turned into something typed.
+///
+/// `deny_unknown_fields` is the point: a section name off by one used to load as if the file were
+/// empty, so the whole config silently did nothing and the run went on as if none had been read.
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawConfig {
     #[serde(default)]
     rules: BTreeMap<String, serde_json::Value>,
@@ -517,7 +521,8 @@ mod tests {
         let path = temporary.path().join("slint.toml");
         fs::write(&path, "[rule]\n\"name/not-generic\" = \"off\"\n").unwrap();
 
-        let failure = load(&path).unwrap_err().to_string();
+        let failure = load(&path).unwrap_err();
+        let failure = format!("{failure:#}");
 
         assert!(failure.contains("unknown field `rule`"), "{failure}");
         assert!(failure.contains("rules"), "{failure}");
