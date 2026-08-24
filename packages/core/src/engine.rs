@@ -475,6 +475,48 @@ mod tests {
         assert!(suppressions.file.contains("name/not-generic"));
     }
 
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/271 —
+    /// a `>` in the explanation after the rule list (an HTML tag, say) used to defeat the
+    /// whole directive, with no diagnostic.
+    #[test]
+    fn a_disable_comment_survives_free_text_that_contains_a_gt() {
+        let suppressions = Suppressions::read(
+            "<!-- slint-disable body/posix-paths, matches the <script> tag pattern -->\n",
+        );
+
+        assert!(
+            suppressions.file.contains("body/posix-paths"),
+            "the directive must survive the '>' in the trailing text: {:?}",
+            suppressions.file
+        );
+    }
+
+    /// The same survival for the per-line form, and the free text must not itself suppress
+    /// anything.
+    #[test]
+    fn a_disable_next_line_comment_survives_free_text_and_suppresses_only_the_named_rules() {
+        let suppressions = Suppressions::read(
+            "one\n<!-- slint-disable-next-line body/posix-paths (like <b> emphasis), but not body/no-secret -->\ntwo\n",
+        );
+
+        assert!(
+            suppressions
+                .lines
+                .iter()
+                .any(|(line, rule)| *line == 3 && rule == "body/posix-paths"),
+            "the named rule must be silenced on the next line: {:?}",
+            suppressions.lines
+        );
+        assert!(
+            !suppressions
+                .lines
+                .iter()
+                .any(|(_, rule)| rule == "body/no-secret"),
+            "a rule named only in the free text must not be silenced: {:?}",
+            suppressions.lines
+        );
+    }
+
     #[test]
     fn running_over_a_tree_reports_every_skill_it_finds() {
         let temporary = tempfile::tempdir().unwrap();
