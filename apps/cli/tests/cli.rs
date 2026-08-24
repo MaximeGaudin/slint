@@ -117,6 +117,27 @@ fn a_quiet_run_still_enforces_the_warning_budget() {
     assert!(!stdout(&output).contains("name/not-generic"));
 }
 
+/// Regression for https://github.com/MaximeGaudin/slint/issues/23 — same root cause:
+/// --quiet is about what is printed, not about what the run found.
+#[test]
+fn a_quiet_run_keeps_the_exit_code_the_full_run_would_have() {
+    let temporary = tempfile::tempdir().unwrap();
+    write(
+        temporary.path(),
+        "helper",
+        "---\nname: helper\ndescription: Culls a photo shoot in Lightroom by flagging the keepers and rejecting the rest. Use when triaging RAW files after a session.\n---\n\n## Helper\n\n1. Import the files.\n",
+    );
+
+    let output = slint(&[temporary.path().to_str().unwrap(), "--no-llm", "--quiet"]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "--quiet hides the warning from the report, not from the exit code"
+    );
+    assert!(!stdout(&output).contains("name/not-generic"));
+}
+
 #[test]
 fn a_rule_can_be_turned_off_from_the_command_line() {
     let temporary = tempfile::tempdir().unwrap();

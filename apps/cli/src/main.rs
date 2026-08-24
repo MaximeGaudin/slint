@@ -168,6 +168,11 @@ fn run(cli: &Cli) -> Result<u8> {
         }
     }
 
+    // The exit code reflects what the run found, not what --quiet chooses to hide: a budget set
+    // to zero must still fail a run full of warnings, and a warning-only run stays a warning-only
+    // run on the way out.
+    let code = exit_code(&report, cli.max_warnings);
+
     if cli.quiet {
         for skill in &mut report.skills {
             skill
@@ -182,7 +187,7 @@ fn run(cli: &Cli) -> Result<u8> {
     let mut stdout = std::io::stdout().lock();
     writeln!(stdout, "{text}").context("writing the report")?;
 
-    Ok(exit_code(&report, cli.max_warnings))
+    Ok(code)
 }
 
 /// What the run means, as a number.
