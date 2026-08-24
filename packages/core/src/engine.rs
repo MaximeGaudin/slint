@@ -37,13 +37,15 @@ impl Default for Passes {
 }
 
 /// `<!-- slint-disable rule -->` anywhere in the document, and its per-line form.
+///
+/// The payload runs to the end of the comment: an explanation after the rule list is common,
+/// and a `>` inside it — an HTML tag the note mentions — must not defeat the directive.
 static DISABLE_FILE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"<!--\s*slint-disable\s+([^\s>-][^>]*?)\s*-->")
-        .expect("the disable pattern compiles")
+    Regex::new(r"<!--\s*slint-disable\s+(.*?)\s*-->").expect("the disable pattern compiles")
 });
 
 static DISABLE_LINE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"<!--\s*slint-disable-next-line\s+([^\s>-][^>]*?)\s*-->")
+    Regex::new(r"<!--\s*slint-disable-next-line\s+(.*?)\s*-->")
         .expect("the disable-next-line pattern compiles")
 });
 
@@ -96,7 +98,7 @@ impl Suppressions {
 
         for (index, line) in lines.iter().enumerate() {
             if let Some(found) = DISABLE_LINE.captures(line) {
-                let rules = split_rules(&found[1]);
+                let rules = rule_list(&found[1]);
                 // Normally the next line only. When that line opens a fenced
                 // code block, cover every line inside the fence too — example
                 // paths live on the lines after ```, not on the fence marker.
@@ -109,7 +111,7 @@ impl Suppressions {
             }
 
             if let Some(found) = DISABLE_FILE.captures(line) {
-                for rule in split_rules(&found[1]) {
+                for rule in rule_list(&found[1]) {
                     suppressions.file.insert(rule);
                 }
             }
@@ -130,12 +132,34 @@ impl Suppressions {
     }
 }
 
-fn split_rules(text: &str) -> Vec<String> {
-    text.split([',', ' '])
-        .map(|part| part.trim())
-        .filter(|part| !part.is_empty())
-        .map(|part| part.to_string())
-        .collect()
+/// The rules a directive names: the leading run of tokens that are rule names.
+///
+/// A rule name is a namespace and a name, `body/posix-paths`. The first token that is not one —
+/// a word of the explanation appended after the list — ends it, so the note can say anything.
+fn rule_list(payload: &str) -> Vec<String> {
+    let mut rules = Vec::new();
+
+    for token in payload.split([',', ' ']) {
+        let token = token.trim();
+
+        if is_rule_name(token) {
+            rules.push(token.to_string());
+        } else if !token.is_empty() {
+            break;
+        }
+    }
+
+    rules
+}
+
+fn is_rule_name(token: &str) -> bool {
+    token.contains('/')
+        && token
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '/')
+        && !token.starts_with('/')
+        && !token.ends_with('/')
+        && !token.contains("//")
 }
 
 /// 1-based document lines silenced by a disable-next-line on `comment_index` (0-based).
