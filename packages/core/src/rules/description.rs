@@ -221,7 +221,9 @@ impl Rule for MinLength {
     }
 
     fn options_error(&self, options: &serde_json::Value) -> Option<String> {
-        serde_json::from_value::<LengthOptions>(options.clone()).err().map(|error| error.to_string())
+        serde_json::from_value::<LengthOptions>(options.clone())
+            .err()
+            .map(|error| error.to_string())
     }
 
     fn check(&self, context: &mut RuleContext<'_>) {

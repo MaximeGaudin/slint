@@ -229,7 +229,9 @@ fn option_notes(config: &Config) -> Vec<String> {
             });
 
         if let Some(problem) = problem {
-            notes.push(format!("{name}: {problem} — the rule ran with its defaults."));
+            notes.push(format!(
+                "{name}: {problem} — the rule ran with its defaults."
+            ));
         }
     }
 
@@ -618,7 +620,9 @@ mod tests {
     #[test]
     fn a_typo_d_rule_option_is_named_in_the_report_not_silently_ignored() {
         let temporary = tempfile::tempdir().unwrap();
-        let body: String = (0..603).map(|step| format!("Step {step}: do one thing.\n")).collect();
+        let body: String = (0..603)
+            .map(|step| format!("Step {step}: do one thing.\n"))
+            .collect();
         write_skill(
             temporary.path(),
             "long-form",
@@ -652,8 +656,7 @@ mod tests {
         );
 
         // The finding still reports the limit that actually applied.
-        let message = report
-            .skills[0]
+        let message = report.skills[0]
             .messages
             .iter()
             .find(|one| one.rule == "body/max-lines")

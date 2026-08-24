@@ -102,7 +102,10 @@ impl ProjectRule for DistinctDescriptions {
             .collect();
 
         if !unknown.is_empty() {
-            return Some(format!("unknown option {}, expected `similarity`", unknown.join(", ")));
+            return Some(format!(
+                "unknown option {}, expected `similarity`",
+                unknown.join(", ")
+            ));
         }
 
         match options.get("similarity") {

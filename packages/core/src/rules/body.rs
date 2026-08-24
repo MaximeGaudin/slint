@@ -248,7 +248,9 @@ impl Rule for MaxLines {
     }
 
     fn options_error(&self, options: &serde_json::Value) -> Option<String> {
-        serde_json::from_value::<LineOptions>(options.clone()).err().map(|error| error.to_string())
+        serde_json::from_value::<LineOptions>(options.clone())
+            .err()
+            .map(|error| error.to_string())
     }
 
     fn check(&self, context: &mut RuleContext<'_>) {
@@ -283,7 +285,9 @@ impl Rule for TokenBudget {
     }
 
     fn options_error(&self, options: &serde_json::Value) -> Option<String> {
-        serde_json::from_value::<TokenOptions>(options.clone()).err().map(|error| error.to_string())
+        serde_json::from_value::<TokenOptions>(options.clone())
+            .err()
+            .map(|error| error.to_string())
     }
 
     fn check(&self, context: &mut RuleContext<'_>) {
