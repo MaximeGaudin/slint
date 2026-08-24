@@ -4,7 +4,7 @@
 //! one works here: 0 clean, 1 errors, 2 warnings only, 3 slint itself failed. Data goes to stdout
 //! and everything else to stderr, so `slint --format json | jq` is always safe.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
@@ -156,6 +156,18 @@ fn run(cli: &Cli) -> Result<u8> {
     };
 
     let mut report = engine::run(&cli.paths, &config, &plugins, passes)?;
+
+    // Linting nothing is not a clean pass: a typo'd path must not read as success in a CI log,
+    // so the run fails the way a path that does not exist already does.
+    if report.skills.is_empty() {
+        let where_ = cli
+            .paths
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        bail!("no SKILL.md files found under {where_} — nothing was linted");
+    }
 
     if cli.fix {
         let applied = slint::fix::apply(&report)?;

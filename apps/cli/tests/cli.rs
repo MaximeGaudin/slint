@@ -55,7 +55,10 @@ fn a_path_with_no_skills_fails_the_run_and_says_nothing_was_linted() {
         Some(3),
         "linting nothing is not a clean pass: {stderr}"
     );
-    assert!(stderr.contains("no SKILL.md"), "the failure must name what is missing: {stderr}");
+    assert!(
+        stderr.contains("no SKILL.md"),
+        "the failure must name what is missing: {stderr}"
+    );
     assert!(
         !stdout(&output).contains("Nothing to report"),
         "the clean-pass line must not be printed"
