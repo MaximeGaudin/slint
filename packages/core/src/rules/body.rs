@@ -689,6 +689,25 @@ mod tests {
     }
 
     #[test]
+    fn a_body_of_setext_headings_and_nothing_else_is_an_error() {
+        let messages = check(
+            &NOT_EMPTY_RULE,
+            &skill_with_body("\nCulling\n=======\n\nLater\n-----\n"),
+        );
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].severity, Severity::Error);
+    }
+
+    #[test]
+    fn a_setext_heading_does_not_count_as_instructions() {
+        let skill =
+            skill_with_body("\nCulling\n=======\n\n1. Import the RAW files, then flag keepers.\n");
+
+        assert!(check(&NOT_EMPTY_RULE, &skill).is_empty());
+    }
+
+    #[test]
     fn a_long_body_is_reported_against_the_configured_maximum() {
         let body = format!("\n## Culling\n\n{}", "Step.\n".repeat(600));
         let skill = skill_with_body(&body);
