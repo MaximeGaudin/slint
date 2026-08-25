@@ -750,13 +750,52 @@ mod tests {
 
         assert_eq!(messages.len(), 2, "one finding per line");
 
+        // The fixer splices every fix in, last first, so the offsets stay valid.
+        let mut fixes: Vec<&Fix> = messages.iter().filter_map(|message| message.fix.as_ref()).collect();
+        fixes.sort_by_key(|fix| std::cmp::Reverse(fix.start));
+        let mut patched = skill.source.clone();
+        for fix in fixes {
+            patched.replace_range(fix.start..fix.end, &fix.replacement);
+        }
+
+        assert!(patched.contains("scripts/notes.md"));
+        assert!(patched.contains("references/formats.md"));
+        assert!(!patched.contains('\\'));
+    }
+
+    #[test]
+    fn the_windows_path_fix_leaves_unrelated_backslash_text_alone() {
+        let skill = skill_with_body(
+            "\n## Culling\n\n1. Read scripts\\notes.md.\n2. See https://example.com/a\\b for the format.\n",
+        );
+        let messages = check(&POSIX_RULE, &skill);
+
+        assert_eq!(messages.len(), 1, "only the path line is reported");
+
         let fix = messages[0].fix.as_ref().unwrap();
         let mut patched = skill.source.clone();
         patched.replace_range(fix.start..fix.end, &fix.replacement);
 
         assert!(patched.contains("scripts/notes.md"));
-        assert!(patched.contains("references/formats.md"));
-        assert!(!patched.contains('\\'));
+        assert!(
+            patched.contains("https://example.com/a\\b"),
+            "the url line must be untouched, got: {patched}"
+        );
+    }
+
+    #[test]
+    fn the_windows_path_fix_normalises_a_multi_segment_path_in_one_fix() {
+        let skill = skill_with_body("\n## Culling\n\n1. Read scripts\\notes\\more.md first.\n");
+        let messages = check(&POSIX_RULE, &skill);
+
+        assert_eq!(messages.len(), 1, "one finding per line");
+
+        let fix = messages[0].fix.as_ref().unwrap();
+        let mut patched = skill.source.clone();
+        patched.replace_range(fix.start..fix.end, &fix.replacement);
+
+        assert!(patched.contains("scripts/notes/more.md"));
+        assert!(!patched.contains('\\'), "the whole path run is fixed at once");
     }
 
     #[test]
