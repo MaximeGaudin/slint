@@ -143,6 +143,8 @@ jobs:
           VERSION="${TAG#v}"
           ARM_SHA=$(sha256sum artifacts/slint-darwin-arm64.tar.gz | cut -d' ' -f1)
           AMD_SHA=$(sha256sum artifacts/slint-darwin-amd64.tar.gz | cut -d' ' -f1)
+          LINUX_ARM_SHA=$(sha256sum artifacts/slint-linux-arm64.tar.gz | cut -d' ' -f1)
+          LINUX_AMD_SHA=$(sha256sum artifacts/slint-linux-amd64.tar.gz | cut -d' ' -f1)
 
           git clone --depth 1 git@github.com:MaximeGaudin/homebrew-tap.git tap
           mkdir -p tap/Formula
@@ -165,6 +167,17 @@ jobs:
               on_intel do
                 url "https://github.com/MaximeGaudin/slint/releases/download/${TAG}/slint-darwin-amd64.tar.gz"
                 sha256 "${AMD_SHA}"
+              end
+            end
+
+            on_linux do
+              on_arm do
+                url "https://github.com/MaximeGaudin/slint/releases/download/${TAG}/slint-linux-arm64.tar.gz"
+                sha256 "${LINUX_ARM_SHA}"
+              end
+              on_intel do
+                url "https://github.com/MaximeGaudin/slint/releases/download/${TAG}/slint-linux-amd64.tar.gz"
+                sha256 "${LINUX_AMD_SHA}"
               end
             end
 
