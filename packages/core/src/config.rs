@@ -233,9 +233,15 @@ pub fn load(path: &Path) -> Result<Config> {
     };
 
     for (name, value) in raw.rules {
-        config
-            .rules
-            .insert(name.clone(), setting_from(&name, &value)?);
+        let setting = setting_from(&name, &value)?;
+
+        // A rule's options are read by the rule itself, so a value it cannot read would be
+        // swallowed into its default: refuse the file instead.
+        if let RuleSetting::Tuned(_, options) = &setting {
+            crate::rules::validate_rule_options(&name, options)?;
+        }
+
+        config.rules.insert(name, setting);
     }
 
     Ok(config)

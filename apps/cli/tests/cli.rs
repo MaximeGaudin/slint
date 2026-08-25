@@ -56,7 +56,11 @@ fn an_out_of_range_rule_option_fails_the_run_and_names_the_rule() {
     let output = slint(&[temporary.path().to_str().unwrap(), "--no-llm"]);
 
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    assert_eq!(output.status.code(), Some(3), "a bad option is a config failure: {stderr}");
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "a bad option is a config failure: {stderr}"
+    );
     assert!(stderr.contains("body/max-lines"), "{stderr}");
 }
 
