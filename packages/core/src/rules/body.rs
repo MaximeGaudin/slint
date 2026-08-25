@@ -760,6 +760,15 @@ mod tests {
     }
 
     #[test]
+    fn a_windows_path_inside_a_fenced_example_is_not_reported() {
+        let skill = skill_with_body(
+            "\n## Steps\n\n1. Run the conversion.\n\n```text\nBefore: scripts\\legacy\\run.bat\nAfter: scripts/legacy/run.py\n```\n",
+        );
+
+        assert!(check(&POSIX_RULE, &skill).is_empty());
+    }
+
+    #[test]
     fn a_url_is_not_mistaken_for_a_windows_path() {
         let skill =
             skill_with_body("\n## Culling\n\nSee https://example.com/a\\b for the format.\n");
