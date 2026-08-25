@@ -467,9 +467,8 @@ mod tests {
         )
         .unwrap();
 
-        let cli =
-            Cli::try_parse_from(["slint", temporary.path().to_str().unwrap(), "--no-config"])
-                .unwrap();
+        let cli = Cli::try_parse_from(["slint", temporary.path().to_str().unwrap(), "--no-config"])
+            .unwrap();
         let config = resolve_config(&cli).unwrap();
 
         assert_eq!(config.source, None);

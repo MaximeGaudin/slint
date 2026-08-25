@@ -59,13 +59,13 @@ fn no_config_runs_on_defaults_even_when_a_config_file_is_there() {
     )
     .unwrap();
 
-    let output = slint(&[
-        root.to_str().unwrap(),
-        "--no-llm",
-        "--no-config",
-    ]);
+    let output = slint(&[root.to_str().unwrap(), "--no-llm", "--no-config"]);
 
-    assert_eq!(output.status.code(), Some(2), "the config file must not be read");
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "the config file must not be read"
+    );
     assert!(
         stdout(&output).contains("name/not-generic"),
         "the config's off must not apply"
