@@ -70,6 +70,17 @@ jobs:
           $Archive = "${{ matrix.artifact }}.zip"
           Compress-Archive -Path $Binary -DestinationPath $Archive -Force
 
+      - name: Checksum (Unix)
+        if: runner.os != 'Windows'
+        run: sha256sum ${{ matrix.artifact }}.tar.gz > ${{ matrix.artifact }}.tar.gz.sha256
+
+      - name: Checksum (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash -Algorithm SHA256 "${{ matrix.artifact }}.zip").Hash.ToLower()
+          Set-Content -Path "${{ matrix.artifact }}.zip.sha256" -Value "$hash  ${{ matrix.artifact }}.zip"
+
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
