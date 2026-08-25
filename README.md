@@ -99,7 +99,7 @@ Exit codes match the convention other skill linters settled on, so a CI script w
 
 ## Configure
 
-`slint init` writes a starter `slint.toml`. Every rule is already on; the file is for the ones you disagree with.
+`slint init` writes a starter `slint.toml`. Every rule is already on; the file is for the ones you disagree with. `--no-config` skips the lookup entirely, for one-off runs and CI jobs that want the built-in defaults and the command line only.
 
 ```toml
 ignore = ["**/fixtures/**"]

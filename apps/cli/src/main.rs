@@ -49,6 +49,10 @@ struct Cli {
     #[arg(long)]
     config: Option<PathBuf>,
 
+    /// Look for no config at all: the built-in defaults and the command line only.
+    #[arg(long, conflicts_with = "config")]
+    no_config: bool,
+
     /// Run the rules that need a model. Off by default: a linter must not spend money uninvited.
     #[arg(long = "llm", visible_alias = "enable-llm-rules")]
     llm: bool,
@@ -203,25 +207,10 @@ fn exit_code(report: &Report, max_warnings: i64) -> u8 {
 }
 
 fn resolve_config(cli: &Cli) -> Result<Config> {
-    let path = match &cli.config {
-        Some(path) => Some(path.clone()),
-        None => {
-            let from = cli
-                .paths
-                .first()
-                .cloned()
-                .unwrap_or_else(|| PathBuf::from("."));
-
-            let anchor = if from.is_dir() {
-                from
-            } else {
-                from.parent()
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| PathBuf::from("."))
-            };
-
-            config::find(&anchor)
-        }
+    let path = if cli.no_config {
+        None
+    } else {
+        resolve_config_path(cli)
     };
 
     let mut config = match path {
@@ -243,6 +232,32 @@ fn resolve_config(cli: &Cli) -> Result<Config> {
     }
 
     Ok(config)
+}
+
+/// The explicit `--config` file, or the one found by walking up from the first path.
+fn resolve_config_path(cli: &Cli) -> Option<PathBuf> {
+    let path = &cli.config;
+
+    match path {
+        Some(path) => Some(path.clone()),
+        None => {
+            let from = cli
+                .paths
+                .first()
+                .cloned()
+                .unwrap_or_else(|| PathBuf::from("."));
+
+            let anchor = if from.is_dir() {
+                from
+            } else {
+                from.parent()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| PathBuf::from("."))
+            };
+
+            config::find(&anchor)
+        }
+    }
 }
 
 /// Flags from the editor (or a one-off shell) win over whatever the file said.
@@ -339,6 +354,7 @@ fn print_rules(as_json: bool) -> Result<u8> {
 mod tests {
     use super::*;
     use slint::diagnostics::{Location, Message, Reference, Severity, SkillReport, Source};
+    use std::fs;
 
     fn report_with(errors: usize, warnings: usize) -> Report {
         let message = |severity: Severity| Message {
@@ -438,6 +454,35 @@ mod tests {
         for meta in slint::llm::rules::all() {
             assert_eq!(config.rules.get(meta.name), Some(&RuleSetting::Off));
         }
+    }
+
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/41 —
+    /// a run with `--no-config` reads no file, whatever the tree above the path holds.
+    #[test]
+    fn no_config_runs_on_defaults_even_when_a_config_file_is_there() {
+        let temporary = tempfile::tempdir().unwrap();
+        fs::write(
+            temporary.path().join("slint.toml"),
+            "[rules]\n\"name/not-generic\" = \"off\"\n",
+        )
+        .unwrap();
+
+        let cli =
+            Cli::try_parse_from(["slint", temporary.path().to_str().unwrap(), "--no-config"])
+                .unwrap();
+        let config = resolve_config(&cli).unwrap();
+
+        assert_eq!(config.source, None);
+        assert_eq!(config.rules.get("name/not-generic"), None);
+    }
+
+    #[test]
+    fn no_config_conflicts_with_an_explicit_config() {
+        let failure = Cli::try_parse_from(["slint", "--no-config", "--config", "slint.toml"])
+            .unwrap_err()
+            .to_string();
+
+        assert!(failure.contains("cannot be used with"), "{failure}");
     }
 
     #[test]
