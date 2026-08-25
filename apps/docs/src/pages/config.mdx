@@ -45,7 +45,8 @@ ignore = ["**/fixtures/**", "**/vendor/**"]
 ```
 
 Directories that are never a skill — `.git`, `node_modules`, `target`, `dist`, `.venv` — are
-skipped without being configured, because nobody has ever wanted them linted.
+skipped without being configured, because nobody has ever wanted them linted. `.gitignore` is not
+consulted, so a build directory that git ignores is linted unless it is listed in `ignore`.
 
 ## Silencing a rule for one document
 

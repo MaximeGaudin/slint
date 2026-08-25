@@ -118,6 +118,8 @@ api_key_env = "OPENAI_API_KEY"   # the variable holding the key, never the key i
 path = "./slint-house-rules.toml"
 ```
 
+`.gitignore` is not consulted: the exclusions slint applies are the ones in the `ignore` key, so a build directory that git ignores is linted unless it is listed there, for example `ignore = ["**/build-output/**"]`.
+
 `slint.config.json` and `.slintrc.json` work too. The file is found by walking up from whatever you asked slint to lint.
 
 A document can also opt out of a rule for itself:
