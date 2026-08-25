@@ -973,4 +973,36 @@ You might want to start by looking through the briefs folder.\n\
             "expected flow-sequence allowed-tools to declare AskQuestion"
         );
     }
+
+    #[test]
+    fn a_longer_identifier_containing_the_tool_name_is_not_undeclared() {
+        // Regression for https://github.com/MaximeGaudin/slint/issues/100: "AskQuestionnaire" is an
+        // unrelated noun, not a call to the AskQuestion tool.
+        let skill = skill_with_body(
+            "\n## Steps\n\n1. Send the AskQuestionnaire form to the customer before continuing.\n",
+        );
+
+        assert!(
+            check(&UNDECLARED_TOOL_RULE, &skill).is_empty(),
+            "expected no undeclared-tool finding for a substring identifier"
+        );
+    }
+
+    #[test]
+    fn the_reported_column_points_at_the_standalone_tool_name() {
+        let line = "1. Fill AskQuestionnaire, then use AskQuestion for the rest.\n";
+        let skill = skill_with_body(&format!("\n{line}"));
+
+        // The standalone occurrence is the last one in this line, not the one inside
+        // "AskQuestionnaire".
+        let expected_column = line
+            .match_indices("AskQuestion")
+            .last()
+            .map(|(start, _)| start + 1)
+            .expect("line contains a standalone AskQuestion");
+
+        let messages = check(&UNDECLARED_TOOL_RULE, &skill);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].location.column, expected_column);
+    }
 }
