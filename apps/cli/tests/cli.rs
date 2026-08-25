@@ -40,6 +40,38 @@ fn a_clean_base_exits_zero_and_says_so() {
     assert!(stdout(&output).contains("Nothing to report"));
 }
 
+/// Regression for https://github.com/MaximeGaudin/slint/issues/42 —
+/// two config files in one directory used to let the second be read by nobody, with no sign.
+#[test]
+fn two_config_files_in_one_directory_say_which_one_wins() {
+    let temporary = tempfile::tempdir().unwrap();
+    write(temporary.path(), "photo-culling", GOOD);
+    fs::write(
+        temporary.path().join("slint.toml"),
+        "[rules]\n\"name/not-generic\" = \"off\"\n",
+    )
+    .unwrap();
+    fs::write(
+        temporary.path().join("slint.config.json"),
+        r#"{ "rules": { "name/not-generic": "off" } }"#,
+    )
+    .unwrap();
+
+    let output = slint(&[temporary.path().to_str().unwrap(), "--no-llm"]);
+
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        stderr.contains("slint.toml"),
+        "the file that won must be named: {stderr}"
+    );
+    assert!(
+        stderr.contains("slint.config.json"),
+        "the file that was ignored must be named: {stderr}"
+    );
+    // The warning is a warning: it changes what is printed, not the result.
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+}
+
 #[test]
 fn an_error_exits_one() {
     let temporary = tempfile::tempdir().unwrap();
