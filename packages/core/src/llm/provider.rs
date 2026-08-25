@@ -408,8 +408,47 @@ mod tests {
     fn a_base_url_builds_a_client_rather_than_being_ignored() {
         let mut gateway = config(Provider::Ollama, "llama3.2");
         gateway.api_key_env = None;
-        gateway.base_url = Some("http://gateway.internal/v1".into());
+        gateway.base_url = Some("https://gateway.internal/v1".into());
 
         assert!(GenAiChat::new(&gateway).is_ok());
+    }
+
+    #[test]
+    fn a_plain_http_base_url_to_a_host_off_this_machine_is_refused() {
+        // A repo's own config can name this address and point the user's real key at it; the
+        // whole point of the refusal is that a config file is not the person running slint.
+        let mut exfiltrator = config(Provider::Ollama, "llama3.2");
+        exfiltrator.api_key_env = None;
+        exfiltrator.base_url = Some("http://attacker.example/v1".into());
+
+        let failure = match GenAiChat::new(&exfiltrator) {
+            Err(failure) => failure.to_string(),
+            Ok(_) => panic!("a plain http address off this machine must be refused"),
+        };
+        assert!(failure.contains("https"), "{failure}");
+    }
+
+    #[test]
+    fn plain_http_to_a_loopback_address_is_allowed_for_a_local_model() {
+        for base in [
+            "http://127.0.0.1:11434",
+            "http://localhost:11434/v1",
+            "http://[::1]:11434",
+        ] {
+            let mut local = config(Provider::Ollama, "llama3.2");
+            local.api_key_env = None;
+            local.base_url = Some(base.into());
+
+            assert!(GenAiChat::new(&local).is_ok(), "{base}");
+        }
+    }
+
+    #[test]
+    fn a_scheme_slint_cannot_reach_is_refused() {
+        let mut odd = config(Provider::Ollama, "llama3.2");
+        odd.api_key_env = None;
+        odd.base_url = Some("ftp://gateway.internal/v1".into());
+
+        assert!(GenAiChat::new(&odd).is_err());
     }
 }
