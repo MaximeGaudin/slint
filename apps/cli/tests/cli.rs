@@ -410,7 +410,6 @@ fn an_undeclared_host_specific_tool_in_the_body_is_reported() {
     );
 }
 
-
 #[test]
 fn a_base_url_that_came_from_the_config_warns_before_anything_is_sent() {
     let temporary = tempfile::tempdir().unwrap();

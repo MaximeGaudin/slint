@@ -105,6 +105,7 @@ pub struct LlmConfig {
     #[serde(default)]
     pub api_key_env: Option<String>,
     /// Overrides the provider's own address. This is what makes a local model or a gateway work.
+    /// Must be https, or http to a loopback address for a model on this machine.
     #[serde(default)]
     pub base_url: Option<String>,
     /// Seconds before a request is abandoned.

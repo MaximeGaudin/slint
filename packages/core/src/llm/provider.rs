@@ -166,6 +166,49 @@ impl GenAiChat {
     }
 }
 
+/// The host a base_url points at, without scheme, port or path.
+fn base_url_host(base: &str) -> Option<&str> {
+    let authority = base.split_once("://")?.1.split(['/', '?', '#']).next()?;
+
+    if let Some(inner) = authority.strip_prefix('[') {
+        return inner.split(']').next();
+    }
+
+    Some(
+        authority
+            .rsplit_once(':')
+            .map_or(authority, |(host, _)| host),
+    )
+}
+
+/// Whether a base_url only ever reaches this machine.
+pub fn is_loopback_base_url(base: &str) -> bool {
+    matches!(base_url_host(base), Some("localhost" | "127.0.0.1" | "::1"))
+}
+
+/// A base_url that is not https — and not http to loopback — would carry the API key and the
+/// whole document to an address a config file chose. A config found in the scanned tree is not
+/// the person running slint, so the one place it may point is a model on this machine.
+pub fn validate_base_url(base: &str) -> Result<()> {
+    let Some(scheme) = base.split_once("://").map(|(scheme, _)| scheme) else {
+        bail!(
+            "base_url {base} has no scheme — it must start with https://, or http:// to a loopback address for a model on this machine"
+        );
+    };
+
+    match scheme.to_ascii_lowercase().as_str() {
+        "https" => Ok(()),
+        "http" if is_loopback_base_url(base) => Ok(()),
+        "http" => bail!(
+            "base_url {base} is plain http, so the API key and the documents being linted would travel unencrypted to {host} — use https, or http to a loopback address (localhost, 127.0.0.1) for a model on this machine",
+            host = base_url_host(base).unwrap_or("that host")
+        ),
+        other => {
+            bail!("base_url {base} uses the {other} scheme, which slint cannot reach — use https")
+        }
+    }
+}
+
 fn build_client(config: &LlmConfig) -> Result<Client> {
     let mut builder = Client::builder();
 
@@ -180,8 +223,11 @@ fn build_client(config: &LlmConfig) -> Result<Client> {
     }
 
     // An address of our own is what makes a gateway, a proxy or a self-hosted server work, and it
-    // is the one thing a provider list can never enumerate.
+    // is the one thing a provider list can never enumerate. It is also the one thing a cloned
+    // repository's config can point at an attacker, so the scheme is checked before anything
+    // is sent.
     if let Some(base) = config.base_url.clone() {
+        validate_base_url(&base)?;
         let address = if base.ends_with('/') {
             base
         } else {

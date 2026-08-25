@@ -144,6 +144,30 @@ fn run(cli: &Cli) -> Result<u8> {
 
     let config = resolve_config(cli)?;
 
+    // A base_url that arrived from the config file, not from the command line, chooses where the
+    // API key and the document go. A config found in the scanned tree is not something the user
+    // wrote, so say out loud what it is doing before anything is sent.
+    if cli.model_pass()
+        && cli.llm_base_url.is_none()
+        && let Some(base) = config.llm.base_url.as_deref()
+        && !slint::llm::provider::is_loopback_base_url(base)
+    {
+        let where_from = config
+            .source
+            .as_ref()
+            .map(|path| format!(" file {}", path.display()))
+            .unwrap_or_default();
+        let key_variable = config
+            .llm
+            .api_key_env
+            .as_deref()
+            .unwrap_or("(no api_key_env is named)");
+
+        eprintln!(
+            "slint: the config{where_from} points the model pass at {base}. The key in {key_variable} and the documents being linted go there. If you did not write that config, check it before trusting this run."
+        );
+    }
+
     let plugins = if cli.no_plugins {
         Vec::new()
     } else {
