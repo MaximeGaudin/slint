@@ -495,6 +495,42 @@ mod tests {
         assert!(Provider::parse("claude").is_err());
     }
 
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/38 —
+    /// a literal key pasted where api_key_env belongs is the shape every other tool's config
+    /// uses, and it used to be accepted and ignored while the secret sat in the file.
+    #[test]
+    fn a_literal_api_key_in_the_llm_block_is_refused_and_named() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("slint.toml");
+        fs::write(
+            &path,
+            "[llm]\nprovider = \"openai\"\nmodel = \"gpt-5-mini\"\napi_key = \"sk-test-0000\"\n",
+        )
+        .unwrap();
+
+        let failure = load(&path).unwrap_err();
+        let failure = format!("{failure:#}");
+
+        assert!(failure.contains("api_key"), "{failure}");
+        assert!(failure.contains("api_key_env"), "{failure}");
+    }
+
+    #[test]
+    fn an_unknown_field_in_the_llm_block_is_refused_rather_than_silently_dropped() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("slint.config.json");
+        fs::write(
+            &path,
+            r#"{ "llm": { "provider": "openai", "model": "gpt-5-mini", "api_key_environment": "OPENAI_API_KEY" } }"#,
+        )
+        .unwrap();
+
+        let failure = load(&path).unwrap_err();
+        let failure = format!("{failure:#}");
+
+        assert!(failure.contains("api_key_environment"), "{failure}");
+    }
+
     #[test]
     fn the_starter_config_is_valid_and_turns_nothing_on() {
         let temporary = tempfile::tempdir().unwrap();
