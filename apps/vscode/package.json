@@ -69,11 +69,6 @@
           "default": "",
           "description": "Model id the provider understands (e.g. llama-3.1-8b-instant on Groq). Overrides [llm].model when set."
         },
-        "slint.llm.apiKey": {
-          "type": "string",
-          "default": "",
-          "description": "API key for the provider. Prefer User settings (not workspace) so it is not committed. Passed to slint via a process env var, never as a CLI flag."
-        },
         "slint.arguments": {
           "type": "array",
           "items": {
@@ -100,6 +95,14 @@
       {
         "command": "slint.fixDocument",
         "title": "slint: Apply the computed fixes to this skill"
+      },
+      {
+        "command": "slint.setApiKey",
+        "title": "slint: Set the model API key (secure storage)"
+      },
+      {
+        "command": "slint.clearApiKey",
+        "title": "slint: Clear the stored model API key"
       },
       {
         "command": "slint.showOutput",

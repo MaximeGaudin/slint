@@ -4,9 +4,7 @@ import * as path from 'node:path'
 import { describe, it } from 'node:test'
 import { planApiKeyMigration } from './secrets.js'
 
-const manifest = JSON.parse(
-  readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'),
-) as {
+const manifest = JSON.parse(readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')) as {
   contributes: {
     commands: Array<{ command: string }>
     configuration: { properties: Record<string, unknown> }
@@ -35,11 +33,11 @@ describe('planApiKeyMigration (#191)', () => {
     assert.equal(planApiKeyMigration({}, null), undefined)
   })
 
-  it('does nothing when the key already lives in SecretStorage', () => {
-    assert.equal(
-      planApiKeyMigration({ global: 'sk-old' }, 'sk-stored'),
-      undefined,
-    )
+  it('clears leftover plaintext copies even when the key already lives in SecretStorage', () => {
+    assert.deepEqual(planApiKeyMigration({ global: 'sk-old' }, 'sk-stored'), {
+      clear: ['global'],
+    })
+    assert.equal(planApiKeyMigration({}, 'sk-stored'), undefined)
   })
 
   it('migrates a user-level key and clears that scope', () => {
