@@ -8,7 +8,8 @@
 @import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Sora:wght@400;500;600&family=Syne:wght@600;700;800&display=swap");
 
 :root {
-  color-scheme: light;
+  /* Light-only by design: color-scheme is left unset so native controls
+     (scrollbars, form widgets) follow the visitor's OS rather than being forced light. */
 
   --ink: #0a1218;
   --ink-soft: #15202a;
