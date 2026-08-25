@@ -40,6 +40,26 @@ fn a_clean_base_exits_zero_and_says_so() {
     assert!(stdout(&output).contains("Nothing to report"));
 }
 
+/// Regression for https://github.com/MaximeGaudin/slint/issues/27 —
+/// a negative limit used to be read as the default limit, and the run went on as if the
+/// config had said nothing at all.
+#[test]
+fn an_out_of_range_rule_option_fails_the_run_and_names_the_rule() {
+    let temporary = tempfile::tempdir().unwrap();
+    write(temporary.path(), "helper", BROKEN);
+    fs::write(
+        temporary.path().join("slint.toml"),
+        "[rules]\n\"body/max-lines\" = [\"warn\", { max = -5 }]\n",
+    )
+    .unwrap();
+
+    let output = slint(&[temporary.path().to_str().unwrap(), "--no-llm"]);
+
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert_eq!(output.status.code(), Some(3), "a bad option is a config failure: {stderr}");
+    assert!(stderr.contains("body/max-lines"), "{stderr}");
+}
+
 #[test]
 fn an_error_exits_one() {
     let temporary = tempfile::tempdir().unwrap();
