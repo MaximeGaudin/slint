@@ -42,11 +42,9 @@ jobs:
           cache-on-failure: true
 
       - name: Clippy
-        if: matrix.os != 'windows-latest'
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Todo / stub comment check
-        if: runner.os != 'Windows'
         run: node scripts/check-no-todos.mjs
 
       - name: Test
