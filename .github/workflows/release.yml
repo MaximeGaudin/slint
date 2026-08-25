@@ -108,10 +108,10 @@ jobs:
           TAG="${{ inputs.tag }}"
 
           if gh release view "$TAG" &>/dev/null; then
-            gh release edit "$TAG" --title "v${TAG}" --notes-file /tmp/release-notes.md
+            gh release edit "$TAG" --draft --title "v${TAG}" --notes-file /tmp/release-notes.md
             gh release upload "$TAG" artifacts/* --clobber
           else
-            gh release create "$TAG" artifacts/* --title "v${TAG}" --notes-file /tmp/release-notes.md
+            gh release create "$TAG" artifacts/* --draft --title "v${TAG}" --notes-file /tmp/release-notes.md
           fi
 
   homebrew:
