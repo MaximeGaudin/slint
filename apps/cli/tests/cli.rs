@@ -40,6 +40,30 @@ fn a_clean_base_exits_zero_and_says_so() {
     assert!(stdout(&output).contains("Nothing to report"));
 }
 
+/// The documented tradeoff, pinned: slint does not read `.gitignore` (the README says so), so a
+/// git-ignored directory is linted like any other directory. Excluding it is the `ignore` config
+/// key's job, and a later behaviour change that starts honouring `.gitignore` will show up here.
+#[test]
+fn a_gitignored_directory_is_linted_the_way_the_readme_says_it_will() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+
+    write(
+        root.join("build-output").as_path(),
+        "helper",
+        "---\nname: helper\ndescription: Culls a photo shoot in Lightroom by flagging the keepers and rejecting the rest. Use when triaging RAW files after a session.\n---\n\n## Helper\n\n1. Import the files.\n",
+    );
+    fs::write(root.join(".gitignore"), "build-output/\n").unwrap();
+
+    let output = slint(&[root.to_str().unwrap(), "--no-llm"]);
+
+    assert!(
+        stdout(&output).contains("build-output"),
+        ".gitignore is not consulted, so the folder is linted"
+    );
+    assert!(stdout(&output).contains("name/not-generic"));
+}
+
 #[test]
 fn an_error_exits_one() {
     let temporary = tempfile::tempdir().unwrap();
