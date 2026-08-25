@@ -4,9 +4,7 @@ import * as path from 'node:path'
 import { describe, it } from 'node:test'
 import { stripReservedLlmArgs } from './argv.js'
 
-const manifest = JSON.parse(
-  readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'),
-) as {
+const manifest = JSON.parse(readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')) as {
   contributes: { configuration: { properties: Record<string, { scope?: string }> } }
 }
 
@@ -55,13 +53,7 @@ describe('stripReservedLlmArgs (#33)', () => {
   })
 
   it('keeps rule overrides and unrelated arguments untouched', () => {
-    const kept = stripReservedLlmArgs([
-      '--rule',
-      'body/not-empty=off',
-      '--max-warnings',
-      '5',
-      '-q',
-    ])
+    const kept = stripReservedLlmArgs(['--rule', 'body/not-empty=off', '--max-warnings', '5', '-q'])
     assert.deepEqual(kept, ['--rule', 'body/not-empty=off', '--max-warnings', '5', '-q'])
   })
 })
