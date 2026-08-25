@@ -40,6 +40,39 @@ fn a_clean_base_exits_zero_and_says_so() {
     assert!(stdout(&output).contains("Nothing to report"));
 }
 
+/// Regression for https://github.com/MaximeGaudin/slint/issues/39 —
+/// a `!`-prefixed pattern used to compile as a literal glob that nothing matches, so the
+/// "keep this one back" half of the list was silently dropped.
+#[test]
+fn a_negated_pattern_takes_a_path_back_from_the_ignore_list() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+
+    write(
+        root.join("fixtures").as_path(),
+        "keep-me",
+        "---\nname: keep-me\ndescription: Culls a photo shoot in Lightroom by flagging the keepers and rejecting the rest. Use when triaging RAW files after a session.\n---\n\n## Keep\n\n1. Import the files.\n",
+    );
+    write(root.join("fixtures").as_path(), "drop-me", BROKEN);
+    fs::write(
+        root.join("slint.toml"),
+        "ignore = [\"**/fixtures/**\", \"!**/fixtures/keep-me/**\"]\n",
+    )
+    .unwrap();
+
+    let output = slint(&[root.to_str().unwrap(), "--no-llm"]);
+
+    let stdout = stdout(&output);
+    assert!(
+        stdout.contains("keep-me"),
+        "the negated pattern must take its folder back: {stdout}"
+    );
+    assert!(
+        !stdout.contains("drop-me"),
+        "the plain pattern must still ignore its folder: {stdout}"
+    );
+}
+
 #[test]
 fn an_error_exits_one() {
     let temporary = tempfile::tempdir().unwrap();
