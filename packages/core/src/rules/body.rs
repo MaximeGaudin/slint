@@ -307,7 +307,17 @@ impl Rule for PosixPaths {
                 continue;
             }
 
-            let Some(found) = WINDOWS_PATH.find(line) else {
+            // A backslash whose tail is a single letter or digit is a regex escape (id\d+),
+            // not a path separator.
+            let Some(found) = WINDOWS_PATH.find_iter(line).find(|candidate| {
+                let tail = candidate
+                    .as_str()
+                    .rsplit_once('\\')
+                    .map(|(_, tail)| tail)
+                    .unwrap_or("");
+                !(tail.chars().count() == 1
+                    && tail.chars().next().is_some_and(char::is_alphanumeric))
+            }) else {
                 continue;
             };
 
