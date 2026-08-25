@@ -409,3 +409,43 @@ fn an_undeclared_host_specific_tool_in_the_body_is_reported() {
         "finding should name the tool:\n{text}"
     );
 }
+
+#[test]
+fn a_plugin_named_by_the_config_does_not_run_unless_asked_for() {
+    let temporary = tempfile::tempdir().unwrap();
+
+    fs::write(
+        temporary.path().join("slint.toml"),
+        "[[plugins]]\npath = \"./house.toml\"\n",
+    )
+    .unwrap();
+    fs::write(
+        temporary.path().join("house.toml"),
+        "[[rules]]\nname = \"house/no-todo\"\nseverity = \"error\"\nsummary = \"No TODO markers.\"\nrationale = \"An agent follows what is written, and a TODO reads as an instruction.\"\nadvice = \"Finish the step.\"\npattern = \"TODO\"\nreference = { title = \"House style\", url = \"https://example.com/style\" }\n",
+    )
+    .unwrap();
+
+    write(
+        temporary.path(),
+        "photo-culling",
+        "---\nname: photo-culling\ndescription: Culls a photo shoot in Lightroom by flagging the keepers and rejecting the rest. Use when triaging RAW files after a session.\n---\n\n## Culling\n\n1. TODO write this properly.\n",
+    );
+
+    // A config found inside the scanned tree names code that belongs to that tree. Running it
+    // without being asked is the failure this test exists to keep out.
+    let without = slint(&[temporary.path().to_str().unwrap(), "--no-llm"]);
+    assert_eq!(
+        without.status.code(),
+        Some(0),
+        "a plugin named by the scanned project's own config must not run by default"
+    );
+    assert!(!stdout(&without).contains("house/no-todo"));
+
+    let with = slint(&[
+        temporary.path().to_str().unwrap(),
+        "--no-llm",
+        "--plugins",
+    ]);
+    assert_eq!(with.status.code(), Some(1), "opting in runs the pack's rules");
+    assert!(stdout(&with).contains("house/no-todo"));
+}
