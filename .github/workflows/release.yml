@@ -98,6 +98,9 @@ jobs:
           echo "--- Release notes ---"
           cat /tmp/release-notes.md
 
+      - name: Add third-party notices
+        run: cp THIRD-PARTY-NOTICES.md artifacts/
+
       - name: List artifacts
         run: ls -lhR artifacts/
 
