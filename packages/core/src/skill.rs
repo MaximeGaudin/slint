@@ -118,7 +118,7 @@ pub fn discover(paths: &[PathBuf], ignore: &GlobSet) -> Result<Vec<PathBuf>> {
         }
     }
 
-    found.retain(|directory| !ignore.is_match(directory));
+    found.retain(|directory| !is_ignored(directory, ignore));
     found.sort();
     found.dedup();
 
@@ -132,14 +132,45 @@ fn is_never_a_skill(path: &Path) -> bool {
     )
 }
 
-pub fn build_ignore(patterns: &[String]) -> Result<GlobSet> {
+/// Compiles the `ignore` patterns.
+///
+/// A pattern is anchored the way `.gitignore` anchors one: it names a path next to the config
+/// file, so `fixtures/**` means "the fixtures folder beside slint.toml" no matter how the run was
+/// invoked. Only a pattern that already starts with `**/` reaches everywhere, which is also what
+/// makes an absolute path typed on the command line and a relative one behave the same.
+pub fn build_ignore(patterns: &[String], base: Option<&Path>) -> Result<GlobSet> {
     let mut builder = GlobSetBuilder::new();
 
     for pattern in patterns {
         builder.add(Glob::new(pattern).with_context(|| format!("bad ignore pattern: {pattern}"))?);
+
+        if pattern.starts_with("**/") {
+            continue;
+        }
+
+        let Some(root) = base.and_then(|directory| fs::canonicalize(directory).ok()) else {
+            continue;
+        };
+
+        let anchored = root
+            .join(pattern.strip_prefix('/').unwrap_or(pattern))
+            .to_string_lossy()
+            .replace('\\', "/");
+
+        let glob =
+            Glob::new(&anchored).with_context(|| format!("bad ignore pattern: {pattern}"))?;
+        builder.add(glob);
     }
 
     builder.build().context("building the ignore set")
+}
+
+/// A directory is ignored when the set matches it as it was passed, or matched once resolved —
+/// the anchored patterns are built from a canonical config directory, and the paths on the
+/// command line are not required to be.
+fn is_ignored(directory: &Path, ignore: &GlobSet) -> bool {
+    ignore.is_match(directory)
+        || fs::canonicalize(directory).is_ok_and(|resolved| ignore.is_match(&resolved))
 }
 
 /// Reads one skill directory.
@@ -508,16 +539,49 @@ mod tests {
             fs::write(directory.join(SKILL_FILE), DOCUMENT).unwrap();
         }
 
-        let ignore = build_ignore(&["**/fixtures".to_string()]).unwrap();
+        let ignore = build_ignore(&["**/fixtures".to_string()], None).unwrap();
         let found = discover(&[root.to_path_buf()], &ignore).unwrap();
 
         assert_eq!(found.len(), 1);
         assert!(found[0].ends_with("kept"));
     }
 
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/25 —
+    /// `fixtures/**` means the fixtures folder next to the config file, not "fixtures wherever
+    /// the paths on the command line happen to lead".
+    #[test]
+    fn a_pattern_is_anchored_to_the_config_file_and_a_glob_prefix_reaches_everywhere() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path();
+
+        let anchored = root.join("fixtures");
+        let nested = root.join("skills").join("fixtures");
+        fs::create_dir_all(anchored.join("one")).unwrap();
+        fs::create_dir_all(nested.join("two")).unwrap();
+        fs::write(anchored.join("one").join(SKILL_FILE), DOCUMENT).unwrap();
+        fs::write(nested.join("two").join(SKILL_FILE), DOCUMENT).unwrap();
+
+        // Anchored: only the folder beside the config file is ignored.
+        let ignore = build_ignore(&["fixtures/**".to_string()], Some(root)).unwrap();
+        let found = discover(&[root.to_path_buf()], &ignore).unwrap();
+        assert_eq!(found, vec![nested.join("two")]);
+
+        // A leading slash anchors the same way .gitignore anchors it.
+        let ignore = build_ignore(&["/fixtures/**".to_string()], Some(root)).unwrap();
+        let found = discover(&[root.to_path_buf()], &ignore).unwrap();
+        assert_eq!(found, vec![nested.join("two")]);
+
+        // The same run reached through a non-canonical path string is the same run.
+        let ignore = build_ignore(&["fixtures/**".to_string()], Some(root)).unwrap();
+        let dotted = root.join(".");
+        let found = discover(&[dotted], &ignore).unwrap();
+        assert_eq!(found.len(), 1);
+        assert!(found[0].ends_with("skills/fixtures/two"));
+    }
+
     #[test]
     fn a_malformed_ignore_glob_names_the_pattern_and_fails() {
-        let failure = match build_ignore(&["[invalid-glob".to_string()]) {
+        let failure = match build_ignore(&["[invalid-glob".to_string()], None) {
             Err(failure) => failure.to_string(),
             Ok(_) => panic!("a malformed glob has to be an error"),
         };

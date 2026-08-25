@@ -9,7 +9,7 @@ use anyhow::Result;
 use rayon::prelude::*;
 use regex::Regex;
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use crate::config::Config;
@@ -211,7 +211,10 @@ pub fn run(
     plugins: &[Plugin],
     passes: Passes,
 ) -> Result<Report> {
-    let ignore = skill::build_ignore(&config.ignore)?;
+    // Patterns are anchored to the config file's directory, so "fixtures/**" means the fixtures
+    // folder beside the file that wrote it.
+    let base = config.source.as_deref().and_then(Path::parent);
+    let ignore = skill::build_ignore(&config.ignore, base)?;
     let directories = skill::discover(paths, &ignore)?;
 
     let mut skills = Vec::new();
