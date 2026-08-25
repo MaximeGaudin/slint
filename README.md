@@ -102,7 +102,7 @@ Exit codes match the convention other skill linters settled on, so a CI script w
 `slint init` writes a starter `slint.toml`. Every rule is already on; the file is for the ones you disagree with.
 
 ```toml
-ignore = ["**/fixtures/**"]
+ignore = ["**/fixtures/**", "!**/fixtures/keep-me/**"] # a ! takes a path back
 
 [rules]
 "description/says-when" = "error"          # raise one
