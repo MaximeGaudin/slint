@@ -40,6 +40,38 @@ fn a_clean_base_exits_zero_and_says_so() {
     assert!(stdout(&output).contains("Nothing to report"));
 }
 
+/// Regression for https://github.com/MaximeGaudin/slint/issues/41 —
+/// there was no way to run slint without the ambient config, so a one-off run or a CI job
+/// pinning exact behaviour had to move the project's real config file out of the way.
+#[test]
+fn no_config_runs_on_defaults_even_when_a_config_file_is_there() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+
+    write(
+        root,
+        "helper",
+        "---\nname: helper\ndescription: Culls a photo shoot in Lightroom by flagging the keepers and rejecting the rest. Use when triaging RAW files after a session.\n---\n\n## Helper\n\n1. Import the files.\n",
+    );
+    fs::write(
+        root.join("slint.toml"),
+        "[rules]\n\"name/not-generic\" = \"off\"\n",
+    )
+    .unwrap();
+
+    let output = slint(&[
+        root.to_str().unwrap(),
+        "--no-llm",
+        "--no-config",
+    ]);
+
+    assert_eq!(output.status.code(), Some(2), "the config file must not be read");
+    assert!(
+        stdout(&output).contains("name/not-generic"),
+        "the config's off must not apply"
+    );
+}
+
 #[test]
 fn an_error_exits_one() {
     let temporary = tempfile::tempdir().unwrap();
