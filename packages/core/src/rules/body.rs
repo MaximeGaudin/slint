@@ -222,10 +222,24 @@ impl Rule for NotEmpty {
     }
 
     fn check(&self, context: &mut RuleContext<'_>) {
-        let instructions: String = context
-            .skill
-            .body
-            .lines()
+        // A setext heading is a text line sitting on a line of = or -, and neither half is an
+        // instruction, so both stay out of the count.
+        let mut kept: Vec<&str> = Vec::new();
+        for line in context.skill.body.lines() {
+            if is_setext_underline(line) {
+                if let Some(previous) = kept.last()
+                    && !previous.trim().is_empty()
+                {
+                    kept.pop();
+                }
+                continue;
+            }
+            kept.push(line);
+        }
+
+        let instructions: String = kept
+            .iter()
+            .copied()
             .filter(|line| !line.trim_start().starts_with('#'))
             .collect::<Vec<_>>()
             .join("")
@@ -240,6 +254,15 @@ impl Rule for NotEmpty {
             );
         }
     }
+}
+
+/// A CommonMark setext underline: a line of `=` (level 1) or `-` (level 2), indented at most 3.
+fn is_setext_underline(line: &str) -> bool {
+    let indent = line.len() - line.trim_start().len();
+    let trimmed = line.trim();
+    indent <= 3
+        && !trimmed.is_empty()
+        && (trimmed.chars().all(|c| c == '=') || trimmed.chars().all(|c| c == '-'))
 }
 
 impl Rule for MaxLines {
