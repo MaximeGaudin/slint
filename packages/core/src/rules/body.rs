@@ -10,10 +10,23 @@ use crate::rules::{Rule, RuleContext, RuleMeta, sources};
 static WINDOWS_PATH: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[\w.-]+\\[\w.-]+").expect("the windows path pattern compiles"));
 
+/// Any absolute path is machine-specific; the OS-provided roots in PORTABLE_ROOTS are the
+/// exception, since they exist on every machine of their OS.
 static ABSOLUTE_PATH: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?:^|[\s`(\x22'])((?:/(?:Users|home|var|opt|tmp)/|~/)[\w./-]+)")
+    Regex::new(r"(?:^|[\s`(\x22'])((?:/[\w.-]+(?:/[\w.-]+)*|~/[\w./-]+))")
         .expect("the absolute path pattern compiles")
 });
+
+/// Top-level directories the OS itself provides on every machine.
+const PORTABLE_ROOTS: [&str; 11] = [
+    "usr", "bin", "sbin", "lib", "lib32", "lib64", "dev", "proc", "sys", "run", "System",
+];
+
+fn is_portable_root(path: &str) -> bool {
+    path.strip_prefix('/')
+        .and_then(|rest| rest.split('/').next())
+        .is_some_and(|root| PORTABLE_ROOTS.contains(&root))
+}
 
 static TIME_SENSITIVE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
@@ -346,7 +359,15 @@ impl Rule for RelativePaths {
 
     fn check(&self, context: &mut RuleContext<'_>) {
         for (index, line) in context.skill.body.lines().enumerate() {
-            let Some(found) = ABSOLUTE_PATH.captures(line).and_then(|caps| caps.get(1)) else {
+            let mut found = None;
+            for caps in ABSOLUTE_PATH.captures_iter(line) {
+                let path = caps.get(1).expect("the path group always matches");
+                if !is_portable_root(path.as_str()) {
+                    found = Some(path);
+                    break;
+                }
+            }
+            let Some(found) = found else {
                 continue;
             };
 
@@ -807,10 +828,7 @@ mod tests {
         ] {
             let skill = skill_with_body(&format!("\n## Steps\n\nUse {line} for this step.\n"));
 
-            assert!(
-                check(&RELATIVE_RULE, &skill).is_empty(),
-                "for {line}"
-            );
+            assert!(check(&RELATIVE_RULE, &skill).is_empty(), "for {line}");
         }
     }
 
