@@ -4,7 +4,7 @@
 //! one works here: 0 clean, 1 errors, 2 warnings only, 3 slint itself failed. Data goes to stdout
 //! and everything else to stderr, so `slint --format json | jq` is always safe.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
@@ -140,6 +140,14 @@ fn run(cli: &Cli) -> Result<u8> {
         Some(Command::InitPlugin) => return init_plugin(),
         Some(Command::Rules { json }) => return print_rules(*json),
         None => {}
+    }
+
+    // The conventional stdin placeholder has no file to read, and a message that says so is
+    // worth more than the walker's IO error.
+    if cli.paths.iter().any(|path| path.as_os_str() == "-") {
+        bail!(
+            "- is not a path slint can read: it lints SKILL.md files and directories on disk, not stdin. Write the document to a file and lint that."
+        );
     }
 
     let config = resolve_config(cli)?;

@@ -63,7 +63,10 @@ fn dash_and_a_missing_path_fail_with_one_clear_line() {
         "the message must name the path: {stderr}"
     );
     let doubled = stderr.matches("No such file or directory").count();
-    assert!(doubled <= 1, "the OS error must not be printed twice: {stderr}");
+    assert!(
+        doubled <= 1,
+        "the OS error must not be printed twice: {stderr}"
+    );
 }
 
 #[test]

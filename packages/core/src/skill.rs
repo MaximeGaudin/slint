@@ -5,7 +5,7 @@
 //! it — so anything unparseable comes back as a note on the skill rather than an error from the
 //! reader.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -84,6 +84,11 @@ pub fn discover(paths: &[PathBuf], ignore: &GlobSet) -> Result<Vec<PathBuf>> {
     let mut found = Vec::new();
 
     for path in paths {
+        if !path.exists() {
+            // The walker's error for a missing root repeats the OS message twice; say it once.
+            bail!("{}: no such file or directory", path.display());
+        }
+
         if path.join(SKILL_FILE).is_file() {
             found.push(path.clone());
             continue;
