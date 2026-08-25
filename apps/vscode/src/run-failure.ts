@@ -16,11 +16,13 @@ export class RunFailureNotifier {
 
   /** Returns true when this failure should notify, and disarms until a run succeeds. */
   failureOccurred(): boolean {
-    return false
+    if (!this.armed) return false
+    this.armed = false
+    return true
   }
 
   /** A successful run re-arms the notification for the next failure. */
   runSucceeded(): void {
-    // stub
+    this.armed = true
   }
 }

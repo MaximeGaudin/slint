@@ -4,11 +4,15 @@ import { promisify } from 'node:util'
 import * as vscode from 'vscode'
 import { ignoreEditsForFinding, ruleIdFromCode } from './ignore.js'
 import { LintRunCoordinator, type StatusUpdate } from './lint-runs.js'
+import { RunFailureNotifier } from './run-failure.js'
 
 const run = promisify(execFile)
 
 /** Env var the extension injects when `slint.llm.apiKey` is set. Never appears on the argv. */
 const EDITOR_API_KEY_ENV = 'SLINT_EDITOR_API_KEY'
+
+/** Where a reader looking for the binary finds out how to get it. */
+const INSTALL_DOCS_URL = 'https://slint.dev'
 
 /**
  * slint, in the editor.
@@ -55,6 +59,8 @@ let status: vscode.StatusBarItem
 let pending: NodeJS.Timeout | undefined
 /** Cancels superseded child processes and keeps the status bar honest across overlapping runs. */
 const runs = new LintRunCoordinator()
+/** Surfaces a "could not run" failure once per failure streak instead of on every save. */
+const runFailure = new RunFailureNotifier()
 /** Last static envelope per target — merged back in when the model pass publishes so static never vanishes. */
 const lastStatic = new Map<string, Envelope>()
 
@@ -270,6 +276,7 @@ async function runPass(
         '$(error) slint failed',
         error.message ?? 'slint could not run — click for details',
       )
+      notifyRunFailure(error.message)
       return undefined
     }
 
@@ -301,6 +308,8 @@ async function runPass(
     silenceSkippedModelNote: !options.model,
   })
 
+  runFailure.runSucceeded()
+
   if (!options.model) {
     lastStatic.set(target, envelope)
   }
@@ -324,6 +333,23 @@ function isAbortError(failure: unknown): boolean {
   if (!failure || typeof failure !== 'object') return false
   const error = failure as { name?: string; code?: string }
   return error.name === 'AbortError' || error.code === 'ABORT_ERR'
+}
+
+/**
+ * The status-bar glyph and output-channel line are easy to miss, so a "could not run" failure also
+ * raises a visible, actionable notification — at most once per failure streak.
+ */
+function notifyRunFailure(message: string | undefined): void {
+  if (!runFailure.failureOccurred()) return
+
+  const reason = message ?? 'unknown failure'
+  void vscode.window
+    .showErrorMessage(`slint could not run: ${reason}`, 'Show Output', 'Install slint')
+    .then((choice) => {
+      if (choice === 'Show Output') output.show(true)
+      if (choice === 'Install slint')
+        void vscode.env.openExternal(vscode.Uri.parse(INSTALL_DOCS_URL))
+    })
 }
 
 function summarizePublished(envelope: Envelope, staticSeed?: Envelope): string {
@@ -577,7 +603,7 @@ async function fixActiveDocument(): Promise<void> {
     const error = failure as { stdout?: string; message?: string }
     if (!error.stdout) {
       setStatus('$(error) slint failed', error.message ?? 'slint could not run')
-      void vscode.window.showErrorMessage(`slint could not run: ${error.message ?? 'unknown'}`)
+      notifyRunFailure(error.message)
       return
     }
   }
