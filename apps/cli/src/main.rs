@@ -6,8 +6,9 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use std::collections::BTreeSet;
 use std::io::{IsTerminal, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use slint::config::{self, Config, RuleSetting};
@@ -212,22 +213,20 @@ fn resolve_config(cli: &Cli) -> Result<Config> {
                 .cloned()
                 .unwrap_or_else(|| PathBuf::from("."));
 
-            let anchor = if from.is_dir() {
-                from
-            } else {
-                from.parent()
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| PathBuf::from("."))
-            };
-
-            config::find(&anchor)
+            config::find(&anchor_for(&from))
         }
     };
 
-    let mut config = match path {
-        Some(path) => config::load(&path)?,
+    let mut config = match &path {
+        Some(path) => config::load(path)?,
         None => Config::default(),
     };
+
+    // One config governs the whole run, so a later path that holds a different one of its own
+    // deserves to hear that its file did not get to speak.
+    if cli.config.is_none() {
+        warn_about_unread_configs(cli, path.as_ref(), &config);
+    }
 
     for text in &cli.overrides {
         let (name, setting) = config::parse_override(text)?;
@@ -243,6 +242,47 @@ fn resolve_config(cli: &Cli) -> Result<Config> {
     }
 
     Ok(config)
+}
+
+/// The directory a config search starts from: the path itself when it is one, its parent when it
+/// is a file.
+fn anchor_for(path: &Path) -> PathBuf {
+    if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        path.parent()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."))
+    }
+}
+
+/// Names the config files a later path holds that this run does not use.
+///
+/// An explicit `--config` is a deliberate choice, so it is never second-guessed here.
+fn warn_about_unread_configs(cli: &Cli, chosen: Option<&PathBuf>, effective: &Config) {
+    let mut seen = BTreeSet::new();
+
+    for path in cli.paths.iter().skip(1) {
+        let Some(file) = config::find(&anchor_for(path)) else {
+            continue;
+        };
+        if Some(&file) == chosen || !seen.insert(file.clone()) {
+            continue;
+        }
+
+        let Ok(other) = config::load(&file) else {
+            continue;
+        };
+        if other == *effective {
+            continue;
+        }
+
+        eprintln!(
+            "slint: {} holds a {} that this run does not use — the config found from the first path governs the whole run",
+            path.display(),
+            file.file_name().unwrap().to_string_lossy()
+        );
+    }
 }
 
 /// Flags from the editor (or a one-off shell) win over whatever the file said.

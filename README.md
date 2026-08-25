@@ -118,7 +118,7 @@ api_key_env = "OPENAI_API_KEY"   # the variable holding the key, never the key i
 path = "./slint-house-rules.toml"
 ```
 
-`slint.config.json` and `.slintrc.json` work too. The file is found by walking up from whatever you asked slint to lint.
+`slint.config.json` and `.slintrc.json` work too. The file is found by walking up from whatever you asked slint to lint. When more than one path is linted in a run, the config found from the first path governs the whole run, and slint says so when a later path holds a different config of its own.
 
 A document can also opt out of a rule for itself:
 

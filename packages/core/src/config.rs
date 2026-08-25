@@ -193,6 +193,17 @@ impl Config {
     }
 }
 
+impl PartialEq for Config {
+    /// Two configs agree when what they say agrees. `source` is where a config came from, and
+    /// the same settings under two file names are the same settings.
+    fn eq(&self, other: &Self) -> bool {
+        self.rules == other.rules
+            && self.ignore == other.ignore
+            && self.llm == other.llm
+            && self.plugins == other.plugins
+    }
+}
+
 /// Looks for a config file, starting at `from` and walking up to the root.
 ///
 /// The walk is what makes running slint on a subdirectory of a repository behave the way everyone

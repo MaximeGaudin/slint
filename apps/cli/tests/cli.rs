@@ -93,7 +93,10 @@ fn a_later_path_with_its_own_config_is_named_when_the_first_path_governs() {
     ]);
 
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    assert!(stderr.is_empty(), "no config is ignored in this order: {stderr}");
+    assert!(
+        stderr.is_empty(),
+        "no config is ignored in this order: {stderr}"
+    );
 }
 
 #[test]
