@@ -177,8 +177,19 @@ const STANDARD_DIRECTORY_PREFIXES: &[&str] = &[
     "data/",
 ];
 
+/// The optional directories the Agent Skills specification names. Only a mention of one of these
+/// in the instructions is a promise to ship the file; the slint extras (data/, templates/,
+/// reference/) are generic words that prose often uses for the user's own files.
+const SPEC_DIRECTORY_PREFIXES: &[&str] = &["scripts/", "references/", "assets/"];
+
 fn is_in_standard_directory(path: &str) -> bool {
     STANDARD_DIRECTORY_PREFIXES
+        .iter()
+        .any(|prefix| path.starts_with(prefix))
+}
+
+fn is_in_spec_directory(path: &str) -> bool {
+    SPEC_DIRECTORY_PREFIXES
         .iter()
         .any(|prefix| path.starts_with(prefix))
 }
@@ -208,6 +219,12 @@ impl Rule for NoDangling {
         let body = context.skill.body.clone();
 
         for path in paths_in(&body) {
+            // data/, templates/ and reference/ are slint extras, not spec directories: a prose
+            // mention of them usually names the user's own files, not a file to be shipped.
+            if !is_in_spec_directory(&path) {
+                continue;
+            }
+
             if bundled.contains(&path) {
                 continue;
             }
@@ -615,7 +632,11 @@ mod tests {
 
     #[test]
     fn a_dangling_path_in_a_spec_directory_is_still_an_error() {
-        for path in ["scripts/cull.py", "references/formats.md", "assets/logo.png"] {
+        for path in [
+            "scripts/cull.py",
+            "references/formats.md",
+            "assets/logo.png",
+        ] {
             let skill =
                 skill_with_body(&format!("\n## Culling\n\nRun {path} when you are done.\n"));
             let messages = check(&DANGLING_RULE, &skill);
@@ -630,10 +651,10 @@ mod tests {
         let mut skill = skill_with_body(
             "\n## Culling\n\nRun scripts/cull.py, which reads data/defaults.json.\n",
         );
-        skill.files.push(file("scripts/cull.py", "print(1)\n", true));
         skill
             .files
-            .push(file("data/defaults.json", "{}\n", false));
+            .push(file("scripts/cull.py", "print(1)\n", true));
+        skill.files.push(file("data/defaults.json", "{}\n", false));
 
         assert!(check(&UNUSED_RULE, &skill).is_empty());
     }
