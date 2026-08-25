@@ -9,7 +9,7 @@ slint banner
 
 It is built for terminals, CI, and editors:
 
-- **Static first** — twenty-nine of thirty-seven rules never touch a model; no network, no tokens, no waiting
+- **Static first** — thirty-four of forty-two rules never touch a model; no network, no tokens, no waiting
 - **Cited findings** — every rule names the document its claim comes from; the citation travels into every output format
 - **Computed fixes** — `--fix` normalises paths, sets executable bits, writes contents lists; a model never edits your files
 - **Optional LLM pass** — eight rules that need a reader run only when you pass `--llm`, as their own pass
