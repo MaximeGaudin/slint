@@ -784,6 +784,37 @@ mod tests {
     }
 
     #[test]
+    fn sandbox_and_home_absolute_paths_outside_the_old_whitelist_are_reported() {
+        // Regression for https://github.com/MaximeGaudin/slint/issues/74: /mnt, /etc and /root are
+        // machine-specific even though the old root whitelist did not name them.
+        for line in ["/mnt/data/input.csv", "/etc/hosts", "/root/.bashrc"] {
+            let skill = skill_with_body(&format!("\n## Steps\n\nRead {line} first.\n"));
+            let messages = check(&RELATIVE_RULE, &skill);
+
+            assert_eq!(messages.len(), 1, "for {line}");
+            assert!(messages[0].message.contains(line), "for {line}");
+        }
+    }
+
+    #[test]
+    fn portable_system_paths_are_left_alone() {
+        for line in [
+            "/usr/bin/python3",
+            "/bin/sh",
+            "/dev/null",
+            "/lib64/libc.so.6",
+            "/proc/self/status",
+        ] {
+            let skill = skill_with_body(&format!("\n## Steps\n\nUse {line} for this step.\n"));
+
+            assert!(
+                check(&RELATIVE_RULE, &skill).is_empty(),
+                "for {line}"
+            );
+        }
+    }
+
+    #[test]
     fn a_credential_in_the_body_is_an_error_that_does_not_repeat_the_secret() {
         let skill = skill_with_body(
             "\n## Culling\n\nExport SLACK_TOKEN=xoxb-1234567890abcdef before running.\n",
