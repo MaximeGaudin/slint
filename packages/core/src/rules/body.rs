@@ -302,7 +302,19 @@ impl Rule for PosixPaths {
     fn check(&self, context: &mut RuleContext<'_>) {
         let source = context.skill.source.clone();
 
+        // A fenced block illustrates a path rather than naming one, the same way
+        // body/imperative-instructions reads fences.
+        let mut in_fence = false;
+
         for (index, line) in context.skill.body.lines().enumerate() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("```") {
+                in_fence = !in_fence;
+                continue;
+            }
+            if in_fence {
+                continue;
+            }
             if line.contains("http") {
                 continue;
             }
