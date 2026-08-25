@@ -93,6 +93,7 @@ impl Provider {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LlmConfig {
     #[serde(default)]
     pub provider: Provider,
@@ -113,6 +114,10 @@ pub struct LlmConfig {
     /// Bodies longer than this are truncated before they are sent, and the report says so.
     #[serde(default = "default_max_input")]
     pub max_input_bytes: usize,
+    /// Not a setting: the shape every other tool's config uses, read only so `load` can refuse
+    /// it with the message it deserves instead of letting the secret sit in the file.
+    #[serde(default, skip_serializing)]
+    pub(crate) api_key: Option<String>,
 }
 
 fn default_timeout() -> u64 {
@@ -132,6 +137,7 @@ impl Default for LlmConfig {
             base_url: None,
             timeout_seconds: default_timeout(),
             max_input_bytes: default_max_input(),
+            api_key: None,
         }
     }
 }
@@ -223,6 +229,13 @@ pub fn load(path: &Path) -> Result<Config> {
     } else {
         toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?
     };
+
+    if raw.llm.api_key.is_some() {
+        bail!(
+            "{}: [llm] api_key is not a setting — slint never takes a literal key in a config file, because a key in a file is a key in version control. Use api_key_env to name the variable that holds the key.",
+            path.display()
+        );
+    }
 
     let mut config = Config {
         source: Some(path.to_path_buf()),

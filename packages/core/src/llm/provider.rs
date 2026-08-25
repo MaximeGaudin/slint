@@ -291,6 +291,7 @@ mod tests {
             base_url: None,
             timeout_seconds: 5,
             max_input_bytes: 1024,
+            api_key: None,
         }
     }
 
