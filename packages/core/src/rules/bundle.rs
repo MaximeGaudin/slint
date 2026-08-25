@@ -787,6 +787,40 @@ mod tests {
     }
 
     #[test]
+    fn standard_library_modules_outside_the_old_allowlist_pass() {
+        // Regression for https://github.com/MaximeGaudin/slint/issues/75: these ship with every
+        // CPython install, so none of them needs an install instruction.
+        for module in [
+            "asyncio",
+            "secrets",
+            "threading",
+            "multiprocessing",
+            "socket",
+            "queue",
+            "decimal",
+            "contextlib",
+            "inspect",
+            "pickle",
+            "ssl",
+            "platform",
+            "tomllib",
+            "ipaddress",
+        ] {
+            let mut skill = skill_with_body(&format!("\n## Culling\n\nRun scripts/fetch.py.\n"));
+            skill.files.push(file(
+                "scripts/fetch.py",
+                &format!("import {module}\n\nprint({module})\n"),
+                true,
+            ));
+
+            assert!(
+                check(&DEPENDENCIES_RULE, &skill).is_empty(),
+                "for {module}"
+            );
+        }
+    }
+
+    #[test]
     fn an_import_the_instructions_tell_you_to_install_passes() {
         let mut skill = skill_with_body(
             "\n## Culling\n\nFirst run `pip install rawpy`, then run scripts/cull.py.\n",
