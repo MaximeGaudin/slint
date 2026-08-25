@@ -599,6 +599,46 @@ mod tests {
     }
 
     #[test]
+    fn a_generic_data_directory_in_prose_is_not_a_bundle_promise() {
+        // Regression for https://github.com/MaximeGaudin/slint/issues/76: data/ is not one of the
+        // Agent Skills optional directories (scripts/, references/, assets/), so a prose mention
+        // of the user's own data/... is not a promise to ship that file.
+        let skill = skill_with_body(
+            "\n## Steps\n\n1. Read the data/sales.csv the user provides and merge it with data/inventory.csv.\n",
+        );
+
+        assert!(
+            check(&DANGLING_RULE, &skill).is_empty(),
+            "a generic data/ mention must not dangle"
+        );
+    }
+
+    #[test]
+    fn a_dangling_path_in_a_spec_directory_is_still_an_error() {
+        for path in ["scripts/cull.py", "references/formats.md", "assets/logo.png"] {
+            let skill =
+                skill_with_body(&format!("\n## Culling\n\nRun {path} when you are done.\n"));
+            let messages = check(&DANGLING_RULE, &skill);
+
+            assert_eq!(messages.len(), 1, "for {path}");
+            assert!(messages[0].message.contains(path), "for {path}");
+        }
+    }
+
+    #[test]
+    fn a_bundled_data_file_referenced_in_the_body_is_not_unused() {
+        let mut skill = skill_with_body(
+            "\n## Culling\n\nRun scripts/cull.py, which reads data/defaults.json.\n",
+        );
+        skill.files.push(file("scripts/cull.py", "print(1)\n", true));
+        skill
+            .files
+            .push(file("data/defaults.json", "{}\n", false));
+
+        assert!(check(&UNUSED_RULE, &skill).is_empty());
+    }
+
+    #[test]
     fn a_dangling_path_is_reported_on_the_line_that_names_it() {
         let skill = skill_with_body("\n## Culling\n\n1. Import.\n2. Run scripts/cull.py.\n");
         let messages = check(&DANGLING_RULE, &skill);
