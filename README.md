@@ -80,7 +80,7 @@ Exit codes match the convention other skill linters settled on, so a CI script w
 | `--format`          | `stylish` (default), `json`, `github`, `compact`.   |
 | `--rule name=level` | Override one rule (`off`, `info`, `warn`, `error`). |
 | `--max-warnings N`  | Fail when there are more warnings than this.        |
-| `--llm`             | Run the rules that need a model. Off by default.    |
+| `--llm`             | Run the rules that need a model. Off by default. The `--llm-*` overrides are only used, and only checked, when it is on. |
 | `--no-plugins`      | Skip plugins, whatever the config says.             |
 | `--quiet`           | Errors only.                                        |
 
