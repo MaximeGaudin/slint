@@ -26,4 +26,11 @@ describe('package.json manifest (#136)', () => {
       )
     }
   })
+
+  it('restricts the LLM settings so a workspace cannot steer the model pass (#50)', () => {
+    const restricted = manifest.restrictedConfigurations ?? []
+    for (const key of ['slint.llm.provider', 'slint.llm.model', 'slint.llm.apiKey']) {
+      assert.ok(restricted.includes(key), `${key} can be set per workspace`)
+    }
+  })
 })
