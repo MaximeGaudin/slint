@@ -4,6 +4,7 @@ import { promisify } from 'node:util'
 import * as vscode from 'vscode'
 import { ignoreEditsForFinding, ruleIdFromCode } from './ignore.js'
 import { LintRunCoordinator, type StatusUpdate } from './lint-runs.js'
+import { mayRunBinary } from './trust.js'
 
 const run = promisify(execFile)
 
@@ -206,6 +207,10 @@ async function lintWorkspace(options: { model: boolean }): Promise<void> {
  * needs no network is how people conclude the static rules "stopped working".
  */
 async function lint(target: string, options: { model: boolean }): Promise<void> {
+  // The binary is external and workspace settings steer it; it never runs in an untrusted
+  // workspace (VS Code keeps the extension inactive there; this guard is the in-code half).
+  if (!mayRunBinary(vscode.workspace.isTrusted)) return
+
   const { generation, signal } = runs.begin(target)
 
   const staticResult = await runPass(
@@ -554,6 +559,8 @@ class IgnoreCodeActionProvider implements vscode.CodeActionProvider {
  * screen is what is on disk.
  */
 async function fixActiveDocument(): Promise<void> {
+  if (!mayRunBinary(vscode.workspace.isTrusted)) return
+
   const editor = vscode.window.activeTextEditor
 
   if (!editor || !isSkill(editor.document)) {

@@ -12,5 +12,5 @@
  * (`untrustedWorkspaces.enabled: false`); this is the in-code guard behind that declaration.
  */
 export function mayRunBinary(isTrusted: boolean): boolean {
-  return false
+  return isTrusted
 }

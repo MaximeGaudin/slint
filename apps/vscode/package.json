@@ -21,6 +21,15 @@
     "workspaceContains:**/SKILL.md"
   ],
   "main": "./out/extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "enabled": false
+    }
+  },
+  "restrictedConfigurations": [
+    "slint.path",
+    "slint.arguments"
+  ],
   "contributes": {
     "configuration": {
       "title": "slint",
