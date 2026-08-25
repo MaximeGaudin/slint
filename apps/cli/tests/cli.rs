@@ -40,6 +40,32 @@ fn a_clean_base_exits_zero_and_says_so() {
     assert!(stdout(&output).contains("Nothing to report"));
 }
 
+/// Regression for https://github.com/MaximeGaudin/slint/issues/52 —
+/// `-` and a missing path used to fail with the OS error printed twice and nothing said
+/// about what slint does read.
+#[test]
+fn dash_and_a_missing_path_fail_with_one_clear_line() {
+    // `-` is the conventional stdin placeholder; slint reads from disk, so it must say so.
+    let output = slint(&["-", "--no-llm"]);
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(
+        stderr.contains("stdin"),
+        "the message must say what slint does read: {stderr}"
+    );
+    assert!(!stderr.contains("os error"), "no raw OS error: {stderr}");
+
+    let output = slint(&["/definitely/does/not/exist", "--no-llm"]);
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(
+        stderr.contains("/definitely/does/not/exist"),
+        "the message must name the path: {stderr}"
+    );
+    let doubled = stderr.matches("No such file or directory").count();
+    assert!(doubled <= 1, "the OS error must not be printed twice: {stderr}");
+}
+
 #[test]
 fn an_error_exits_one() {
     let temporary = tempfile::tempdir().unwrap();
