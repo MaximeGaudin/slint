@@ -10,6 +10,11 @@ use crate::rules::{Rule, RuleContext, RuleMeta, sources};
 static WINDOWS_PATH: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[\w.-]+\\[\w.-]+").expect("the windows path pattern compiles"));
 
+/// A whole backslash-separated run (`a\b\c`), not just one pair of segments.
+static WINDOWS_PATH_RUN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"[\w.-]+(?:\\[\w.-]+)+").expect("the windows path run pattern compiles")
+});
+
 static ABSOLUTE_PATH: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?:^|[\s`(\x22'])((?:/(?:Users|home|var|opt|tmp)/|~/)[\w./-]+)")
         .expect("the absolute path pattern compiles")
@@ -300,9 +305,10 @@ impl Rule for PosixPaths {
     }
 
     fn check(&self, context: &mut RuleContext<'_>) {
-        let source = context.skill.source.clone();
+        let body = context.skill.body.as_str();
+        let body_offset = context.skill.body_offset;
 
-        for (index, line) in context.skill.body.lines().enumerate() {
+        for (index, line) in body.lines().enumerate() {
             if line.contains("http") {
                 continue;
             }
@@ -311,26 +317,37 @@ impl Rule for PosixPaths {
                 continue;
             };
 
-            let document_line = context.skill.document_line(index + 1);
-            let location = Location::span(document_line, found.start() + 1, found.len());
+            // Widen the two-segment match to the whole path run on this line, so `a\b\c` is
+            // reported and fixed as one unit in a single pass.
+            let suffix = &line[found.start()..];
+            let run_len = WINDOWS_PATH_RUN
+                .find(suffix)
+                .filter(|candidate| candidate.start() == 0)
+                .map(|candidate| candidate.len())
+                .unwrap_or(found.len());
+            let run_start = found.start();
+            let run_text = &line[run_start..run_start + run_len];
 
-            // The whole document, with every separator normalised: two backslashes on one line are
-            // one problem, and a fix per occurrence would fight itself on the next pass.
-            let replacement = WINDOWS_PATH
-                .replace_all(&source, |captures: &regex::Captures<'_>| {
-                    captures[0].replace('\\', "/")
-                })
-                .to_string();
+            // The byte offset of this line's start within the body, so the fix is a range into
+            // the document rather than a rewrite of the whole document.
+            let line_start = body
+                .split_inclusive('\n')
+                .take(index)
+                .map(str::len)
+                .sum::<usize>();
+            let fix_start = body_offset + line_start + run_start;
+
+            let document_line = context.skill.document_line(index + 1);
+            let location = Location::span(document_line, run_start + 1, run_len);
 
             context.report_fixable(
-                format!("\"{}\" is a Windows path", found.as_str()),
+                format!("\"{}\" is a Windows path", run_text),
                 location,
                 Fix {
-                    start: 0,
-                    end: source.len(),
-                    replacement,
-                    description: "Replaces backslash separators with forward slashes throughout."
-                        .into(),
+                    start: fix_start,
+                    end: fix_start + run_len,
+                    replacement: run_text.replace('\\', "/"),
+                    description: "Replaces backslash separators with forward slashes.".into(),
                 },
             );
 
@@ -751,7 +768,10 @@ mod tests {
         assert_eq!(messages.len(), 2, "one finding per line");
 
         // The fixer splices every fix in, last first, so the offsets stay valid.
-        let mut fixes: Vec<&Fix> = messages.iter().filter_map(|message| message.fix.as_ref()).collect();
+        let mut fixes: Vec<&Fix> = messages
+            .iter()
+            .filter_map(|message| message.fix.as_ref())
+            .collect();
         fixes.sort_by_key(|fix| std::cmp::Reverse(fix.start));
         let mut patched = skill.source.clone();
         for fix in fixes {
@@ -795,7 +815,10 @@ mod tests {
         patched.replace_range(fix.start..fix.end, &fix.replacement);
 
         assert!(patched.contains("scripts/notes/more.md"));
-        assert!(!patched.contains('\\'), "the whole path run is fixed at once");
+        assert!(
+            !patched.contains('\\'),
+            "the whole path run is fixed at once"
+        );
     }
 
     #[test]
