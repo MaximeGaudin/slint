@@ -118,7 +118,7 @@ api_key_env = "OPENAI_API_KEY"   # the variable holding the key, never the key i
 path = "./slint-house-rules.toml"
 ```
 
-`slint.config.json` and `.slintrc.json` work too. The file is found by walking up from whatever you asked slint to lint.
+`slint.config.json` and `.slintrc.json` work too. The file is found by walking up from whatever you asked slint to lint. `ignore` patterns are resolved against the config file's directory, the way `.gitignore` entries are: `fixtures/**` means the fixtures folder beside `slint.toml`, no matter how the path was passed, and only a leading `**/` reaches everywhere.
 
 A document can also opt out of a rule for itself:
 

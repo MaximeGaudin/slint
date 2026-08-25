@@ -23,7 +23,10 @@ slint init
 
 That writes `slint.toml`. `slint.config.json` and `.slintrc.json` work too, with the same fields.
 The file is found by walking up from whatever you asked slint to lint, so running it inside a
-subdirectory uses the project's settings rather than none.
+subdirectory uses the project's settings rather than none. `ignore` patterns are resolved against
+the config file's directory, the way `.gitignore` entries are: `fixtures/**` means the fixtures
+folder beside `slint.toml`, no matter how the path was passed, and only a leading `**/` reaches
+everywhere.
 
 ## Rules
 
