@@ -81,6 +81,8 @@ Exit codes match the convention other skill linters settled on, so a CI script w
 | `--rule name=level` | Override one rule (`off`, `info`, `warn`, `error`). |
 | `--max-warnings N`  | Fail when there are more warnings than this.        |
 | `--llm`             | Run the rules that need a model. Off by default.    |
+| `--plugins`         | Run the plugins the config names. Off by default:   |
+|                     | the config belongs to the project being scanned.    |
 | `--no-plugins`      | Skip plugins, whatever the config says.             |
 | `--quiet`           | Errors only.                                        |
 
@@ -157,6 +159,8 @@ reference = { title = "House style", url = "https://example.com/style" }
 **A WebAssembly plugin** is code, run through [Extism](https://extism.org). Point the config at a `.wasm` file; slint calls its exported `lint` function with the parsed skill as JSON and reads messages back. It runs sandboxed — no filesystem, no network.
 
 Both are held to the same standard as the built-in catalogue: a namespaced rule name, and a citation.
+
+Plugins are off by default and run only with `--plugins`. The config that names them lives in the project being scanned — a linter does not execute code a scanned project ships without being asked. When a config names plugins and they do not run, the report says so.
 
 ## Editors
 

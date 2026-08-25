@@ -219,7 +219,7 @@ fn a_rule_pack_named_by_the_config_runs_beside_the_built_in_rules() {
         "---\nname: photo-culling\ndescription: Culls a photo shoot in Lightroom by flagging the keepers and rejecting the rest. Use when triaging RAW files after a session.\n---\n\n## Culling\n\n1. TODO write this properly.\n",
     );
 
-    let output = slint(&[temporary.path().to_str().unwrap(), "--no-llm"]);
+    let output = slint(&[temporary.path().to_str().unwrap(), "--no-llm", "--plugins"]);
 
     assert_eq!(output.status.code(), Some(1), "the pack's rule is an error");
     assert!(stdout(&output).contains("house/no-todo"));
@@ -441,11 +441,11 @@ fn a_plugin_named_by_the_config_does_not_run_unless_asked_for() {
     );
     assert!(!stdout(&without).contains("house/no-todo"));
 
-    let with = slint(&[
-        temporary.path().to_str().unwrap(),
-        "--no-llm",
-        "--plugins",
-    ]);
-    assert_eq!(with.status.code(), Some(1), "opting in runs the pack's rules");
+    let with = slint(&[temporary.path().to_str().unwrap(), "--no-llm", "--plugins"]);
+    assert_eq!(
+        with.status.code(),
+        Some(1),
+        "opting in runs the pack's rules"
+    );
     assert!(stdout(&with).contains("house/no-todo"));
 }
