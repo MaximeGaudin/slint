@@ -28,7 +28,10 @@
   },
   "restrictedConfigurations": [
     "slint.path",
-    "slint.arguments"
+    "slint.arguments",
+    "slint.llm.provider",
+    "slint.llm.model",
+    "slint.llm.apiKey"
   ],
   "contributes": {
     "configuration": {
