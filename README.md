@@ -185,6 +185,10 @@ JS/TS apps use **pnpm workspaces** + **Turborepo**. Rust stays on a **Cargo work
 
 ## Development
 
+Building from source needs a C compiler and CMake alongside the Rust toolchain — the TLS stack
+links `aws-lc-sys`, which compiles AWS-LC's C sources at build time (see
+`apps/docs` contributing, "Getting it running").
+
 ```bash
 pnpm install
 

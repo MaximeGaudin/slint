@@ -28,6 +28,11 @@ cargo test --workspace   # the whole suite, including the CLI end to end
 cargo run -p slint-cli -- .
 ```
 
+The Rust build needs a C compiler and CMake in addition to the Rust toolchain: the TLS
+stack links `aws-lc-sys`, which compiles AWS-LC's C sources at build time. GitHub's runners
+already have both; on macOS `xcode-select --install` covers the C toolchain and `brew install
+cmake` the rest, and on Linux your distribution's C toolchain and `cmake` packages do.
+
 ## How it is laid out
 
 | Path | What lives there |
