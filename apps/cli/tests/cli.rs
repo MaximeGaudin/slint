@@ -40,6 +40,32 @@ fn a_clean_base_exits_zero_and_says_so() {
     assert!(stdout(&output).contains("Nothing to report"));
 }
 
+/// Regression for https://github.com/MaximeGaudin/slint/issues/25 —
+/// `ignore = ["fixtures/**"]` used to mean "fixtures, wherever the invocation's paths happen
+/// to place it", so the pattern read like .gitignore but matched nothing.
+#[test]
+fn an_ignore_pattern_is_anchored_to_the_config_file_not_the_invocation() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+
+    write(root.join("fixtures").as_path(), "broken", BROKEN);
+    write(root.join("kept").as_path(), "photo-culling", GOOD);
+    fs::write(root.join("slint.toml"), "ignore = [\"fixtures/**\"]\n").unwrap();
+
+    let output = slint(&[root.to_str().unwrap(), "--no-llm"]);
+
+    let stdout = stdout(&output);
+    assert!(
+        !stdout.contains("fixtures"),
+        "the pattern read next to the config file must ignore its folder: {stdout}"
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "only the kept skill is linted: {stdout}"
+    );
+}
+
 #[test]
 fn an_error_exits_one() {
     let temporary = tempfile::tempdir().unwrap();
