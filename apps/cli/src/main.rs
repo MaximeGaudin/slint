@@ -220,7 +220,9 @@ fn resolve_config(cli: &Cli) -> Result<Config> {
                     .unwrap_or_else(|| PathBuf::from("."))
             };
 
-            config::find(&anchor)
+            let found = config::find(&anchor);
+            say_which_config_won(&found);
+            found
         }
     };
 
@@ -243,6 +245,38 @@ fn resolve_config(cli: &Cli) -> Result<Config> {
     }
 
     Ok(config)
+}
+
+/// A directory holding more than one config file is where "I edited the wrong one" lives, so the
+/// run names the file that won and the one that did not read, instead of the edit vanishing.
+fn say_which_config_won(found: &Option<PathBuf>) {
+    let Some(path) = found else {
+        return;
+    };
+    let Some(directory) = path.parent() else {
+        return;
+    };
+
+    let files = config::config_files_in(directory);
+    if files.len() < 2 {
+        return;
+    }
+
+    let name = |one: &PathBuf| one.file_name().unwrap().to_string_lossy().into_owned();
+    let ignored = files
+        .iter()
+        .skip(1)
+        .map(name)
+        .collect::<Vec<_>>()
+        .join(" and ");
+
+    eprintln!(
+        "slint: {} holds more than one config file, so {} wins (precedence: {}) and {} was not read",
+        directory.display(),
+        name(&files[0]),
+        config::CONFIG_NAMES.join(", "),
+        ignored
+    );
 }
 
 /// Flags from the editor (or a one-off shell) win over whatever the file said.
