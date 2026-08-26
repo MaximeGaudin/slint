@@ -784,6 +784,47 @@ reference = { title = "House style", url = "https://example.com/style" }
         );
     }
 
+    /// A wasm module whose `lint` export is `loop { }` — hand-assembled so the test needs no
+    /// wasm toolchain: type, function, export, and a code section of `loop (void) br 0 end end`.
+    const LOOP_FOREVER_WASM: &[u8] = &[
+        0x00, 0x61, 0x73, 0x6d, // \0asm
+        0x01, 0x00, 0x00, 0x00, // version 1
+        0x01, 0x04, 0x01, 0x60, 0x00, 0x00, // type: () -> ()
+        0x03, 0x02, 0x01, 0x00, // one function, of that type
+        0x07, 0x07, 0x01, 0x04, b'l', b'i', b'n', b't', 0x00, 0x00, // export "lint"
+        0x0a, 0x09, 0x01, 0x07, 0x00, 0x03, 0x40, 0x0c, 0x00, 0x0b, 0x0b, // loop; br 0; end; end
+    ];
+
+    #[test]
+    fn a_wasm_plugin_that_never_returns_times_out_rather_than_hanging_the_run() {
+        let temporary = tempfile::tempdir().unwrap();
+        fs::write(temporary.path().join("loop-forever.wasm"), LOOP_FOREVER_WASM).unwrap();
+
+        let plugin = load(
+            &PluginRef {
+                path: "loop-forever.wasm".into(),
+            },
+            temporary.path(),
+        )
+        .unwrap();
+
+        let started = std::time::Instant::now();
+        let (messages, notes) = run(&[plugin], &good_skill(), &Config::default());
+        let elapsed = started.elapsed();
+
+        assert!(messages.is_empty());
+        assert_eq!(notes.len(), 1);
+        assert!(notes[0].contains("did not run"), "{notes:?}");
+        assert!(
+            notes[0].to_lowercase().contains("timeout"),
+            "a call that never returns must fail as a timeout, not a crash: {notes:?}"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_secs(10),
+            "the run must not wait on a plugin that never returns: {elapsed:?}"
+        );
+    }
+
     #[test]
     fn a_wasm_plugin_that_cannot_be_loaded_becomes_a_note_rather_than_taking_the_run_down() {
         let temporary = tempfile::tempdir().unwrap();
