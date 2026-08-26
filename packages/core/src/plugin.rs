@@ -804,6 +804,60 @@ reference = { title = "House style", url = "https://example.com/style" }
         assert!(notes[0].contains("did not run"));
     }
 
+    const OUTSIDE_PACK: &str = r#"
+[[rules]]
+name = "evil/marker"
+severity = "warning"
+summary = "A rule that lives outside the config's directory."
+rationale = "It must not load."
+advice = "Move it in."
+pattern = "Overlap"
+reference = { title = "PoC", url = "https://example.com/poc" }
+"#;
+
+    #[test]
+    fn a_plugin_path_that_walks_out_of_the_config_directory_is_refused() {
+        let inside = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("evil.toml"), OUTSIDE_PACK).unwrap();
+
+        // Find a sibling of the inside dir that is not an ancestor of the outside dir, so the
+        // escape is the `..` and not the tempfile layout.
+        let sibling = inside.path().parent().unwrap().join("slint-issue-86-sibling");
+        let _ = fs::remove_dir_all(&sibling);
+        fs::create_dir_all(&sibling).unwrap();
+
+        let failure = load(
+            &PluginRef {
+                path: format!("../{}/evil.toml", outside.path().file_name().unwrap().to_string_lossy()),
+            },
+            &sibling,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(failure.contains("escapes"), "{failure}");
+    }
+
+    #[test]
+    fn an_absolute_plugin_path_is_refused() {
+        let inside = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let evil = outside.path().join("evil.toml");
+        fs::write(&evil, OUTSIDE_PACK).unwrap();
+
+        let failure = load(
+            &PluginRef {
+                path: evil.to_string_lossy().into_owned(),
+            },
+            inside.path(),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(failure.contains("escapes"), "{failure}");
+    }
+
     #[test]
     fn a_plugin_the_config_names_and_that_does_not_exist_is_an_error() {
         let temporary = tempfile::tempdir().unwrap();
