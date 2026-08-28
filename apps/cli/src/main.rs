@@ -177,7 +177,7 @@ fn run(cli: &Cli) -> Result<u8> {
     }
 
     let colour = !cli.no_color && std::io::stdout().is_terminal();
-    let text = report::render(&report, cli.format, colour);
+    let text = report::render(&report, cli.format, colour, cli.max_warnings);
 
     let mut stdout = std::io::stdout().lock();
     writeln!(stdout, "{text}").context("writing the report")?;
@@ -187,11 +187,7 @@ fn run(cli: &Cli) -> Result<u8> {
 
 /// What the run means, as a number.
 fn exit_code(report: &Report, max_warnings: i64) -> u8 {
-    if report.errors() > 0 {
-        return code::ERRORS;
-    }
-
-    if max_warnings >= 0 && report.warnings() as i64 > max_warnings {
+    if !report.passes(max_warnings) {
         return code::ERRORS;
     }
 

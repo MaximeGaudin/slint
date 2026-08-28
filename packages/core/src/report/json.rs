@@ -2,7 +2,8 @@
 //!
 //! An envelope with an `ok` flag, so a caller can branch before parsing anything, and data on
 //! stdout with everything else on stderr — the shape that makes this safe to pipe. The editor
-//! integration and any agent calling slint read exactly this.
+//! integration and any agent calling slint read exactly this, and `ok` says what the exit code
+//! says, so the two verdicts never disagree.
 
 use serde::Serialize;
 
@@ -10,8 +11,9 @@ use crate::diagnostics::Report;
 
 #[derive(Debug, Serialize)]
 pub struct Envelope<'a> {
-    /// False when anything at error severity was found. Warnings do not flip it: they are the
-    /// linter's opinion, and a caller that wants them fatal says so with --max-warnings.
+    /// False when the run failed: anything at error severity was found, or `--max-warnings` was
+    /// exceeded. Warnings alone do not flip it — they are the linter's opinion, and a caller that
+    /// wants them fatal says so with --max-warnings, which this flag honours.
     pub ok: bool,
     pub summary: Summary,
     pub data: &'a Report,
@@ -27,9 +29,9 @@ pub struct Summary {
     pub fixed: usize,
 }
 
-pub fn envelope(report: &Report) -> Envelope<'_> {
+pub fn envelope(report: &Report, max_warnings: i64) -> Envelope<'_> {
     Envelope {
-        ok: report.errors() == 0,
+        ok: report.passes(max_warnings),
         summary: Summary {
             skills: report.skills.len(),
             errors: report.errors(),
@@ -42,8 +44,8 @@ pub fn envelope(report: &Report) -> Envelope<'_> {
     }
 }
 
-pub fn render(report: &Report) -> String {
-    serde_json::to_string_pretty(&envelope(report))
+pub fn render(report: &Report, max_warnings: i64) -> String {
+    serde_json::to_string_pretty(&envelope(report, max_warnings))
         .unwrap_or_else(|failure| format!("{{\"ok\":false,\"error\":\"{failure}\"}}"))
 }
 
@@ -54,7 +56,7 @@ mod tests {
 
     #[test]
     fn the_envelope_says_whether_anything_is_broken_before_the_data_is_read() {
-        let text = render(&sample());
+        let text = render(&sample(), -1);
         let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
 
         assert_eq!(parsed["ok"], false, "the sample has an error in it");
@@ -70,13 +72,30 @@ mod tests {
             .messages
             .retain(|one| one.severity != crate::Severity::Error);
 
-        let parsed: serde_json::Value = serde_json::from_str(&render(&report)).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&render(&report, -1)).unwrap();
         assert_eq!(parsed["ok"], true);
     }
 
     #[test]
+    fn a_warning_budget_flips_ok_like_the_exit_code_does() {
+        let mut report = sample();
+        report.skills[0]
+            .messages
+            .retain(|one| one.severity != crate::Severity::Error);
+
+        let parsed: serde_json::Value = serde_json::from_str(&render(&report, 0)).unwrap();
+        assert_eq!(
+            parsed["ok"], false,
+            "the budget is exceeded, so the run failed"
+        );
+
+        let parsed: serde_json::Value = serde_json::from_str(&render(&report, 1)).unwrap();
+        assert_eq!(parsed["ok"], true, "the budget still has room");
+    }
+
+    #[test]
     fn every_finding_carries_its_citation_into_the_json() {
-        let parsed: serde_json::Value = serde_json::from_str(&render(&sample())).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&render(&sample(), -1)).unwrap();
         let first = &parsed["data"]["skills"][0]["messages"][0];
 
         assert_eq!(first["rule"], "name/not-generic");
@@ -90,7 +109,7 @@ mod tests {
 
     #[test]
     fn notes_survive_into_the_json_so_a_client_can_show_what_did_not_run() {
-        let parsed: serde_json::Value = serde_json::from_str(&render(&sample())).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&render(&sample(), -1)).unwrap();
         assert!(
             parsed["data"]["skills"][0]["notes"][0]
                 .as_str()
@@ -105,7 +124,7 @@ mod tests {
             skills: vec![],
             fixed: 0,
         };
-        let parsed: serde_json::Value = serde_json::from_str(&render(&empty)).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&render(&empty, -1)).unwrap();
 
         assert_eq!(parsed["ok"], true);
         assert_eq!(parsed["summary"]["skills"], 0);
