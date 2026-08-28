@@ -146,6 +146,18 @@ function directoryOf(document: vscode.TextDocument): string {
   return path.dirname(document.fileName)
 }
 
+/**
+ * Working directory for a slint run: the workspace folder that owns the target, or the target's
+ * own directory for a loose file. Never inherit the extension host's cwd — behavior must not
+ * depend on where VS Code happened to start.
+ */
+function cwdFor(target: string): string {
+  return (
+    vscode.workspace.getWorkspaceFolder(vscode.Uri.file(target))?.uri.fsPath ??
+    path.dirname(target)
+  )
+}
+
 function setStatus(text: string, detail?: string): void {
   status.text = text
   status.tooltip = detail ?? 'Show the slint output channel'
@@ -280,7 +292,12 @@ async function runPass(
     let stdout: string
 
     try {
-      const result = await run(binary, argv, { maxBuffer: 16 * 1024 * 1024, env, signal })
+      const result = await run(binary, argv, {
+        maxBuffer: 16 * 1024 * 1024,
+        env,
+        signal,
+        cwd: cwdFor(target),
+      })
       stdout = result.stdout
     } catch (failure) {
       if (isAbortError(failure) || signal.aborted || !runs.isCurrent(target, generation)) {
@@ -609,7 +626,7 @@ async function fixActiveDocument(): Promise<void> {
   setStatus('$(sync~spin) slint', 'Applying fixes…')
 
   try {
-    await run(binary, argv, { maxBuffer: 16 * 1024 * 1024, env })
+    await run(binary, argv, { maxBuffer: 16 * 1024 * 1024, env, cwd: cwdFor(directory) })
   } catch (failure) {
     const error = failure as { stdout?: string; message?: string }
     if (!error.stdout) {
