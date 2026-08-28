@@ -45,6 +45,27 @@ fn a_clean_base_exits_zero_and_says_so() {
 }
 
 #[test]
+fn linting_a_file_that_is_not_a_skill_says_so_instead_of_passing() {
+    // https://github.com/MaximeGaudin/slint/issues/36
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(temporary.path().join("random.txt"), "hello\n").unwrap();
+
+    let output = slint(&[
+        temporary.path().join("random.txt").to_str().unwrap(),
+        "--no-llm",
+    ]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(4),
+        "nothing was linted, which is not a clean pass"
+    );
+    let text = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(text.contains("random.txt"), "{text}");
+    assert!(text.contains("not linted"), "{text}");
+}
+
+#[test]
 fn an_error_exits_one() {
     let temporary = tempfile::tempdir().unwrap();
     write(temporary.path(), "helper", BROKEN);
