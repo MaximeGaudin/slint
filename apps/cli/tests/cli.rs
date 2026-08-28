@@ -162,6 +162,35 @@ fn the_json_format_is_an_envelope_a_caller_can_branch_on() {
 }
 
 #[test]
+fn the_json_envelope_says_the_same_thing_the_exit_code_does() {
+    // Reproduces https://github.com/MaximeGaudin/slint/issues/24: with --max-warnings exceeded
+    // the process exits 1, so the envelope's `ok` flag must say false too — a caller that
+    // branches on it before parsing anything gets the same verdict as the shell does.
+    let temporary = tempfile::tempdir().unwrap();
+    write(
+        temporary.path(),
+        "helper",
+        "---\nname: helper\ndescription: Culls a photo shoot in Lightroom by flagging the keepers and rejecting the rest. Use when triaging RAW files after a session.\n---\n\n## Helper\n\n1. Import the files.\n",
+    );
+
+    let output = slint(&[
+        temporary.path().to_str().unwrap(),
+        "--no-llm",
+        "--format",
+        "json",
+        "--max-warnings",
+        "0",
+    ]);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+
+    assert_eq!(output.status.code(), Some(1), "the budget is exceeded");
+    assert_eq!(
+        parsed["ok"], false,
+        "the envelope must agree with the exit code"
+    );
+}
+
+#[test]
 fn the_json_format_puts_nothing_but_json_on_stdout() {
     let temporary = tempfile::tempdir().unwrap();
     write(temporary.path(), "helper", BROKEN);
