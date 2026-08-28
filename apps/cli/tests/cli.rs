@@ -139,6 +139,34 @@ fn fixing_rewrites_the_file_and_the_next_run_is_cleaner() {
 }
 
 #[test]
+fn two_fixable_rules_on_one_file_converge_in_a_single_fix() {
+    // Reproduces https://github.com/MaximeGaudin/slint/issues/91: a description fix and a
+    // posix-path fix on the same SKILL.md used to conflict, so one was left for a second --fix.
+    let temporary = tempfile::tempdir().unwrap();
+    write(
+        temporary.path(),
+        "photo-culling",
+        "---\nname: photo-culling\ndescription: <b>Culls</b> a photo shoot in Lightroom by flagging the keepers and rejecting the rest. Use when triaging RAW files.\n---\n\n## Culling\n\n1. Read references\\formats.md.\n",
+    );
+
+    fs::create_dir_all(temporary.path().join("photo-culling/references")).unwrap();
+    fs::write(
+        temporary.path().join("photo-culling/references/formats.md"),
+        "# Formats\n",
+    )
+    .unwrap();
+
+    let fixed = slint(&[temporary.path().to_str().unwrap(), "--no-llm", "--fix"]);
+    let text = stdout(&fixed);
+    assert!(text.contains("2 fix(es) applied"), "{text}");
+
+    let document = fs::read_to_string(temporary.path().join("photo-culling/SKILL.md")).unwrap();
+    assert!(!document.contains("<b>"), "{document}");
+    assert!(!document.contains('\\'), "{document}");
+    assert!(document.contains("references/formats.md"));
+}
+
+#[test]
 fn the_json_format_is_an_envelope_a_caller_can_branch_on() {
     let temporary = tempfile::tempdir().unwrap();
     write(temporary.path(), "helper", BROKEN);

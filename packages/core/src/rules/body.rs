@@ -742,7 +742,7 @@ mod tests {
     }
 
     #[test]
-    fn the_windows_path_fix_normalises_every_separator_at_once() {
+    fn the_windows_path_fixes_for_two_lines_apply_in_one_pass() {
         let skill = skill_with_body(
             "\n## Culling\n\n1. Read scripts\\notes.md.\n2. Then references\\formats.md.\n",
         );
@@ -750,13 +750,32 @@ mod tests {
 
         assert_eq!(messages.len(), 2, "one finding per line");
 
-        let fix = messages[0].fix.as_ref().unwrap();
-        let mut patched = skill.source.clone();
-        patched.replace_range(fix.start..fix.end, &fix.replacement);
+        // Reproduces https://github.com/MaximeGaudin/slint/issues/91: scoped to the whole
+        // document, both fixes shared one range and a --fix pass deferred the second, so the
+        // file only converged on a second invocation. Each fix now owns its own line.
+        let fixes: Vec<&Fix> = messages.iter().filter_map(|m| m.fix.as_ref()).collect();
+        let refs: Vec<&&Fix> = fixes.iter().collect();
+        let (patched, applied, deferred) = crate::fix::patch(&skill.source, &refs);
 
+        assert_eq!((applied, deferred), (2, 0), "no fix waits for another run");
         assert!(patched.contains("scripts/notes.md"));
         assert!(patched.contains("references/formats.md"));
         assert!(!patched.contains('\\'));
+    }
+
+    #[test]
+    fn a_fix_in_a_file_with_a_byte_order_mark_lands_on_the_right_bytes() {
+        let source = "\u{feff}---\nname: culling\ndescription: Culls a shoot in Lightroom. Use when triaging RAW files after a session.\n---\n\n## Culling\n\n1. Read scripts\\notes.md.\n";
+        let skill = crate::skill::parse(source);
+        let messages = check(&POSIX_RULE, &skill);
+        let fix = messages[0].fix.as_ref().unwrap();
+
+        let mut patched = skill.source.clone();
+        patched.replace_range(fix.start..fix.end, &fix.replacement);
+
+        assert!(patched.contains("scripts/notes.md"), "{patched}");
+        assert!(!patched.contains('\\'), "{patched}");
+        assert!(patched.starts_with('\u{feff}'), "the mark is untouched");
     }
 
     #[test]
