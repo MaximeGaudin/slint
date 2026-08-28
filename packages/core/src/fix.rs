@@ -79,8 +79,7 @@ fn apply_to_file(path: &Path, fixes: &[&Fix]) -> Result<Applied> {
     let (patched, count, deferred) = patch(&original, &edits);
 
     if count > 0 {
-        write_atomically(path, &patched)
-            .with_context(|| format!("writing {}", path.display()))?;
+        write_atomically(path, &patched).with_context(|| format!("writing {}", path.display()))?;
     }
 
     applied.fixes += count;

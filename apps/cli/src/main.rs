@@ -158,7 +158,7 @@ fn run(cli: &Cli) -> Result<u8> {
     let mut report = engine::run(&cli.paths, &config, &plugins, passes)?;
 
     if cli.fix {
-        report = fix_until_converged(report, slint::fix::apply, |report| {
+        report = fix_until_converged(report, slint::fix::apply, |_report| {
             // Lint again so the report describes the files as they are now rather than as they
             // were: half of what --fix does is proving the fix worked.
             engine::run(&cli.paths, &config, &plugins, passes)
@@ -449,7 +449,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(calls, 3, "two rounds, then one to see there is nothing left");
+        assert_eq!(
+            calls, 3,
+            "two rounds, then one to see there is nothing left"
+        );
         assert_eq!(report.fixed, 2);
     }
 

@@ -562,11 +562,7 @@ fn dominant_line_ending(text: &str) -> &'static str {
     let crlf = text.matches("\r\n").count();
     let lf = text.matches('\n').count() - crlf;
 
-    if crlf > lf {
-        "\r\n"
-    } else {
-        "\n"
-    }
+    if crlf > lf { "\r\n" } else { "\n" }
 }
 
 static DANGLING_RULE: NoDangling = NoDangling;
@@ -806,7 +802,9 @@ mod tests {
         // "\n" whatever the file's own convention, rewriting every line ending in the file.
         let mut text = String::from("# Formats\r\n\r\n");
         for index in 0..40 {
-            text.push_str(&format!("## Section {index}\r\n\r\nWords about it.\r\n\r\n"));
+            text.push_str(&format!(
+                "## Section {index}\r\n\r\nWords about it.\r\n\r\n"
+            ));
         }
 
         let mut skill = skill_with_body("\n## Culling\n\nRead references/formats.md.\n");
@@ -819,7 +817,10 @@ mod tests {
 
         let fixed = &messages[0].fix.as_ref().unwrap().replacement;
 
-        assert!(fixed.ends_with("\r\n"), "the trailing newline keeps its return");
+        assert!(
+            fixed.ends_with("\r\n"),
+            "the trailing newline keeps its return"
+        );
         assert_eq!(
             fixed.matches('\n').count(),
             fixed.matches("\r\n").count(),
@@ -902,7 +903,8 @@ mod tests {
 
     #[test]
     fn a_comment_line_inside_a_fence_does_not_become_the_title() {
-        let mut text = String::from("```bash\n# a comment, not a title\n```\n\n## Alpha\n\nWords.\n\n");
+        let mut text =
+            String::from("```bash\n# a comment, not a title\n```\n\n## Alpha\n\nWords.\n\n");
         for index in 0..40 {
             text.push_str(&format!("## Section {index}\n\nWords.\n\n"));
         }
