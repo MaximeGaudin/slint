@@ -66,6 +66,28 @@ fn linting_a_file_that_is_not_a_skill_says_so_instead_of_passing() {
 }
 
 #[test]
+fn an_empty_directory_is_a_failure_not_a_clean_run() {
+    // https://github.com/MaximeGaudin/slint/issues/118
+    let temporary = tempfile::tempdir().unwrap();
+    let empty = temporary.path().join("no-skills-here");
+    fs::create_dir_all(&empty).unwrap();
+
+    let output = slint(&[empty.to_str().unwrap(), "--no-llm"]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(4),
+        "a run that checked zero skills must not read as success"
+    );
+    assert!(
+        !stdout(&output).contains("Nothing to report"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(stdout(&output).contains("No SKILL.md"), "{}", stdout(&output));
+}
+
+#[test]
 fn an_error_exits_one() {
     let temporary = tempfile::tempdir().unwrap();
     write(temporary.path(), "helper", BROKEN);
