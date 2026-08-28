@@ -3,11 +3,13 @@
 //! Only ever computed ones: a model never edits a file here. A fix is a byte range and a
 //! replacement, so applying several to one file is a sort and a splice — and two fixes that overlap
 //! mean one of them was resolved against text the other already changed, so the second is left for
-//! the next pass rather than applied against a moved target.
+//! the next pass rather than applied against a moved target. Files are replaced by rename rather
+//! than rewritten in place, so a crash mid-fix never leaves half of each.
 
 use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 
 use crate::diagnostics::{Fix, Report};
@@ -77,7 +79,8 @@ fn apply_to_file(path: &Path, fixes: &[&Fix]) -> Result<Applied> {
     let (patched, count, deferred) = patch(&original, &edits);
 
     if count > 0 {
-        fs::write(path, patched).with_context(|| format!("writing {}", path.display()))?;
+        write_atomically(path, &patched)
+            .with_context(|| format!("writing {}", path.display()))?;
     }
 
     applied.fixes += count;
@@ -121,6 +124,45 @@ pub fn patch(text: &str, fixes: &[&&Fix]) -> (String, usize, usize) {
     }
 
     (patched, applied, deferred)
+}
+
+/// Replaces a file by rename rather than truncating it in place.
+///
+/// The new content is written to a temporary file in the same directory, flushed, and renamed over
+/// the original. rename(2) is atomic, so a crash or a full disk mid-write leaves either the old
+/// content or the new one on disk — never a half-written file and no way back to the original.
+fn write_atomically(path: &Path, contents: &str) -> Result<()> {
+    let directory = path.parent().unwrap_or_else(|| Path::new("."));
+
+    let temporary = tempfile::Builder::new()
+        .prefix(".slint-fix-")
+        .tempfile_in(directory)
+        .with_context(|| format!("creating a temporary file beside {}", path.display()))?;
+
+    {
+        let mut file = temporary.as_file();
+        file.write_all(contents.as_bytes())
+            .with_context(|| format!("writing {}", temporary.path().display()))?;
+        file.sync_all()
+            .with_context(|| format!("flushing {}", temporary.path().display()))?;
+    }
+
+    // A fresh temporary file is private to its creator; the file it replaces keeps the mode it had.
+    #[cfg(unix)]
+    {
+        let permissions = fs::metadata(path)
+            .with_context(|| format!("reading {}", path.display()))?
+            .permissions();
+        fs::set_permissions(temporary.path(), permissions)
+            .with_context(|| format!("chmod {}", temporary.path().display()))?;
+    }
+
+    temporary
+        .persist(path)
+        .map_err(|error| error.error)
+        .with_context(|| format!("replacing {}", path.display()))?;
+
+    Ok(())
 }
 
 #[cfg(unix)]
