@@ -6,7 +6,7 @@ describe('ruleOverridesArgv (#63)', () => {
   it('maps every entry to a repeatable --rule flag the CLI already parses', () => {
     assert.deepEqual(
       ruleOverridesArgv({ 'name/not-generic': 'error', 'body/posix-paths': 'off' }),
-      ['--rule', 'name/not-generic=error', '--rule', 'body/posix-paths=off'],
+      ['--rule', 'body/posix-paths=off', '--rule', 'name/not-generic=error'],
     )
   })
 

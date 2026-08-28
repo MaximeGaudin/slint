@@ -10,6 +10,7 @@ import {
 } from './fixes.js'
 import { ignoreEditsForFinding, ruleIdFromCode } from './ignore.js'
 import { LintRunCoordinator, type StatusUpdate } from './lint-runs.js'
+import { ruleOverridesArgv } from './rules-setting.js'
 
 const run = promisify(execFile)
 
@@ -179,10 +180,13 @@ function spawnFor(
 ): Spawn {
   const binaryArgs: string[] = [target]
   if (options.fix) binaryArgs.push('--fix')
+  // `slint.rules` rides the same `--rule name=level` overrides a config file or the CLI takes;
+  // hand-typed `slint.arguments` keep working beside it.
   binaryArgs.push(
     '--format',
     'json',
     '--no-color',
+    ...ruleOverridesArgv(setting<Record<string, string>>('rules', options.resource)),
     ...(setting<string[]>('arguments', options.resource) ?? []),
   )
 
