@@ -291,7 +291,10 @@ where
         }
     }
 
-    if let Some(directory) = xdg.filter(|path| path.is_absolute()) {
+    // XDG says an absolute path or nothing. `has_root` is that test, spelled portably: on Unix it
+    // is exactly "starts with /", and on Windows it also accepts a rooted path with no drive, so
+    // an XDG variable pointing at `/slint-config` still works there.
+    if let Some(directory) = xdg.filter(|path| path.has_root()) {
         return Some(directory.join("slint").join("config.toml"));
     }
 
@@ -611,7 +614,7 @@ mod tests {
     }
 
     #[test]
-    fn the_user_config_lives_under_an_absolute_xdg_config_home() {
+    fn the_user_config_lives_under_a_rooted_xdg_config_home() {
         let variables = [
             (
                 "XDG_CONFIG_HOME".to_string(),
