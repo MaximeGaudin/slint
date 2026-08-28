@@ -3,7 +3,7 @@ import * as path from 'node:path'
 import { promisify } from 'node:util'
 import * as vscode from 'vscode'
 import { ignoreEditsForFinding, ruleIdFromCode } from './ignore.js'
-import { LintRunCoordinator, type StatusUpdate } from './lint-runs.js'
+import { LintQueue, LintRunCoordinator, type StatusUpdate } from './lint-runs.js'
 
 const run = promisify(execFile)
 
@@ -55,6 +55,8 @@ let status: vscode.StatusBarItem
 let pending: NodeJS.Timeout | undefined
 /** Cancels superseded child processes and keeps the status bar honest across overlapping runs. */
 const runs = new LintRunCoordinator()
+/** Serializes slint invocations across targets so two runs can never publish over each other. */
+const queue = new LintQueue()
 /** Last static envelope per target — merged back in when the model pass publishes so static never vanishes. */
 const lastStatic = new Map<string, Envelope>()
 
@@ -230,6 +232,9 @@ async function lint(target: string, options: { model: boolean }): Promise<void> 
 /**
  * Runs one slint pass and publishes if this generation is still current.
  * Returns the envelope on success, or undefined when the binary failed.
+ *
+ * Every pass goes through the global queue: cancellation only protects a target from itself, so a
+ * workspace lint and a per-file lint over the same files are serialized instead of racing.
  */
 async function runPass(
   target: string,
@@ -237,87 +242,95 @@ async function runPass(
   generation: number,
   signal: AbortSignal,
 ): Promise<Envelope | undefined> {
-  const binary = setting<string>('path') ?? 'slint'
-  const { argv, env } = spawnFor(target, options)
-  const label = path.basename(target)
+  return queue.run(async () => {
+    // Superseded while waiting in the queue: do nothing, not even status churn.
+    if (signal.aborted || !runs.isCurrent(target, generation)) {
+      output.appendLine(`· ${path.basename(target)} · cancelled while queued`)
+      return undefined
+    }
 
-  runs.markStarted()
-  if (!options.model) {
-    setStatus('$(sync~spin) slint', `Linting ${label}…`)
-    output.appendLine(`→ ${label} · static`)
-  }
+    const binary = setting<string>('path') ?? 'slint'
+    const { argv, env } = spawnFor(target, options)
+    const label = path.basename(target)
 
-  let stdout: string
+    runs.markStarted()
+    if (!options.model) {
+      setStatus('$(sync~spin) slint', `Linting ${label}…`)
+      output.appendLine(`→ ${label} · static`)
+    }
 
-  try {
-    const result = await run(binary, argv, { maxBuffer: 16 * 1024 * 1024, env, signal })
-    stdout = result.stdout
-  } catch (failure) {
-    if (isAbortError(failure) || signal.aborted || !runs.isCurrent(target, generation)) {
-      output.appendLine(`· ${label} · cancelled (newer lint started)`)
+    let stdout: string
+
+    try {
+      const result = await run(binary, argv, { maxBuffer: 16 * 1024 * 1024, env, signal })
+      stdout = result.stdout
+    } catch (failure) {
+      if (isAbortError(failure) || signal.aborted || !runs.isCurrent(target, generation)) {
+        output.appendLine(`· ${label} · cancelled (newer lint started)`)
+        applyStatus(runs.markFinished({ superseded: true }))
+        return undefined
+      }
+
+      const error = failure as { stdout?: string; code?: number; message?: string }
+
+      // Findings are not failures: slint exits 1/2 when it found problems, and that run is the useful
+      // one. Only an empty stdout means slint itself could not run.
+      if (!error.stdout) {
+        output.appendLine(`slint could not run: ${error.message ?? 'unknown failure'}`)
+        output.appendLine(`  ${binary} ${argv.join(' ')}`)
+        finishStatus(
+          '$(error) slint failed',
+          error.message ?? 'slint could not run — click for details',
+        )
+        return undefined
+      }
+
+      stdout = error.stdout
+    }
+
+    if (!runs.isCurrent(target, generation)) {
       applyStatus(runs.markFinished({ superseded: true }))
       return undefined
     }
 
-    const error = failure as { stdout?: string; code?: number; message?: string }
+    let envelope: Envelope
 
-    // Findings are not failures: slint exits 1/2 when it found problems, and that run is the useful
-    // one. Only an empty stdout means slint itself could not run.
-    if (!error.stdout) {
-      output.appendLine(`slint could not run: ${error.message ?? 'unknown failure'}`)
-      output.appendLine(`  ${binary} ${argv.join(' ')}`)
-      finishStatus(
-        '$(error) slint failed',
-        error.message ?? 'slint could not run — click for details',
-      )
+    try {
+      envelope = JSON.parse(stdout) as Envelope
+    } catch {
+      output.appendLine('slint answered with something that was not JSON.')
+      finishStatus('$(error) slint failed', 'slint answered with something that was not JSON')
       return undefined
     }
 
-    stdout = error.stdout
-  }
+    publish(envelope, {
+      target,
+      // The model pass must not erase the static findings already on screen. Seed from the static
+      // envelope we just published; prefer any static/plugin rows the --llm run also returned.
+      keepStatic: options.model ? lastStatic.get(target) : undefined,
+      // Static-only runs always skip the model by design — don't spam the output channel with
+      // "Skipped N model rules" as if something went wrong.
+      silenceSkippedModelNote: !options.model,
+    })
 
-  if (!runs.isCurrent(target, generation)) {
-    applyStatus(runs.markFinished({ superseded: true }))
-    return undefined
-  }
+    if (!options.model) {
+      lastStatic.set(target, envelope)
+    }
 
-  let envelope: Envelope
+    const kind = options.model ? 'model' : 'static'
+    const summary = summarizePublished(envelope, options.model ? lastStatic.get(target) : undefined)
+    output.appendLine(`✓ ${label} · ${kind}: ${summary}`)
 
-  try {
-    envelope = JSON.parse(stdout) as Envelope
-  } catch {
-    output.appendLine('slint answered with something that was not JSON.')
-    finishStatus('$(error) slint failed', 'slint answered with something that was not JSON')
-    return undefined
-  }
+    if (options.followWithModel) {
+      // Model pass is about to start — free this slot without clearing the "running" feel.
+      runs.releaseSlot()
+      setStatus(`$(check) slint: ${summary}`, 'Static done — model pass starting…')
+    } else {
+      finishFromSummaryText(summary, envelope.summary.skills)
+    }
 
-  publish(envelope, {
-    target,
-    // The model pass must not erase the static findings already on screen. Seed from the static
-    // envelope we just published; prefer any static/plugin rows the --llm run also returned.
-    keepStatic: options.model ? lastStatic.get(target) : undefined,
-    // Static-only runs always skip the model by design — don't spam the output channel with
-    // "Skipped N model rules" as if something went wrong.
-    silenceSkippedModelNote: !options.model,
+    return envelope
   })
-
-  if (!options.model) {
-    lastStatic.set(target, envelope)
-  }
-
-  const kind = options.model ? 'model' : 'static'
-  const summary = summarizePublished(envelope, options.model ? lastStatic.get(target) : undefined)
-  output.appendLine(`✓ ${label} · ${kind}: ${summary}`)
-
-  if (options.followWithModel) {
-    // Model pass is about to start — free this slot without clearing the "running" feel.
-    runs.releaseSlot()
-    setStatus(`$(check) slint: ${summary}`, 'Static done — model pass starting…')
-  } else {
-    finishFromSummaryText(summary, envelope.summary.skills)
-  }
-
-  return envelope
 }
 
 function isAbortError(failure: unknown): boolean {
