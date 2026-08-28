@@ -14,6 +14,30 @@ const SPEC_FIELDS: [&str; 6] = [
     "allowed-tools",
 ];
 
+/// Top-level frontmatter fields Claude Code documents as first-class extensions
+/// (https://code.claude.com/docs/en/skills). They are recognized rather than flagged, even
+/// though other hosts may ignore them.
+const CLAUDE_FIELDS: [&str; 14] = [
+    "disable-model-invocation",
+    "user-invocable",
+    "disallowed-tools",
+    "model",
+    "effort",
+    "context",
+    "agent",
+    "background",
+    "hooks",
+    "paths",
+    "shell",
+    "argument-hint",
+    "arguments",
+    "when_to_use",
+];
+
+fn is_known_field(key: &str) -> bool {
+    SPEC_FIELDS.contains(&key) || CLAUDE_FIELDS.contains(&key)
+}
+
 static FRONTMATTER: RuleMeta = RuleMeta {
     name: "frontmatter/present",
     summary: "SKILL.md must start with a YAML frontmatter block (--- ... ---).",
@@ -40,9 +64,9 @@ static KEY_FORMAT: RuleMeta = RuleMeta {
 
 static UNKNOWN_FIELD: RuleMeta = RuleMeta {
     name: "frontmatter/unknown-field",
-    summary: "Top-level frontmatter keys must be agentskills.io fields (or live under metadata).",
-    rationale: "Product-specific keys at the top level (for example Cursor's disable-model-invocation) are invisible or rejected on other hosts. The spec keeps the top-level set closed and puts extras under metadata.",
-    advice: "Remove the key, or move product-specific options under metadata (example: metadata.disable-model-invocation). Recognized top-level fields: name, description, license, compatibility, metadata, allowed-tools.",
+    summary: "Top-level frontmatter keys must be agentskills.io fields, Claude Code extensions, or live under metadata.",
+    rationale: "Product-specific keys at the top level are invisible or rejected on other hosts. The spec keeps its own top-level set closed; Claude Code's documented extensions are recognized, and anything else belongs under metadata.",
+    advice: "Remove the key, or move product-specific options under metadata (example: metadata.version). Recognized top-level fields: name, description, license, compatibility, metadata, allowed-tools, plus Claude Code's extensions (disable-model-invocation, user-invocable, disallowed-tools, model, effort, context, agent, background, hooks, paths, shell, argument-hint, arguments, when_to_use).",
     default_severity: Severity::Warning,
     fixable: false,
     needs_model: false,
@@ -108,14 +132,56 @@ impl Rule for UnknownField {
         let keys: Vec<String> = context.skill.metadata.keys().cloned().collect();
 
         for key in keys {
+            // Pairs flattened out of the metadata map report against "metadata" itself.
+            if key.starts_with("metadata.") {
+                continue;
+            }
+
             let lower = key.to_ascii_lowercase();
-            if SPEC_FIELDS.contains(&lower.as_str()) {
+            if is_known_field(&lower) {
                 continue;
             }
 
             let line = context.skill.frontmatter_line(&key);
             context.report(
-                format!("\"{key}\" is not a recognized agentskills.io frontmatter field"),
+                format!("\"{key}\" is not a recognized frontmatter field"),
+                Location::at(line, 1),
+            );
+        }
+    }
+}
+
+static TYPE_ERROR: RuleMeta = RuleMeta {
+    name: "frontmatter/type-error",
+    summary: "name and description must be YAML strings.",
+    rationale: "An agent reads the name and description as text. A value YAML parses as a number, boolean, null, sequence, or mapping is not that text — or is nothing at all — and every check on it would run against the wrong thing.",
+    advice: "Write the value as plain text, quoting it if it starts with a character YAML treats specially.",
+    default_severity: Severity::Error,
+    fixable: false,
+    needs_model: false,
+    reference_title: sources::SPECIFICATION.0,
+    reference_url: sources::SPECIFICATION.1,
+};
+
+struct TypeError;
+
+impl Rule for TypeError {
+    fn meta(&self) -> &'static RuleMeta {
+        &TYPE_ERROR
+    }
+
+    fn check(&self, context: &mut RuleContext<'_>) {
+        for field in ["name", "description"] {
+            let Some(actual) = context.skill.scalar_types.get(field) else {
+                continue;
+            };
+            if actual == "string" {
+                continue;
+            }
+
+            let line = context.skill.frontmatter_line(field);
+            context.report(
+                format!("\"{field}\" is a YAML {actual}, not a string"),
                 Location::at(line, 1),
             );
         }
@@ -125,9 +191,15 @@ impl Rule for UnknownField {
 static FRONTMATTER_RULE: Frontmatter = Frontmatter;
 static KEY_RULE: KeyFormat = KeyFormat;
 static UNKNOWN_FIELD_RULE: UnknownField = UnknownField;
+static TYPE_ERROR_RULE: TypeError = TypeError;
 
 pub fn rules() -> Vec<&'static dyn Rule> {
-    vec![&FRONTMATTER_RULE, &KEY_RULE, &UNKNOWN_FIELD_RULE]
+    vec![
+        &FRONTMATTER_RULE,
+        &KEY_RULE,
+        &UNKNOWN_FIELD_RULE,
+        &TYPE_ERROR_RULE,
+    ]
 }
 
 #[cfg(test)]
