@@ -339,6 +339,7 @@ fn print_rules(as_json: bool) -> Result<u8> {
 mod tests {
     use super::*;
     use slint::diagnostics::{Location, Message, Reference, Severity, SkillReport, Source};
+    use std::path::Path;
 
     fn report_with(errors: usize, warnings: usize) -> Report {
         let message = |severity: Severity| Message {
@@ -498,6 +499,52 @@ mod tests {
                 .unwrap()
                 .command,
             Some(Command::Rules { json: true })
+        ));
+    }
+
+    #[test]
+    fn the_editor_affordances_parse_the_way_an_editor_sends_them() {
+        let cli = Cli::try_parse_from([
+            "slint",
+            "--stdin",
+            "--stdin-filename",
+            "skills/helper/SKILL.md",
+            "--no-ignore",
+            "--ignore-path",
+            ".gitignore",
+            "--verbose",
+        ])
+        .unwrap();
+
+        assert!(cli.stdin);
+        assert_eq!(
+            cli.stdin_filename.as_deref(),
+            Some("skills/helper/SKILL.md")
+        );
+        assert!(cli.no_ignore);
+        assert_eq!(
+            cli.ignore_path.as_deref(),
+            Some(Path::new(".gitignore"))
+        );
+        assert!(cli.verbose);
+    }
+
+    #[test]
+    fn explain_names_a_rule() {
+        let cli = Cli::try_parse_from(["slint", "--explain", "body/max-lines"]).unwrap();
+
+        assert_eq!(cli.explain.as_deref(), Some("body/max-lines"));
+    }
+
+    #[test]
+    fn completions_name_a_shell() {
+        assert!(matches!(
+            Cli::try_parse_from(["slint", "completions", "bash"])
+                .unwrap()
+                .command,
+            Some(Command::Completions {
+                shell: clap_complete::Shell::Bash
+            })
         ));
     }
 }

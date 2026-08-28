@@ -488,6 +488,63 @@ mod tests {
     }
 
     #[test]
+    fn the_user_config_lives_under_an_absolute_xdg_config_home() {
+        let variables = [
+            ("XDG_CONFIG_HOME".to_string(), "/userdata/config".to_string()),
+            ("HOME".to_string(), "/userdata/home".to_string()),
+        ];
+
+        assert_eq!(
+            user_config_path_from(variables),
+            Some(PathBuf::from("/userdata/config/slint/config.toml"))
+        );
+    }
+
+    #[test]
+    fn without_xdg_the_user_config_is_under_the_home() {
+        let variables = [("HOME".to_string(), "/userdata/home".to_string())];
+
+        assert_eq!(
+            user_config_path_from(variables),
+            Some(PathBuf::from("/userdata/home/.config/slint/config.toml"))
+        );
+    }
+
+    #[test]
+    fn a_relative_xdg_config_home_is_ignored_as_the_spec_demands() {
+        let variables = [
+            ("XDG_CONFIG_HOME".to_string(), "relative/config".to_string()),
+            ("HOME".to_string(), "/userdata/home".to_string()),
+        ];
+
+        assert_eq!(
+            user_config_path_from(variables),
+            Some(PathBuf::from("/userdata/home/.config/slint/config.toml"))
+        );
+    }
+
+    #[test]
+    fn the_user_config_falls_back_to_appdata_where_there_is_no_home() {
+        let variables = [(
+            "APPDATA".to_string(),
+            "C:\\Users\\someone\\AppData\\Roaming".to_string(),
+        )];
+
+        assert_eq!(
+            user_config_path_from(variables),
+            Some(PathBuf::from(
+                "C:\\Users\\someone\\AppData\\Roaming\\slint\\config.toml"
+            ))
+        );
+    }
+
+    #[test]
+    fn with_nothing_set_there_is_no_user_config() {
+        let variables: [(String, String); 0] = [];
+        assert_eq!(user_config_path_from(variables), None);
+    }
+
+    #[test]
     fn a_provider_name_parses_the_way_the_cli_and_editors_spell_it() {
         assert_eq!(Provider::parse("openrouter").unwrap(), Provider::Openrouter);
         assert_eq!(Provider::parse("groq").unwrap(), Provider::Groq);

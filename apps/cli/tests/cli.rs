@@ -29,6 +29,43 @@ fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).to_string()
 }
 
+fn stderr(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stderr).to_string()
+}
+
+/// Runs the binary from inside `directory`, so config discovery sees only what is there.
+fn slint_in(directory: &Path, arguments: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_slint"))
+        .args(arguments)
+        .current_dir(directory)
+        .output()
+        .expect("running slint")
+}
+
+/// Runs the binary with `input` as stdin, the way an editor integration would.
+fn slint_from_stdin(directory: &Path, arguments: &[&str], input: &str) -> Output {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_slint"))
+        .args(arguments)
+        .current_dir(directory)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("running slint");
+
+    child
+        .stdin
+        .as_mut()
+        .expect("piping stdin")
+        .write_all(input.as_bytes())
+        .expect("writing the document to stdin");
+
+    child.wait_with_output().expect("waiting for slint")
+}
+
 #[test]
 fn a_clean_base_exits_zero_and_says_so() {
     let temporary = tempfile::tempdir().unwrap();
@@ -407,5 +444,322 @@ fn an_undeclared_host_specific_tool_in_the_body_is_reported() {
     assert!(
         text.contains("AskQuestion"),
         "finding should name the tool:\n{text}"
+    );
+}
+
+// ---- https://github.com/MaximeGaudin/slint/issues/54 — CLI affordances ----
+
+#[test]
+fn stdin_is_linted_without_a_file_on_disk() {
+    let temporary = tempfile::tempdir().unwrap();
+
+    let output = slint_from_stdin(temporary.path(), &["--stdin", "--no-llm"], BROKEN);
+
+    assert_eq!(output.status.code(), Some(1), "stdin linting finds the error");
+    assert!(
+        stdout(&output).contains("bundle/no-dangling-path"),
+        "{stdout(&output)}"
+    );
+}
+
+#[test]
+fn a_clean_stdin_document_exits_zero() {
+    let temporary = tempfile::tempdir().unwrap();
+
+    let output = slint_from_stdin(temporary.path(), &["--stdin", "--no-llm"], GOOD);
+
+    assert_eq!(output.status.code(), Some(0));
+}
+
+#[test]
+fn stdin_filename_names_the_file_in_the_report() {
+    let temporary = tempfile::tempdir().unwrap();
+
+    let output = slint_from_stdin(
+        temporary.path(),
+        &[
+            "--stdin",
+            "--stdin-filename",
+            "skills/helper/SKILL.md",
+            "--no-llm",
+            "--format",
+            "compact",
+        ],
+        BROKEN,
+    );
+
+    assert!(
+        stdout(&output).starts_with("skills/helper/SKILL.md:"),
+        "{stdout(&output)}"
+    );
+}
+
+#[test]
+fn print_config_shows_the_resolved_config_as_json() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(
+        temporary.path().join("slint.toml"),
+        "[rules]\n\"name/not-generic\" = \"off\"\n",
+    )
+    .unwrap();
+
+    let output = slint_in(
+        temporary.path(),
+        &[
+            "--print-config",
+            "--no-llm",
+            "--rule",
+            "body/max-lines=off",
+        ],
+    );
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("print-config prints valid JSON");
+
+    assert_eq!(parsed["rules"]["name/not-generic"], "off");
+    assert_eq!(
+        parsed["rules"]["body/max-lines"],
+        "off",
+        "command-line overrides are part of the resolved config"
+    );
+    assert!(parsed["ignore"].is_array());
+    assert!(parsed["llm"].is_object());
+}
+
+#[test]
+fn explain_prints_one_rule_rather_than_the_whole_catalogue() {
+    let temporary = tempfile::tempdir().unwrap();
+
+    let output = slint_in(temporary.path(), &["--explain", "body/max-lines"]);
+    let text = stdout(&output);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(text.contains("body/max-lines"), "{text}");
+    assert!(
+        !text.contains("description/says-when"),
+        "one rule was asked for:\n{text}"
+    );
+}
+
+#[test]
+fn explaining_an_unknown_rule_fails_the_run() {
+    let temporary = tempfile::tempdir().unwrap();
+
+    let output = slint_in(temporary.path(), &["--explain", "no/such-rule"]);
+
+    assert_eq!(output.status.code(), Some(3));
+    assert!(stderr(&output).contains("no/such-rule"), "{stderr(&output)}");
+}
+
+#[test]
+fn the_sarif_format_is_a_valid_sarif_log() {
+    let temporary = tempfile::tempdir().unwrap();
+    write(temporary.path(), "helper", BROKEN);
+
+    let output = slint(&[
+        temporary.path().to_str().unwrap(),
+        "--no-llm",
+        "--format",
+        "sarif",
+    ]);
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("sarif prints valid JSON");
+
+    assert_eq!(parsed["version"], "2.1.0");
+    assert_eq!(parsed["runs"][0]["tool"]["driver"]["name"], "slint");
+
+    let results = parsed["runs"][0]["results"].as_array().expect("results");
+    let dangling = results
+        .iter()
+        .find(|result| result["ruleId"] == "bundle/no-dangling-path")
+        .expect("the error is in the results");
+
+    assert_eq!(dangling["level"], "error");
+    assert!(
+        dangling["locations"][0]["physicalLocation"]["artifactLocation"]["uri"]
+            .as_str()
+            .unwrap()
+            .ends_with("SKILL.md")
+    );
+    assert!(
+        dangling["locations"][0]["physicalLocation"]["region"]["startLine"]
+            .as_u64()
+            .unwrap()
+            >= 1
+    );
+}
+
+#[test]
+fn ignore_path_adds_patterns_from_a_file() {
+    let temporary = tempfile::tempdir().unwrap();
+    write(temporary.path(), "photo-culling", GOOD);
+    write(temporary.path(), "helper", BROKEN);
+    fs::write(temporary.path().join("my-ignores"), "**/helper/**\n").unwrap();
+
+    let output = slint_in(
+        temporary.path(),
+        &["--no-llm", "--ignore-path", "my-ignores"],
+    );
+
+    assert_eq!(output.status.code(), Some(0), "helper is ignored");
+    assert!(
+        !stdout(&output).contains("bundle/no-dangling-path"),
+        "{stdout(&output)}"
+    );
+}
+
+#[test]
+fn no_ignore_lints_what_the_config_ignored() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(
+        temporary.path().join("slint.toml"),
+        "ignore = [\"**/helper/**\"]\n",
+    )
+    .unwrap();
+    write(temporary.path(), "helper", BROKEN);
+
+    let ignored = slint_in(temporary.path(), &["--no-llm"]);
+    assert_eq!(ignored.status.code(), Some(0), "the config ignores it");
+
+    let output = slint_in(temporary.path(), &["--no-llm", "--no-ignore"]);
+    assert_eq!(output.status.code(), Some(1), "--no-ignore lints it anyway");
+    assert!(stdout(&output).contains("bundle/no-dangling-path"));
+}
+
+#[test]
+fn completions_can_be_printed_for_the_common_shells() {
+    for shell in ["bash", "zsh", "fish", "powershell"] {
+        let output = slint(&["completions", shell]);
+
+        assert_eq!(output.status.code(), Some(0), "{shell}");
+        assert!(
+            !stdout(&output).is_empty(),
+            "completions for {shell} are not empty"
+        );
+    }
+}
+
+#[test]
+fn verbose_says_which_config_was_used() {
+    let temporary = tempfile::tempdir().unwrap();
+    write(temporary.path(), "photo-culling", GOOD);
+    fs::write(temporary.path().join("slint.toml"), "[rules]\n").unwrap();
+
+    let output = slint_in(temporary.path(), &["--no-llm", "--verbose"]);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(
+        stderr(&output).contains("slint.toml"),
+        "stderr names the config: {stderr(&output)}"
+    );
+}
+
+#[test]
+fn verbose_without_a_config_says_defaults_are_in_use() {
+    let temporary = tempfile::tempdir().unwrap();
+    write(temporary.path(), "photo-culling", GOOD);
+
+    let output = slint_in(temporary.path(), &["--no-llm", "--verbose"]);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(
+        stderr(&output).contains("config"),
+        "stderr talks about the config: {stderr(&output)}"
+    );
+}
+
+// ---- https://github.com/MaximeGaudin/slint/issues/55 — a JSON Schema for the config ----
+
+#[test]
+fn slint_prints_a_json_schema_for_its_config_format() {
+    let output = slint(&["schema"]);
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("schema prints valid JSON");
+
+    assert!(parsed["$schema"].is_string(), "it declares its dialect");
+    assert!(parsed["properties"]["rules"].is_object());
+    assert!(parsed["properties"]["ignore"].is_object());
+    assert!(parsed["properties"]["llm"].is_object());
+    assert!(parsed["properties"]["plugins"].is_object());
+
+    let providers = parsed["properties"]["llm"]["properties"]["provider"]["enum"]
+        .as_array()
+        .expect("provider is an enum");
+    assert!(
+        providers
+            .iter()
+            .any(|provider| provider == "openrouter"),
+        "every provider the binary accepts is in the schema: {providers:?}"
+    );
+}
+
+// ---- https://github.com/MaximeGaudin/slint/issues/56 — a user-global config ----
+
+/// Sets `XDG_CONFIG_HOME` for one run and puts a user config beneath it.
+///
+/// The config only sets a provider and no model, so no other test's run changes
+/// behaviour while the variable is set: the model pass stays unconfigured.
+struct UserConfig(tempfile::TempDir);
+
+impl UserConfig {
+    fn with_provider(provider: &str) -> Self {
+        let home = tempfile::tempdir().unwrap();
+        let directory = home.path().join("slint");
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(
+            directory.join("config.toml"),
+            format!("[llm]\nprovider = \"{provider}\"\n"),
+        )
+        .unwrap();
+
+        // SAFETY: the binary is a separate process, and the variable is removed before any
+        // assertion can fail below.
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", home.path()) };
+        UserConfig(home)
+    }
+}
+
+impl Drop for UserConfig {
+    fn drop(&mut self) {
+        unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
+    }
+}
+
+#[test]
+fn a_user_global_config_is_used_when_no_project_config_exists() {
+    let temporary = tempfile::tempdir().unwrap();
+    write(temporary.path(), "photo-culling", GOOD);
+    let _user = UserConfig::with_provider("openai");
+
+    let output = slint_in(temporary.path(), &["--print-config", "--no-llm"]);
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("print-config prints valid JSON");
+    assert_eq!(
+        parsed["llm"]["provider"], "openai",
+        "the user config is the fallback: {parsed}"
+    );
+}
+
+#[test]
+fn a_project_config_wins_over_the_user_config() {
+    let temporary = tempfile::tempdir().unwrap();
+    write(temporary.path(), "photo-culling", GOOD);
+    fs::write(
+        temporary.path().join("slint.toml"),
+        "[llm]\nprovider = \"groq\"\n",
+    )
+    .unwrap();
+    let _user = UserConfig::with_provider("openai");
+
+    let output = slint_in(temporary.path(), &["--print-config", "--no-llm"]);
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("print-config prints valid JSON");
+    assert_eq!(
+        parsed["llm"]["provider"], "groq",
+        "the project's own config is what counts: {parsed}"
     );
 }
