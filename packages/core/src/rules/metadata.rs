@@ -188,15 +188,32 @@ mod tests {
             .collect()
     }
 
+    /// Regression for #81: the frontmatter extensions Claude Code documents are first-class
+    /// top-level fields, not unknown keys to remove.
     #[test]
-    fn disable_model_invocation_is_an_unknown_field() {
-        let messages = unknown_field_messages(
-            "---\nname: a\ndescription: b\ndisable-model-invocation: true\n---\n\nBody.\n",
-        );
+    fn claude_code_extension_fields_are_recognized() {
+        for field in [
+            "disable-model-invocation",
+            "user-invocable",
+            "disallowed-tools",
+            "model",
+            "effort",
+            "context",
+            "agent",
+            "background",
+            "hooks",
+            "paths",
+            "shell",
+            "argument-hint",
+            "arguments",
+            "when_to_use",
+        ] {
+            let messages = unknown_field_messages(&format!(
+                "---\nname: a\ndescription: b\n{field}: true\n---\n\nBody.\n"
+            ));
 
-        assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0].severity, Severity::Warning);
-        assert!(messages[0].message.contains("disable-model-invocation"));
+            assert!(messages.is_empty(), "\"{field}\" should be recognized");
+        }
     }
 
     #[test]
@@ -235,5 +252,56 @@ mod tests {
 
         assert_eq!(messages.len(), 1);
         assert!(messages[0].message.contains("team"));
+    }
+
+    fn type_error_messages(source: &str) -> Vec<crate::diagnostics::Message> {
+        let parsed = skill::parse(source);
+        crate::engine::lint_skill(&parsed, &crate::config::Config::default())
+            .into_iter()
+            .filter(|message| message.rule == "frontmatter/type-error")
+            .collect()
+    }
+
+    /// Regression for #94: a frontmatter value that YAML parses as a non-string scalar must be
+    /// reported as a type error, not quietly stringified.
+    #[test]
+    fn a_boolean_description_is_a_type_error() {
+        let messages = type_error_messages("---\nname: a\ndescription: true\n---\n\nBody.\n");
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].severity, Severity::Error);
+        assert!(messages[0].message.contains("boolean"));
+    }
+
+    #[test]
+    fn a_numeric_name_is_a_type_error() {
+        let messages = type_error_messages("---\nname: 12345\ndescription: b\n---\n\nBody.\n");
+
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].message.contains("number"));
+    }
+
+    #[test]
+    fn a_null_description_is_a_type_error() {
+        let messages = type_error_messages("---\nname: a\ndescription:\n---\n\nBody.\n");
+
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].message.contains("null"));
+    }
+
+    #[test]
+    fn a_sequence_description_is_a_type_error() {
+        let messages = type_error_messages(
+            "---\nname: a\ndescription:\n  - first\n  - second\n---\n\nBody.\n",
+        );
+
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].message.contains("sequence"));
+    }
+
+    #[test]
+    fn string_and_absent_fields_are_not_type_errors() {
+        assert!(type_error_messages("---\nname: a\ndescription: b\n---\n\nBody.\n").is_empty());
+        assert!(type_error_messages("---\ndescription: b\n---\n\nBody.\n").is_empty());
     }
 }

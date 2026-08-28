@@ -48,6 +48,9 @@ pub struct Skill {
     pub body_offset: usize,
     /// Frontmatter keys other than name and description, in the order they were written.
     pub metadata: BTreeMap<String, String>,
+    /// The YAML type each top-level frontmatter key parsed as, so a rule can tell a
+    /// `description: true` was not written as a string.
+    pub scalar_types: BTreeMap<String, String>,
     pub files: Vec<BundledFile>,
     /// What could not be read, said out loud rather than dropped.
     pub notes: Vec<String>,
@@ -243,6 +246,7 @@ pub fn parse(source: &str) -> Skill {
         body: source.to_string(),
         body_offset: 0,
         metadata: BTreeMap::new(),
+        scalar_types: BTreeMap::new(),
         files: Vec::new(),
         notes: Vec::new(),
     };
@@ -412,14 +416,95 @@ mod tests {
     }
 
     #[test]
-    fn a_folded_description_is_joined_rather_than_truncated() {
+    fn a_folded_description_is_folded_like_a_real_yaml_parser() {
         let skill = parse(
             "---\nname: a\ndescription: >-\n  First half of the sentence,\n  and the rest of it.\n---\n\nBody.\n",
         );
 
         assert_eq!(
             skill.description,
-            ">- First half of the sentence, and the rest of it."
+            "First half of the sentence, and the rest of it."
+        );
+    }
+
+    #[test]
+    fn a_folded_block_scalar_indicator_does_not_leak_into_the_description() {
+        // Regression for #64: `>` and `|` are YAML block-scalar indicators, not text. A real YAML
+        // parser folds the lines that follow and never keeps the indicator character.
+        let skill = parse(
+            "---\nname: demo-skill\ndescription: >\n  Analyzes call transcripts and flags compliance issues.\n  Use when reviewing support calls for compliance keywords.\n---\n\nBody.\n",
+        );
+
+        assert_eq!(
+            skill.description,
+            "Analyzes call transcripts and flags compliance issues. Use when reviewing support calls for compliance keywords.\n"
+        );
+    }
+
+    #[test]
+    fn a_literal_block_scalar_keeps_its_line_breaks() {
+        let skill = parse(
+            "---\nname: a\ndescription: |\n  Line one.\n  Line two.\n---\n\nBody.\n",
+        );
+
+        assert_eq!(skill.description, "Line one.\nLine two.\n");
+    }
+
+    #[test]
+    fn a_nested_metadata_map_is_parsed_into_pairs() {
+        // Regression for #123: `metadata` is a YAML mapping of key-value pairs, not a text blob.
+        let skill = parse(
+            "---\nname: a\ndescription: b\nmetadata:\n  author: X\n  version: 1.0\n---\n\nBody.\n",
+        );
+
+        assert_eq!(skill.metadata.get("metadata.author"), Some(&"X".to_string()));
+        assert_eq!(
+            skill.metadata.get("metadata.version"),
+            Some(&"1.0".to_string())
+        );
+    }
+
+    #[test]
+    fn a_boolean_description_is_recorded_with_its_type() {
+        // Regression for #94: the parser must not quietly stringify a non-string scalar.
+        let skill = parse("---\nname: a\ndescription: true\n---\n\nBody.\n");
+
+        assert_eq!(skill.description, "true");
+        assert_eq!(
+            skill.scalar_types.get("description"),
+            Some(&"boolean".to_string())
+        );
+    }
+
+    #[test]
+    fn a_number_name_is_recorded_with_its_type() {
+        let skill = parse("---\nname: 12345\ndescription: b\n---\n\nBody.\n");
+
+        assert_eq!(skill.name, "12345");
+        assert_eq!(skill.scalar_types.get("name"), Some(&"number".to_string()));
+    }
+
+    #[test]
+    fn a_sequence_description_is_recorded_as_a_sequence() {
+        let skill = parse(
+            "---\nname: a\ndescription:\n  - first\n  - second\n---\n\nBody.\n",
+        );
+
+        assert_eq!(skill.description, "");
+        assert_eq!(
+            skill.scalar_types.get("description"),
+            Some(&"sequence".to_string())
+        );
+    }
+
+    #[test]
+    fn string_values_record_their_type_as_string() {
+        let skill = parse(DOCUMENT);
+
+        assert_eq!(skill.scalar_types.get("name"), Some(&"string".to_string()));
+        assert_eq!(
+            skill.scalar_types.get("description"),
+            Some(&"string".to_string())
         );
     }
 
