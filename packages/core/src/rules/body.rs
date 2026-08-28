@@ -813,6 +813,41 @@ mod tests {
         assert!(messages[0].file.ends_with("scripts/cull.py"));
     }
 
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/95 —
+    /// placeholder values in author-written setup instructions are not leaks.
+    #[test]
+    fn a_placeholder_password_in_the_documentation_is_not_a_leak() {
+        for line in [
+            "1. In the config file, set `password=\"changeme123\"` before first run.",
+            "1. Then set password=\"your-password-here\" in the same file.",
+        ] {
+            let skill = skill_with_body(&format!("\n## Setup\n\n{line}\n"));
+            assert!(check(&SECRET_RULE, &skill).is_empty(), "for {line}");
+        }
+    }
+
+    #[test]
+    fn a_placeholder_password_in_a_bundled_file_is_not_a_leak() {
+        let mut skill = good_skill();
+        skill.files.push(crate::skill::BundledFile {
+            path: "scripts/setup.py".into(),
+            bytes: 40,
+            executable: true,
+            text: Some("password = \"changeme123\"  # default for the demo\n".into()),
+        });
+
+        assert!(check(&SECRET_RULE, &skill).is_empty());
+    }
+
+    #[test]
+    fn a_real_looking_password_assignment_is_still_reported() {
+        let skill = skill_with_body("\n## Setup\n\n1. Log in with password=\"Kj9#mPx2vQz\".\n");
+        let messages = check(&SECRET_RULE, &skill);
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].severity, Severity::Error);
+    }
+
     #[test]
     fn a_dated_instruction_is_reported() {
         for line in [
