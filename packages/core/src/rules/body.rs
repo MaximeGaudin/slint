@@ -574,8 +574,10 @@ impl Rule for ImperativeInstructions {
             .expect("the soft-instruction pattern compiles")
         });
         static PASSIVE: LazyLock<Regex> = LazyLock::new(|| {
-            Regex::new(r"(?i)\b([A-Za-z][A-Za-z0-9_-]*(?:\s+[A-Za-z][A-Za-z0-9_-]*){0,3}\s+should be\s+[A-Za-z]+(?:ed|en|t)?)\b")
-                .expect("the passive-instruction pattern compiles")
+            Regex::new(
+                r"(?i)\b([A-Za-z][A-Za-z0-9_-]*(?:\s+[A-Za-z][A-Za-z0-9_-]*){0,3}\s+should be\s+(?:[a-z]+ed|done|made|given|taken|written|shown|known|seen|held|kept|left|sent|built|told|met|paid|put|set|cut|run|read|found|lost|meant|said|led|brought|bought|caught|taught|thought|sold|grown|thrown|drawn|spoken|broken|hidden|chosen|driven|forgotten|stolen|understood|won|eaten|frozen|worn|torn|blown|flown|begun|ridden|risen|fallen|shaken|mistaken|bitten|lain|laid|dealt|felt|gotten))\b",
+            )
+            .expect("the passive-instruction pattern compiles")
         });
         static HEDGE: LazyLock<Regex> = LazyLock::new(|| {
             Regex::new(r"(?i)\b(generally|usually|ideally)\b").expect("the hedge pattern compiles")
