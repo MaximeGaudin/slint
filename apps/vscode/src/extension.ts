@@ -205,6 +205,14 @@ async function lintActiveWithModel(): Promise<void> {
 async function lintWorkspace(options: { model: boolean }): Promise<void> {
   const folders = vscode.workspace.workspaceFolders ?? []
 
+  // Single-file mode: there is no workspace to iterate, so say so instead of doing nothing.
+  if (folders.length === 0) {
+    void vscode.window.showInformationMessage(
+      'Open a folder to lint the whole workspace; use "slint: Lint with model (current skill)" for a single file.',
+    )
+    return
+  }
+
   // One slint invocation per folder: the CLI parallelizes the model pass across skills inside it.
   for (const folder of folders) {
     await lint(folder.uri.fsPath, options)
