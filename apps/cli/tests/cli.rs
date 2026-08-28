@@ -84,7 +84,11 @@ fn an_empty_directory_is_a_failure_not_a_clean_run() {
         "{}",
         stdout(&output)
     );
-    assert!(stdout(&output).contains("No SKILL.md"), "{}", stdout(&output));
+    assert!(
+        stdout(&output).contains("No SKILL.md"),
+        "{}",
+        stdout(&output)
+    );
 }
 
 #[test]

@@ -212,7 +212,8 @@ pub fn run(
     passes: Passes,
 ) -> Result<Report> {
     let ignore = skill::build_ignore(&config.ignore)?;
-    let directories = skill::discover(paths, &ignore)?;
+    let discovery = skill::discover(paths, &ignore)?;
+    let directories = discovery.directories;
 
     let mut skills = Vec::new();
     let mut unreadable = Vec::new();
@@ -346,6 +347,7 @@ pub fn run(
     Ok(Report {
         skills: per_skill,
         fixed: 0,
+        notes: discovery.skipped,
     }
     .sorted())
 }
