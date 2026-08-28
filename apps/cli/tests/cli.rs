@@ -29,6 +29,10 @@ fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).to_string()
 }
 
+fn stderr(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stderr).to_string()
+}
+
 #[test]
 fn a_clean_base_exits_zero_and_says_so() {
     let temporary = tempfile::tempdir().unwrap();
@@ -257,7 +261,9 @@ fn plugins_can_be_skipped_without_editing_the_config() {
 }
 
 #[test]
-fn init_writes_a_config_and_refuses_to_overwrite_one() {
+fn init_writes_a_config_and_leaves_an_existing_one_alone() {
+    // https://github.com/MaximeGaudin/slint/issues/35: running init twice is an expected,
+    // idempotent no-op, not a failure of slint itself.
     let temporary = tempfile::tempdir().unwrap();
 
     let first = Command::new(env!("CARGO_BIN_EXE_slint"))
@@ -277,7 +283,12 @@ fn init_writes_a_config_and_refuses_to_overwrite_one() {
 
     assert_eq!(
         second.status.code(),
-        Some(3),
+        Some(0),
+        "nothing was asked for and nothing is broken"
+    );
+    assert!(stderr(&second).contains("already exists"));
+    assert!(
+        temporary.path().join("slint.toml").is_file(),
         "it does not clobber what is there"
     );
 }
