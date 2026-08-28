@@ -278,6 +278,77 @@ mod tests {
         );
     }
 
+    /// A report whose one skill carries one fix for the given path.
+    fn report_fixing(path: &Path, fix: Fix) -> Report {
+        Report {
+            skills: vec![SkillReport {
+                path: path.parent().unwrap().display().to_string(),
+                name: "a".into(),
+                messages: vec![message(path.to_str().unwrap(), Some(fix))],
+                notes: vec![],
+            }],
+            fixed: 0,
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fix_replaces_the_file_rather_than_rewriting_it_in_place() {
+        // The observable signature of temp-file + rename: what is on disk afterwards is a new
+        // file. A truncate-and-write keeps the old one, so a crash mid-write leaves it half
+        // written with the original gone.
+        use std::os::unix::fs::MetadataExt;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("SKILL.md");
+        fs::write(&path, "Read scripts\\notes.md.\n").unwrap();
+        let before = fs::metadata(&path).unwrap().ino();
+
+        apply(&report_fixing(&path, fix(0, 22, "Read scripts/notes.md."))).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "Read scripts/notes.md.\n"
+        );
+        assert_ne!(
+            before,
+            fs::metadata(&path).unwrap().ino(),
+            "the file was replaced, not truncated"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_replaced_file_keeps_the_permissions_it_had() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("SKILL.md");
+        fs::write(&path, "Read scripts\\notes.md.\n").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+
+        apply(&report_fixing(&path, fix(0, 22, "Read scripts/notes.md."))).unwrap();
+
+        let mode = fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o644, "the replacement keeps the file's mode");
+    }
+
+    #[test]
+    fn applying_a_fix_leaves_no_temporary_files_behind() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("SKILL.md");
+        fs::write(&path, "Read scripts\\notes.md.\n").unwrap();
+
+        apply(&report_fixing(&path, fix(0, 22, "Read scripts/notes.md."))).unwrap();
+
+        let entries = fs::read_dir(temporary.path()).unwrap().count();
+        assert_eq!(entries, 1, "only the skill file remains");
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "Read scripts/notes.md.\n"
+        );
+    }
+
     #[test]
     fn a_report_with_nothing_fixable_writes_nothing() {
         let temporary = tempfile::tempdir().unwrap();
