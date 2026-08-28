@@ -1018,8 +1018,9 @@ Feel free to rewrite the brief once you have enough answers.\n",
 
     #[test]
     fn a_passive_procedure_with_an_irregular_participle_is_reported() {
-        let skill =
-            skill_with_body("\n## Workflow\n\n1. The result should be written to disk before exiting.\n");
+        let skill = skill_with_body(
+            "\n## Workflow\n\n1. The result should be written to disk before exiting.\n",
+        );
         let messages = check(&IMPERATIVE_RULE, &skill);
 
         assert_eq!(messages.len(), 1);

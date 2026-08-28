@@ -50,35 +50,35 @@ fn is_intraword(description: &str, start: usize, end: usize) -> bool {
 }
 
 fn has_underscore_emphasis(description: &str) -> bool {
-    UNDERSCORE
-        .captures_iter(description)
-        .any(|captures| {
-            let whole = captures.get(0).expect("a match always has group 0");
-            !is_intraword(description, whole.start(), whole.end())
-        })
+    UNDERSCORE.captures_iter(description).any(|captures| {
+        let whole = captures.get(0).expect("a match always has group 0");
+        !is_intraword(description, whole.start(), whole.end())
+    })
 }
 
 /// The description with every tag and emphasis delimiter gone and the wrapped words kept.
 fn strip_markup(description: &str) -> String {
-    let without_underscores = UNDERSCORE.replace_all(description, |captures: &regex::Captures<'_>| {
-        let whole = captures.get(0).expect("a match always has group 0");
-        if is_intraword(description, whole.start(), whole.end()) {
-            whole.as_str().to_string()
-        } else {
-            captures[1].to_string()
-        }
-    });
+    let without_underscores =
+        UNDERSCORE.replace_all(description, |captures: &regex::Captures<'_>| {
+            let whole = captures.get(0).expect("a match always has group 0");
+            if is_intraword(description, whole.start(), whole.end()) {
+                whole.as_str().to_string()
+            } else {
+                captures[1].to_string()
+            }
+        });
 
-    MARKUP.replace_all(&without_underscores, |captures: &regex::Captures<'_>| {
-        captures
-            .iter()
-            .skip(1)
-            .flatten()
-            .next()
-            .map(|found| found.as_str().to_string())
-            .unwrap_or_default()
-    })
-    .to_string()
+    MARKUP
+        .replace_all(&without_underscores, |captures: &regex::Captures<'_>| {
+            captures
+                .iter()
+                .skip(1)
+                .flatten()
+                .next()
+                .map(|found| found.as_str().to_string())
+                .unwrap_or_default()
+        })
+        .to_string()
 }
 
 #[derive(Debug, Deserialize)]
