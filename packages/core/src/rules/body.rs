@@ -937,6 +937,32 @@ Feel free to rewrite the brief once you have enough answers.\n",
         assert!(messages[0].message.contains("should be checked"));
     }
 
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/73 —
+    /// "should be <adjective>" is a description, not a passive construction.
+    #[test]
+    fn a_should_be_with_an_adjective_is_not_reported_as_passive() {
+        for line in [
+            "The output should be correct before you continue.",
+            "The final report should be short.",
+        ] {
+            let skill = skill_with_body(&format!("\n## Workflow\n\n1. {line}\n"));
+            assert!(
+                check(&IMPERATIVE_RULE, &skill).is_empty(),
+                "\"{line}\" is not passive"
+            );
+        }
+    }
+
+    #[test]
+    fn a_passive_procedure_with_an_irregular_participle_is_reported() {
+        let skill =
+            skill_with_body("\n## Workflow\n\n1. The result should be written to disk before exiting.\n");
+        let messages = check(&IMPERATIVE_RULE, &skill);
+
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].message.contains("should be written"));
+    }
+
     #[test]
     fn stacked_hedges_in_one_step_are_reported() {
         let skill = skill_with_body(
