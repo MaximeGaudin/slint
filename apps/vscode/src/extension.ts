@@ -553,8 +553,10 @@ function toDiagnostic(finding: Finding): vscode.Diagnostic {
     target: vscode.Uri.parse(finding.reference.url),
   }
 
+  // Fixable findings are faded: the text is flagged as something slint can clean up for you
+  // (`slint --fix`, or the "Apply the computed fixes" command). An empty tag array showed nothing.
   if (finding.fix) {
-    diagnostic.tags = []
+    diagnostic.tags = [vscode.DiagnosticTag.Unnecessary]
   }
 
   return diagnostic
