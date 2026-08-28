@@ -6,13 +6,36 @@
 
 use std::fs;
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
+
+/// The colour environment variables, so a test can pin them and nothing leaks in from the shell.
+const COLOUR_VARIABLES: [&str; 5] = [
+    "NO_COLOR",
+    "CLICOLOR",
+    "CLICOLOR_FORCE",
+    "FORCE_COLOR",
+    "TERM",
+];
 
 fn slint(arguments: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_slint"))
-        .args(arguments)
-        .output()
-        .expect("running slint")
+    let mut command = Command::new(env!("CARGO_BIN_EXE_slint"));
+    for name in COLOUR_VARIABLES {
+        command.env_remove(name);
+    }
+    command.args(arguments).output().expect("running slint")
+}
+
+/// Runs slint with the colour environment pinned: the named variables are set, every other colour
+/// variable is removed, so the run sees exactly what the test says it should.
+fn slint_with_environment(variables: &[(&str, &str)], arguments: &[&str]) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_slint"));
+    for name in COLOUR_VARIABLES {
+        command.env_remove(name);
+    }
+    for (name, value) in variables {
+        command.env(name, value);
+    }
+    command.args(arguments).output().expect("running slint")
 }
 
 fn write(root: &Path, name: &str, document: &str) {
@@ -407,5 +430,176 @@ fn an_undeclared_host_specific_tool_in_the_body_is_reported() {
     assert!(
         text.contains("AskQuestion"),
         "finding should name the tool:\n{text}"
+    );
+}
+
+// Colour is decided by more than the `--no-color` flag: the standard environment conventions
+// (https://no-color.org and https://bixense.com/clicolors/) apply as well. These tests run the
+// binary with stdout piped, which is never a terminal, so anything coloured must have been forced.
+
+#[test]
+fn clicolor_force_colours_the_report_even_when_stdout_is_a_pipe() {
+    let temporary = tempfile::tempdir().unwrap();
+    write(temporary.path(), "helper", BROKEN);
+
+    let output = slint_with_environment(
+        &[("CLICOLOR_FORCE", "1")],
+        &[temporary.path().to_str().unwrap(), "--no-llm"],
+    );
+
+    assert!(
+        stdout(&output).contains('\x1b'),
+        "CLICOLOR_FORCE should force ANSI colour into the piped report:\n{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn force_color_colours_the_report_even_when_stdout_is_a_pipe() {
+    let temporary = tempfile::tempdir().unwrap();
+    write(temporary.path(), "helper", BROKEN);
+
+    let output = slint_with_environment(
+        &[("FORCE_COLOR", "1")],
+        &[temporary.path().to_str().unwrap(), "--no-llm"],
+    );
+
+    assert!(
+        stdout(&output).contains('\x1b'),
+        "FORCE_COLOR should force ANSI colour into the piped report:\n{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn no_color_beats_being_forced() {
+    let temporary = tempfile::tempdir().unwrap();
+    write(temporary.path(), "helper", BROKEN);
+
+    let output = slint_with_environment(
+        &[("NO_COLOR", "1"), ("CLICOLOR_FORCE", "1")],
+        &[temporary.path().to_str().unwrap(), "--no-llm"],
+    );
+
+    assert!(
+        !stdout(&output).contains('\x1b'),
+        "NO_COLOR should keep the report plain"
+    );
+}
+
+#[test]
+fn clicolor_zero_beats_being_forced() {
+    let temporary = tempfile::tempdir().unwrap();
+    write(temporary.path(), "helper", BROKEN);
+
+    let output = slint_with_environment(
+        &[("CLICOLOR", "0"), ("CLICOLOR_FORCE", "1")],
+        &[temporary.path().to_str().unwrap(), "--no-llm"],
+    );
+
+    assert!(
+        !stdout(&output).contains('\x1b'),
+        "CLICOLOR=0 should keep the report plain"
+    );
+}
+
+#[test]
+fn term_dumb_beats_being_forced() {
+    let temporary = tempfile::tempdir().unwrap();
+    write(temporary.path(), "helper", BROKEN);
+
+    let output = slint_with_environment(
+        &[("TERM", "dumb"), ("CLICOLOR_FORCE", "1")],
+        &[temporary.path().to_str().unwrap(), "--no-llm"],
+    );
+
+    assert!(
+        !stdout(&output).contains('\x1b'),
+        "TERM=dumb should keep the report plain"
+    );
+}
+
+#[test]
+fn the_no_color_flag_beats_being_forced() {
+    let temporary = tempfile::tempdir().unwrap();
+    write(temporary.path(), "helper", BROKEN);
+
+    let output = slint_with_environment(
+        &[("CLICOLOR_FORCE", "1")],
+        &[temporary.path().to_str().unwrap(), "--no-llm", "--no-color"],
+    );
+
+    assert!(
+        !stdout(&output).contains('\x1b'),
+        "--no-color should keep the report plain"
+    );
+}
+
+#[test]
+fn an_empty_no_color_is_not_a_request_to_stop() {
+    let temporary = tempfile::tempdir().unwrap();
+    write(temporary.path(), "helper", BROKEN);
+
+    let output = slint_with_environment(
+        &[("NO_COLOR", ""), ("CLICOLOR_FORCE", "1")],
+        &[temporary.path().to_str().unwrap(), "--no-llm"],
+    );
+
+    assert!(
+        stdout(&output).contains('\x1b'),
+        "an empty NO_COLOR is treated as unset by the convention"
+    );
+}
+
+#[test]
+fn clicolor_force_zero_does_not_force_anything() {
+    let temporary = tempfile::tempdir().unwrap();
+    write(temporary.path(), "helper", BROKEN);
+
+    let output = slint_with_environment(
+        &[("CLICOLOR_FORCE", "0")],
+        &[temporary.path().to_str().unwrap(), "--no-llm"],
+    );
+
+    assert!(
+        !stdout(&output).contains('\x1b'),
+        "CLICOLOR_FORCE=0 leaves the piped report plain"
+    );
+}
+
+#[test]
+fn a_closed_pipe_exits_cleanly_instead_of_failing_the_run() {
+    let temporary = tempfile::tempdir().unwrap();
+
+    // One skill with thousands of findings, so the report is far larger than any pipe buffer and
+    // the writer is guaranteed to hit the closed end rather than drain into it, which is what
+    // `slint <path> | head -1` does once head has its line.
+    let steps: String = (0..2_000)
+        .map(|index| format!("{index}. Read scripts\\notes-{index}.md.\n"))
+        .collect();
+    write(
+        temporary.path(),
+        "helper",
+        &format!(
+            "---\nname: helper\ndescription: Culls a photo shoot in Lightroom by flagging the keepers and rejecting the rest. Use when triaging RAW files after a session.\n---\n\n## Helper\n\n{steps}"
+        ),
+    );
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_slint"))
+        .arg(temporary.path().join("helper"))
+        .args(["--no-llm"])
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("spawning slint");
+
+    // The reader hangs up before the report arrives, as head does.
+    drop(child.stdout.take());
+
+    let status = child.wait().expect("waiting for slint");
+
+    assert_eq!(
+        status.code(),
+        Some(0),
+        "a downstream reader closing the pipe is not a lint failure"
     );
 }
