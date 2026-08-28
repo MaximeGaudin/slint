@@ -509,22 +509,36 @@ fn with_contents(text: &str) -> Option<String> {
     let lines: Vec<&str> = text.lines().collect();
     let ending = dominant_line_ending(text);
 
-    let headings: Vec<String> = lines
-        .iter()
-        .filter(|line| line.starts_with("## "))
-        .map(|line| format!("- {}", line.trim_start_matches("## ")))
-        .collect();
+    // Fenced blocks are code, not prose: a `## ` comment in bash is not a section and a `#`
+    // comment is not the title, so neither scan reads anything inside ``` or ~~~ fences.
+    let mut headings: Vec<String> = Vec::new();
+    let mut title_after: Option<usize> = None;
+    let mut fenced = false;
+
+    for (index, line) in lines.iter().enumerate() {
+        let opening = line.trim_start();
+        if opening.starts_with("```") || opening.starts_with("~~~") {
+            fenced = !fenced;
+            continue;
+        }
+
+        if fenced {
+            continue;
+        }
+
+        if line.starts_with("## ") {
+            headings.push(format!("- {}", line.trim_start_matches("## ")));
+        } else if title_after.is_none() && line.starts_with("# ") {
+            // After the title if there is one, which is where a reader looks for a contents list.
+            title_after = Some(index + 1);
+        }
+    }
 
     if headings.is_empty() {
         return None;
     }
 
-    // After the title if there is one, which is where a reader looks for a contents list.
-    let at = lines
-        .iter()
-        .position(|line| line.starts_with("# ") && !line.starts_with("## "))
-        .map(|index| index + 1)
-        .unwrap_or(0);
+    let at = title_after.unwrap_or(0);
 
     let mut rebuilt: Vec<String> = lines[..at].iter().map(|line| line.to_string()).collect();
     rebuilt.push(String::new());
@@ -837,8 +851,9 @@ mod tests {
         let fixed = &messages[0].fix.as_ref().unwrap().replacement;
         assert!(fixed.contains("- Real Section"));
         assert!(
-            !fixed.contains("bash comment"),
-            "a comment inside a fence is not a section:\n{fixed}"
+            !fixed.contains("- this is a bash comment"),
+            "a comment inside a fence is not a section:\n{}",
+            &fixed[..fixed.find("- Section 0").unwrap()]
         );
     }
 
@@ -861,7 +876,7 @@ mod tests {
 
         let fixed = &messages[0].fix.as_ref().unwrap().replacement;
         assert!(
-            !fixed.contains("fenced example"),
+            !fixed.contains("- this belongs to the fenced example"),
             "a ~~~ fence hides its lines too:\n{fixed}"
         );
     }
@@ -904,9 +919,8 @@ mod tests {
         // inside the fenced block it was misread from.
         let fixed = &messages[0].fix.as_ref().unwrap().replacement;
         assert!(
-            fixed.starts_with("## Contents"),
-            "the list must not be inserted inside the fence:\n{}",
-            &fixed[..fixed.find("- Alpha").unwrap()]
+            fixed.trim_start().starts_with("## Contents"),
+            "the list must not be inserted inside the fence:\n{fixed}"
         );
         assert!(fixed.contains("- Alpha"));
     }
