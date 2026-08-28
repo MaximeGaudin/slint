@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { describe, it } from 'node:test'
 import path from 'node:path'
+import { describe, it } from 'node:test'
 
 // The test script runs from apps/vscode (pnpm/turbo run it in the package directory).
 const extensionDir = process.cwd()
@@ -57,13 +57,31 @@ describe('Marketplace packaging (#31 #43 #46 #47 #48 #62)', () => {
   it('packages and validates the manifest on every CI run (#43)', () => {
     const ci = readFileSync(path.join(repoRoot, '.github', 'workflows', 'ci.yml'), 'utf8')
     assert.match(ci, /slint-vscode/)
-    assert.match(ci, /package:vscode/, 'CI must run the vsce packaging step to catch broken manifests')
+    assert.match(
+      ci,
+      /package:vscode/,
+      'CI must run the vsce packaging step to catch broken manifests',
+    )
   })
 
   it('publishes the extension from the release workflow (#43)', () => {
+    assert.match(
+      manifest.scripts['publish:marketplace'],
+      /vsce publish/,
+      'publish:marketplace must publish with vsce',
+    )
+    assert.match(
+      manifest.scripts['publish:openvsx'],
+      /ovsx publish/,
+      'publish:openvsx must publish with ovsx',
+    )
     const release = readFileSync(path.join(repoRoot, '.github', 'workflows', 'release.yml'), 'utf8')
-    assert.match(release, /vsce publish/, 'the release workflow must publish to the VS Code Marketplace')
-    assert.match(release, /ovsx publish/, 'the release workflow must publish to Open VSX')
+    assert.match(
+      release,
+      /publish:marketplace/,
+      'the release workflow must publish to the VS Code Marketplace',
+    )
+    assert.match(release, /publish:openvsx/, 'the release workflow must publish to Open VSX')
     assert.match(release, /VSCE_PAT/)
     assert.match(release, /OVSX_PAT/)
   })
