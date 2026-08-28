@@ -15,7 +15,7 @@ It is built for terminals, CI, and editors:
 - **Optional LLM pass** — eight rules that need a reader run only when you pass `--llm`, as their own pass
 - **Honest about skips** — rules that need a model say so; a provider that fails says what it said
 - **Plugins** — TOML rule packs or sandboxed Wasm (Extism); same citation standard as built-ins
-- **Editor integration** — VS Code / Cursor extension turns findings into diagnostics on save
+- **Editor integration** — VS Code extension turns findings into diagnostics on save
 
 **Start here:** [Install](#install) · [Quick start](#quick-start) · [Configuration](#configure) · [Model pass](#the-model-half) · [Plugins](#plugins) · [Monorepo layout](#monorepo-layout) · [Docs site](apps/docs)
 
@@ -160,12 +160,12 @@ Both are held to the same standard as the built-in catalogue: a namespaced rule 
 
 ## Editors
 
-`[apps/vscode](apps/vscode)` is a VS Code / Cursor extension that runs slint on save (and optionally the model pass), merges static and model diagnostics, and shows citations on hover.
+`[apps/vscode](apps/vscode)` is a VS Code extension that runs slint on save (and optionally the model pass), merges static and model diagnostics, and shows citations on hover. It targets VS Code 1.90+; forks such as Cursor are expected to work (the extension sticks to long-stable APIs) but are not CI-verified.
 
 ```bash
 pnpm install
 pnpm build:vscode
-# package + install the .vsix into Cursor / VS Code
+# package + install the .vsix into VS Code
 ```
 
 
@@ -176,7 +176,7 @@ pnpm build:vscode
 | Path                             | What it is                                                       |
 | -------------------------------- | ---------------------------------------------------------------- |
 | `[apps/cli](apps/cli)`           | `slint` binary (Rust)                                            |
-| `[apps/vscode](apps/vscode)`     | VS Code / Cursor extension                                       |
+| `[apps/vscode](apps/vscode)`     | VS Code extension                                                |
 | `[apps/docs](apps/docs)`         | Astro documentation site (rule catalogue synced from the binary) |
 | `[packages/core](packages/core)` | Shared Rust library (`slint`) used by the CLI                    |
 
