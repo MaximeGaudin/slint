@@ -90,6 +90,15 @@ pub fn render(report: &Report, colour: bool) -> String {
         }
     }
 
+    // About the run as a whole, not one skill: an argument that was not a skill at all.
+    for note in &report.notes {
+        out.push_str(&format!(
+            "  {}  {}\n",
+            paint("note", Paint::Blue, colour),
+            paint(note, Paint::Dim, colour)
+        ));
+    }
+
     out.push('\n');
     out.push_str(&summary(report, colour));
     out.push('\n');
@@ -153,6 +162,22 @@ fn counts_for(skill: &crate::diagnostics::SkillReport) -> String {
 
 /// The last line: what was found, and what can be done about it without thinking.
 fn summary(report: &Report, colour: bool) -> String {
+    if report.skills.is_empty() {
+        // A run that looked at nothing is not a clean pass: a typo'd CI path must never read as
+        // success, so this gets its own verdict rather than the all-clear.
+        let mut nothing = paint(
+            "No SKILL.md files found — nothing was linted.",
+            Paint::Yellow,
+            colour,
+        );
+
+        if report.fixed > 0 {
+            nothing.push_str(&format!("\n{} fix(es) applied.", report.fixed));
+        }
+
+        return nothing;
+    }
+
     let errors = report.errors();
     let warnings = report.warnings();
     let infos = report.infos();
@@ -260,23 +285,42 @@ mod tests {
 
     #[test]
     fn a_clean_run_says_so_rather_than_printing_nothing() {
+        let mut clean = sample();
+        for skill in &mut clean.skills {
+            skill.messages.clear();
+            skill.notes.clear();
+        }
+
+        assert!(render(&clean, false).contains("Nothing to report across 1 skill(s)."));
+    }
+
+    #[test]
+    fn a_run_that_lints_nothing_is_not_reported_as_clean() {
+        // https://github.com/MaximeGaudin/slint/issues/118: "found nothing to check" is a
+        // different verdict from "checked and all clean", and must not share its wording.
         let empty = Report {
             skills: vec![],
             fixed: 0,
+            notes: vec![],
         };
-        assert!(render(&empty, false).contains("Nothing to report"));
+        let text = render(&empty, false);
+
+        assert!(text.contains("No SKILL.md files found"), "{text}");
+        assert!(!text.contains("Nothing to report"), "{text}");
     }
 
     #[test]
     fn a_run_that_fixed_everything_still_says_what_it_did() {
-        let fixed = Report {
-            skills: vec![],
-            fixed: 3,
-        };
+        let mut fixed = sample();
+        for skill in &mut fixed.skills {
+            skill.messages.clear();
+            skill.notes.clear();
+        }
+        fixed.fixed = 3;
         let text = render(&fixed, false);
 
-        assert!(text.contains("Nothing to report"));
-        assert!(text.contains("3 fix(es) applied."));
+        assert!(text.contains("Nothing to report"), "{text}");
+        assert!(text.contains("3 fix(es) applied."), "{text}");
     }
 
     #[test]

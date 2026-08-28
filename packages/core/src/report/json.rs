@@ -104,6 +104,7 @@ mod tests {
         let empty = crate::Report {
             skills: vec![],
             fixed: 0,
+            notes: Vec::new(),
         };
         let parsed: serde_json::Value = serde_json::from_str(&render(&empty)).unwrap();
 

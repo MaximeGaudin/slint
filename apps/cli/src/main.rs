@@ -1,8 +1,8 @@
 //! The command line.
 //!
 //! Exit codes follow the convention the other skill linters settled on, so a CI script written for
-//! one works here: 0 clean, 1 errors, 2 warnings only, 3 slint itself failed. Data goes to stdout
-//! and everything else to stderr, so `slint --format json | jq` is always safe.
+//! one works here: 0 clean, 1 errors, 2 warnings only, 3 slint itself failed, 4 nothing was linted.
+//! Data goes to stdout and everything else to stderr, so `slint --format json | jq` is always safe.
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -23,6 +23,8 @@ mod code {
     pub const ERRORS: u8 = 1;
     pub const WARNINGS: u8 = 2;
     pub const FAILED: u8 = 3;
+    /// The run looked at zero skills: a typo'd path must not read as success.
+    pub const NOTHING_LINTED: u8 = 4;
 }
 
 #[derive(Parser, Debug)]
@@ -188,6 +190,12 @@ fn run(cli: &Cli) -> Result<u8> {
 
 /// What the run means, as a number.
 fn exit_code(report: &Report, max_warnings: i64) -> u8 {
+    // Nothing was looked at: a typo'd path or an empty directory is not a clean pass, and a CI
+    // job pointed at the wrong directory must not sit green forever.
+    if report.skills.is_empty() {
+        return code::NOTHING_LINTED;
+    }
+
     if report.errors() > 0 {
         return code::ERRORS;
     }
@@ -397,6 +405,18 @@ mod tests {
         assert_eq!(exit_code(&report_with(0, 3), 3), code::WARNINGS);
         assert_eq!(exit_code(&report_with(0, 4), 3), code::ERRORS);
         assert_eq!(exit_code(&report_with(0, 1), 0), code::ERRORS);
+    }
+
+    #[test]
+    fn a_run_that_lints_nothing_is_its_own_verdict_not_a_clean_pass() {
+        // https://github.com/MaximeGaudin/slint/issues/118
+        let report = Report {
+            skills: vec![],
+            fixed: 0,
+            notes: Vec::new(),
+        };
+
+        assert_eq!(exit_code(&report, -1), code::NOTHING_LINTED);
     }
 
     #[test]

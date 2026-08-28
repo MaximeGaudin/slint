@@ -178,6 +178,10 @@ pub struct Report {
     pub skills: Vec<SkillReport>,
     /// Fixes written to disk during this run, when `--fix` was given.
     pub fixed: usize,
+    /// About the run as a whole rather than one skill: arguments that were skipped, a discovery
+    /// that came up empty. Said out loud rather than inferred from an empty result.
+    #[serde(default)]
+    pub notes: Vec<String>,
 }
 
 impl Report {
@@ -297,6 +301,7 @@ mod tests {
                 notes: vec![],
             }],
             fixed: 0,
+            notes: Vec::new(),
         };
 
         assert_eq!(report.errors(), 1);
@@ -319,6 +324,7 @@ mod tests {
                 notes: vec![],
             }],
             fixed: 0,
+            notes: Vec::new(),
         }
         .sorted();
 
@@ -348,6 +354,7 @@ mod tests {
                 notes: vec![],
             }],
             fixed: 0,
+            notes: Vec::new(),
         };
 
         assert_eq!(report.fixable(), 1);
