@@ -300,9 +300,30 @@ impl Rule for PosixPaths {
     }
 
     fn check(&self, context: &mut RuleContext<'_>) {
-        let source = context.skill.source.clone();
+        // The body's offset is measured after a byte-order mark was stripped, while fixes are
+        // byte offsets into the file as it is on disk.
+        let mark = if context.skill.source.starts_with('\u{feff}') {
+            '\u{feff}'.len_utf8()
+        } else {
+            0
+        };
 
-        for (index, line) in context.skill.body.lines().enumerate() {
+        let mut offset = context.skill.body_offset + mark;
+        let lines: Vec<(&str, usize)> = context
+            .skill
+            .body
+            .split_inclusive('\n')
+            .map(|line| {
+                let start = offset;
+                offset += line.len();
+
+                let content = line.strip_suffix('\n').unwrap_or(line);
+                let content = content.strip_suffix('\r').unwrap_or(content);
+                (content, start)
+            })
+            .collect();
+
+        for (index, (line, start)) in lines.into_iter().enumerate() {
             if line.contains("http") {
                 continue;
             }
@@ -314,10 +335,12 @@ impl Rule for PosixPaths {
             let document_line = context.skill.document_line(index + 1);
             let location = Location::span(document_line, found.start() + 1, found.len());
 
-            // The whole document, with every separator normalised: two backslashes on one line are
-            // one problem, and a fix per occurrence would fight itself on the next pass.
+            // The whole line, with every separator normalised: two backslashes on one line are
+            // one problem, and a fix per occurrence would fight itself on the next pass. Scoped
+            // to the line rather than the document, so it never overlaps another fix elsewhere
+            // in SKILL.md and both apply in one --fix invocation.
             let replacement = WINDOWS_PATH
-                .replace_all(&source, |captures: &regex::Captures<'_>| {
+                .replace_all(line, |captures: &regex::Captures<'_>| {
                     captures[0].replace('\\', "/")
                 })
                 .to_string();
@@ -326,10 +349,10 @@ impl Rule for PosixPaths {
                 format!("\"{}\" is a Windows path", found.as_str()),
                 location,
                 Fix {
-                    start: 0,
-                    end: source.len(),
+                    start,
+                    end: start + line.len(),
                     replacement,
-                    description: "Replaces backslash separators with forward slashes throughout."
+                    description: "Replaces backslash separators with forward slashes on this line."
                         .into(),
                 },
             );
