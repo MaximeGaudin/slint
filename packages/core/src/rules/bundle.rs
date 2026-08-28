@@ -507,6 +507,7 @@ fn has_contents(text: &str) -> bool {
 
 fn with_contents(text: &str) -> Option<String> {
     let lines: Vec<&str> = text.lines().collect();
+    let ending = dominant_line_ending(text);
 
     let headings: Vec<String> = lines
         .iter()
@@ -532,12 +533,26 @@ fn with_contents(text: &str) -> Option<String> {
     rebuilt.extend(headings);
     rebuilt.extend(lines[at..].iter().map(|line| line.to_string()));
 
-    let mut joined = rebuilt.join("\n");
-    if text.ends_with('\n') {
-        joined.push('\n');
+    // The file's own convention is kept: a fix that rewrites the ending of every line it never
+    // meant to touch is not a fix but a silent re-encoding.
+    let mut joined = rebuilt.join(ending);
+    if text.ends_with(ending) {
+        joined.push_str(ending);
     }
 
     Some(joined)
+}
+
+/// The line ending the file mostly uses, so a rewrite speaks the file's own dialect.
+fn dominant_line_ending(text: &str) -> &'static str {
+    let crlf = text.matches("\r\n").count();
+    let lf = text.matches('\n').count() - crlf;
+
+    if crlf > lf {
+        "\r\n"
+    } else {
+        "\n"
+    }
 }
 
 static DANGLING_RULE: NoDangling = NoDangling;
