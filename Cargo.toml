@@ -27,6 +27,7 @@ tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros"] }
 toml = "1.1.4"
 ureq = "3.4.0"
 walkdir = "2.5.0"
+yaml-rust2 = "0.10"
 tempfile = "3.15.0"
 slint = { path = "packages/core" }
 
