@@ -772,6 +772,35 @@ mod tests {
     }
 
     #[test]
+    fn a_crlf_file_gets_its_contents_list_written_in_crlf() {
+        // Reproduces https://github.com/MaximeGaudin/slint/issues/72: the fix used to join with
+        // "\n" whatever the file's own convention, rewriting every line ending in the file.
+        let mut text = String::from("# Formats\r\n\r\n");
+        for index in 0..40 {
+            text.push_str(&format!("## Section {index}\r\n\r\nWords about it.\r\n\r\n"));
+        }
+
+        let mut skill = skill_with_body("\n## Culling\n\nRead references/formats.md.\n");
+        skill
+            .files
+            .push(file("references/formats.md", &text, false));
+
+        let messages = check(&CONTENTS_RULE, &skill);
+        assert_eq!(messages.len(), 1);
+
+        let fixed = &messages[0].fix.as_ref().unwrap().replacement;
+
+        assert!(fixed.ends_with("\r\n"), "the trailing newline keeps its return");
+        assert_eq!(
+            fixed.matches('\n').count(),
+            fixed.matches("\r\n").count(),
+            "no bare LF may appear where the file uses CRLF"
+        );
+        assert!(fixed.contains("## Contents\r\n\r\n"));
+        assert!(fixed.contains("- Section 0\r\n"));
+    }
+
+    #[test]
     fn an_undeclared_import_is_reported() {
         let mut skill = skill_with_body("\n## Culling\n\nRun scripts/cull.py.\n");
         skill.files.push(file(
