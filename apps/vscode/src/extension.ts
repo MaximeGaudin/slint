@@ -158,8 +158,7 @@ function directoryOf(document: vscode.TextDocument): string {
  */
 function cwdFor(target: string): string {
   return (
-    vscode.workspace.getWorkspaceFolder(vscode.Uri.file(target))?.uri.fsPath ??
-    path.dirname(target)
+    vscode.workspace.getWorkspaceFolder(vscode.Uri.file(target))?.uri.fsPath ?? path.dirname(target)
   )
 }
 
