@@ -204,6 +204,9 @@ pub fn lint_project(skills: &[Skill], config: &Config) -> Vec<Message> {
     messages
 }
 
+/// What the model pass does for one skill, and the seam its tests swap a fake in through.
+type ModelReview = dyn Fn(&Skill, &Config) -> Result<(Vec<Message>, Vec<String>)> + Send + Sync;
+
 /// Reads, lints and reports on every skill under the given paths.
 pub fn run(
     paths: &[PathBuf],
@@ -223,7 +226,7 @@ pub fn run_with_reviewer(
     config: &Config,
     plugins: &[Plugin],
     passes: Passes,
-    review: &(dyn Fn(&Skill, &Config) -> Result<(Vec<Message>, Vec<String>)> + Send + Sync),
+    review: &ModelReview,
 ) -> Result<Report> {
     let ignore = skill::build_ignore(&config.ignore)?;
     let directories = skill::discover(paths, &ignore)?;
@@ -273,9 +276,9 @@ pub fn run_with_reviewer(
     // The model pass, last and optional. One request per skill, in parallel: the skills do not
     // share state, and waiting on them one after another is how a workspace review feels broken.
     // A provider that is unreachable leaves a note on that skill rather than an error on the run —
-    // the static half already produced something worth reading. An unparseable reply after retry,
-    // when the model pass was explicitly requested, hard-fails the run instead of silently
-    // dropping every finding.
+    // the static half already produced something worth reading. The same holds when a reply never
+    // parses after retry: the failure becomes a note on that skill, and the report — with every
+    // static finding and the JSON envelope a `--format json` caller is promised — survives (#65).
     if passes.model && config.llm.is_configured() {
         enum ModelOutcome {
             Ok(Vec<Message>, Vec<String>),
@@ -296,7 +299,6 @@ pub fn run_with_reviewer(
             })
             .collect();
 
-        let mut hard_fail = None;
         for (report, outcome) in per_skill.iter_mut().zip(outcomes) {
             match outcome {
                 ModelOutcome::Ok(messages, notes) => {
@@ -305,14 +307,11 @@ pub fn run_with_reviewer(
                 }
                 ModelOutcome::Soft(note) => report.notes.push(note),
                 ModelOutcome::Hard(failure) => {
-                    report.notes.push(model_failure(&config.llm, &failure));
-                    hard_fail = Some(failure);
+                    report.notes.push(format!(
+                        "The model pass degraded for this skill — only the static rules ran. {failure:#}"
+                    ));
                 }
             }
-        }
-
-        if let Some(failure) = hard_fail {
-            return Err(failure);
         }
     } else if passes.model && !config.llm.is_configured() {
         // Asked for, and impossible: say exactly what is missing and where it goes.
@@ -719,7 +718,7 @@ mod tests {
         let clean = report
             .skills
             .iter()
-            .find(|one| one.name == "clean")
+            .find(|one| one.path.ends_with("clean"))
             .unwrap();
 
         assert!(
