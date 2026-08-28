@@ -109,9 +109,10 @@ impl Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Write a starter config in the current directory.
+    /// Write a starter config in the current directory. An existing one is left alone.
     Init,
-    /// Write a starter rule pack, to be edited and pointed at from the config.
+    /// Write a starter rule pack, to be edited and pointed at from the config. An existing one is
+    /// left alone.
     InitPlugin,
     /// Print the rule catalogue: what each rule checks, and where the claim comes from.
     Rules {
@@ -270,11 +271,13 @@ fn init() -> Result<u8> {
     let path = PathBuf::from("slint.toml");
 
     if path.exists() {
+        // An expected no-op, not a failure: nothing was asked for and nothing is broken, so the
+        // exit code stays clean and the explanation goes to stderr, where the report never goes.
         eprintln!(
             "slint: {} already exists, so nothing was written",
             path.display()
         );
-        return Ok(code::FAILED);
+        return Ok(code::CLEAN);
     }
 
     std::fs::write(&path, config::STARTER_CONFIG)
@@ -291,11 +294,12 @@ fn init_plugin() -> Result<u8> {
     let path = PathBuf::from("slint-house-rules.toml");
 
     if path.exists() {
+        // As with init: an expected no-op, not a failure of slint itself.
         eprintln!(
             "slint: {} already exists, so nothing was written",
             path.display()
         );
-        return Ok(code::FAILED);
+        return Ok(code::CLEAN);
     }
 
     std::fs::write(&path, plugin::STARTER_PACK)
@@ -368,6 +372,7 @@ mod tests {
                 notes: vec![],
             }],
             fixed: 0,
+            notes: Vec::new(),
         }
     }
 
