@@ -29,8 +29,57 @@ static TRIGGER: LazyLock<Regex> = LazyLock::new(|| {
     .expect("the trigger pattern compiles")
 });
 
-static MARKUP: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"<[^>]+>").expect("the markup pattern compiles"));
+/// HTML tags, plus Markdown emphasis: bold, italic. Emphasis matches carry their inner text as a
+/// capture group so the fix can strip the delimiters and keep the word.
+static MARKUP: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"<[^>]+>|\*\*([^*\n]+)\*\*|\*([^*\s][^*\n]*)\*")
+        .expect("the markup pattern compiles")
+});
+
+/// Markdown emphasis written with underscores. `_em_` is emphasis, but `my_file_name` is an
+/// identifier, so — like CommonMark — intraword underscore matches are left alone.
+static UNDERSCORE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"_([^_\s]+)_").expect("the underscore emphasis pattern compiles"));
+
+fn is_intraword(description: &str, start: usize, end: usize) -> bool {
+    let before = description[..start].chars().next_back();
+    let after = description[end..].chars().next();
+
+    before.is_some_and(|character| character.is_alphanumeric())
+        || after.is_some_and(|character| character.is_alphanumeric())
+}
+
+fn has_underscore_emphasis(description: &str) -> bool {
+    UNDERSCORE
+        .captures_iter(description)
+        .any(|captures| {
+            let whole = captures.get(0).expect("a match always has group 0");
+            !is_intraword(description, whole.start(), whole.end())
+        })
+}
+
+/// The description with every tag and emphasis delimiter gone and the wrapped words kept.
+fn strip_markup(description: &str) -> String {
+    let without_underscores = UNDERSCORE.replace_all(description, |captures: &regex::Captures<'_>| {
+        let whole = captures.get(0).expect("a match always has group 0");
+        if is_intraword(description, whole.start(), whole.end()) {
+            whole.as_str().to_string()
+        } else {
+            captures[1].to_string()
+        }
+    });
+
+    MARKUP.replace_all(&without_underscores, |captures: &regex::Captures<'_>| {
+        captures
+            .iter()
+            .skip(1)
+            .flatten()
+            .next()
+            .map(|found| found.as_str().to_string())
+            .unwrap_or_default()
+    })
+    .to_string()
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(default)]
@@ -191,11 +240,11 @@ impl Rule for NoMarkup {
 
     fn check(&self, context: &mut RuleContext<'_>) {
         let description = context.skill.description.clone();
-        if !MARKUP.is_match(&description) {
+        if !MARKUP.is_match(&description) && !has_underscore_emphasis(&description) {
             return;
         }
 
-        let cleaned = MARKUP.replace_all(&description, "").to_string();
+        let cleaned = strip_markup(&description);
         let cleaned = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
 
         let location = at(context);
