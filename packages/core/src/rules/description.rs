@@ -435,6 +435,47 @@ mod tests {
         assert!(!patched.contains("<b>"));
     }
 
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/80 —
+    /// the rule's own advice cites **bold** as markup, so Markdown emphasis must be detected
+    /// the same way an HTML tag is, and removed while keeping the word it wrapped.
+    #[test]
+    fn markdown_bold_is_reported_and_fixed_like_html_tags() {
+        let skill = skill_described(
+            "Culls a **photo** shoot in Lightroom by flagging keepers. Use when triaging RAW files after a session.",
+        );
+        let messages = check(&NO_MARKUP_RULE, &skill);
+
+        assert_eq!(messages.len(), 1);
+        let fix = messages[0].fix.as_ref().expect("emphasis is fixable");
+        assert_eq!(
+            fix.replacement,
+            "Culls a photo shoot in Lightroom by flagging keepers. Use when triaging RAW files after a session."
+        );
+    }
+
+    #[test]
+    fn italic_and_underscore_emphasis_are_reported() {
+        for description in [
+            "Culls a *photo* shoot in Lightroom by flagging keepers. Use when triaging RAW files.",
+            "Culls a _photo_ shoot in Lightroom by flagging keepers. Use when triaging RAW files.",
+        ] {
+            assert_eq!(
+                check(&NO_MARKUP_RULE, &skill_described(description)).len(),
+                1,
+                "for {description}"
+            );
+        }
+    }
+
+    #[test]
+    fn snake_case_identifiers_are_not_markup() {
+        let skill = skill_described(
+            "Reads each my_file_name dump in the folder. Use when parsing raw editor exports.",
+        );
+
+        assert!(check(&NO_MARKUP_RULE, &skill).is_empty());
+    }
+
     #[test]
     fn a_thin_description_is_reported_against_the_configured_minimum() {
         let skill = skill_described("Culls photos. Use when triaging.");
