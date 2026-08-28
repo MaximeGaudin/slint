@@ -17,8 +17,12 @@
     "Linters"
   ],
   "activationEvents": [
-    "onLanguage:markdown",
-    "workspaceContains:**/SKILL.md"
+    "workspaceContains:**/SKILL.md",
+    "onCommand:slint.lintWorkspace",
+    "onCommand:slint.lintWithModel",
+    "onCommand:slint.lintWorkspaceWithModel",
+    "onCommand:slint.fixDocument",
+    "onCommand:slint.showOutput"
   ],
   "main": "./out/extension.js",
   "contributes": {

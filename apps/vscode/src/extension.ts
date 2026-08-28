@@ -68,7 +68,6 @@ export function activate(context: vscode.ExtensionContext): void {
   status.command = 'slint.showOutput'
   status.tooltip = 'Show the slint output channel'
   status.text = 'slint'
-  status.show()
 
   context.subscriptions.push(diagnostics, output, status)
 
@@ -127,6 +126,12 @@ export function activate(context: vscode.ExtensionContext): void {
       void lint(directoryOf(document), { model: false })
     }
   }
+
+  // The extension no longer activates on every Markdown file (#59), so the status bar entry
+  // appears only where slint is relevant: a skill exists in the workspace, or one is open.
+  void vscode.workspace.findFiles('**/SKILL.md', undefined, 1).then((found) => {
+    if (found.length > 0) status.show()
+  })
 }
 
 export function deactivate(): void {
@@ -161,6 +166,8 @@ function cwdFor(target: string): string {
 function setStatus(text: string, detail?: string): void {
   status.text = text
   status.tooltip = detail ?? 'Show the slint output channel'
+  // Lazy visibility: a run starting (or finishing) is proof slint is relevant here.
+  status.show()
 }
 
 /**
