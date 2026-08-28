@@ -211,6 +211,20 @@ pub fn run(
     plugins: &[Plugin],
     passes: Passes,
 ) -> Result<Report> {
+    run_with_reviewer(paths, config, plugins, passes, &|skill, config| {
+        llm::review(skill, config)
+    })
+}
+
+/// The same, with the model pass injectable — which is how its degradation behaviour is tested
+/// without a network.
+pub fn run_with_reviewer(
+    paths: &[PathBuf],
+    config: &Config,
+    plugins: &[Plugin],
+    passes: Passes,
+    review: &(dyn Fn(&Skill, &Config) -> Result<(Vec<Message>, Vec<String>)> + Send + Sync),
+) -> Result<Report> {
     let ignore = skill::build_ignore(&config.ignore)?;
     let directories = skill::discover(paths, &ignore)?;
 
@@ -271,7 +285,7 @@ pub fn run(
 
         let outcomes: Vec<ModelOutcome> = skills
             .par_iter()
-            .map(|one| match llm::review(one, config) {
+            .map(|one| match review(one, config) {
                 Ok((messages, notes)) => ModelOutcome::Ok(messages, notes),
                 Err(failure) if llm::is_unparseable_findings(&failure) => {
                     ModelOutcome::Hard(failure)
@@ -633,6 +647,86 @@ mod tests {
         assert!(note.contains("is set, so check the model id"), "{note}");
 
         unsafe { std::env::remove_var("SLINT_TEST_PRESENT_KEY") };
+    }
+
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/65 — a model reply that never
+    /// parses after retry degrades to a note on that skill; the static findings of every skill and
+    /// the report itself (which the JSON format turns into the envelope) must survive.
+    #[test]
+    fn an_unparseable_model_reply_degrades_to_a_note_and_keeps_every_static_finding() {
+        let temporary = tempfile::tempdir().unwrap();
+        write_skill(
+            temporary.path(),
+            "hardfail",
+            "---\nname: hardfail\ndescription: Culls a photo shoot in Lightroom by flagging the keepers and rejecting the rest. Use when triaging RAW files after a session.\n---\n\n## Culling\n\nRead scripts\\notes.md.\n",
+        );
+        write_skill(temporary.path(), "clean", GOOD);
+
+        let mut config = Config::default();
+        config.llm = crate::config::LlmConfig {
+            provider: crate::config::Provider::Openai,
+            model: "gpt-mock".into(),
+            api_key_env: Some("SLINT_TEST_MOCK_KEY".into()),
+            ..crate::config::LlmConfig::default()
+        };
+
+        let report = run_with_reviewer(
+            &[temporary.path().to_path_buf()],
+            &config,
+            &[],
+            Passes {
+                plugins: false,
+                model: true,
+            },
+            &|skill, _config| {
+                if skill.name == "hardfail" {
+                    Err(crate::llm::UnparseableFindings {
+                        detail: "The model reply was not valid findings JSON after one retry."
+                            .into(),
+                    }
+                    .into())
+                } else {
+                    Ok((Vec::new(), Vec::new()))
+                }
+            },
+        )
+        .expect("a model-pass failure must not discard a fully computed report");
+
+        assert_eq!(report.skills.len(), 2, "every skill stays in the report");
+
+        let hardfail = report
+            .skills
+            .iter()
+            .find(|one| one.name == "hardfail")
+            .unwrap();
+
+        assert!(
+            hardfail
+                .messages
+                .iter()
+                .any(|one| one.rule == "body/posix-paths"),
+            "the static finding computed before the model failed must survive: {:?}",
+            hardfail.messages
+        );
+
+        let note = hardfail.notes.join(" ");
+        assert!(note.contains("degraded"), "{note}");
+        assert!(
+            note.contains("not valid findings JSON"),
+            "the note must say why the model pass produced nothing: {note}"
+        );
+
+        let clean = report
+            .skills
+            .iter()
+            .find(|one| one.name == "clean")
+            .unwrap();
+
+        assert!(
+            clean.notes.is_empty(),
+            "one skill's model failure must not leak onto the others: {:?}",
+            clean.notes
+        );
     }
 
     #[test]
