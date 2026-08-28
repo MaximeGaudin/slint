@@ -4,6 +4,7 @@ import { promisify } from 'node:util'
 import * as vscode from 'vscode'
 import { ignoreEditsForFinding, ruleIdFromCode } from './ignore.js'
 import { LintQueue, LintRunCoordinator, type StatusUpdate } from './lint-runs.js'
+import { isUnderAnyRoot } from './skill-paths.js'
 
 const run = promisify(execFile)
 
@@ -109,6 +110,15 @@ export function activate(context: vscode.ExtensionContext): void {
       clearTimeout(pending)
       pending = setTimeout(() => void lint(directoryOf(event.document), { model: false }), 400)
     }),
+  )
+
+  // A skill that disappears must not haunt the Problems panel (deleted in the Explorer, or moved
+  // to a new path by a rename). Nothing will ever re-lint the old target string, so clear now.
+  context.subscriptions.push(
+    vscode.workspace.onDidDeleteFiles((event) => dropDiagnostics(event.files)),
+    vscode.workspace.onDidRenameFiles((event) =>
+      dropDiagnostics(event.files.map((rename) => rename.oldUri)),
+    ),
   )
 
   // Open skills at activation: static only, so the Problems panel is populated without spending.
@@ -466,21 +476,27 @@ function isSkippedModelNote(note: string): boolean {
 
 function clearSkills(skillPaths: string[]): void {
   const stale: vscode.Uri[] = []
-
   diagnostics.forEach((uri) => {
-    const file = uri.fsPath
-    if (
-      skillPaths.some(
-        (root) =>
-          file === root || file.startsWith(root + path.sep) || file === path.join(root, 'SKILL.md'),
-      )
-    ) {
-      stale.push(uri)
-    }
+    if (isUnderAnyRoot(uri.fsPath, skillPaths)) stale.push(uri)
   })
 
   for (const uri of stale) {
     diagnostics.delete(uri)
+  }
+}
+
+/** Removes every diagnostic for the given paths, or for anything inside them (folder deletes). */
+function dropDiagnostics(uris: readonly vscode.Uri[]): void {
+  const roots = uris.map((uri) => uri.fsPath)
+  const stale: vscode.Uri[] = []
+
+  diagnostics.forEach((uri) => {
+    if (isUnderAnyRoot(uri.fsPath, roots)) stale.push(uri)
+  })
+
+  for (const uri of stale) {
+    diagnostics.delete(uri)
+    output.appendLine(`· ${path.basename(uri.fsPath)} · diagnostics cleared (no longer exists)`)
   }
 }
 
