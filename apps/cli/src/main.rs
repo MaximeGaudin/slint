@@ -4,10 +4,10 @@
 //! one works here: 0 clean, 1 errors, 2 warnings only, 3 slint itself failed. Data goes to stdout
 //! and everything else to stderr, so `slint --format json | jq` is always safe.
 
-use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
-use std::io::{IsTerminal, Write};
-use std::path::PathBuf;
+use anyhow::{Context, Result, bail};
+use clap::{CommandFactory, Parser, Subcommand};
+use std::io::{IsTerminal, Read, Write};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use slint::config::{self, Config, RuleSetting};
@@ -15,7 +15,7 @@ use slint::diagnostics::Report;
 use slint::engine::{self, Passes};
 use slint::plugin;
 use slint::report::{self, Format};
-use slint::rules;
+use slint::rules::{self, RuleMeta};
 
 /// Exit codes, named.
 mod code {
@@ -37,6 +37,23 @@ struct Cli {
     #[arg(default_value = ".")]
     paths: Vec<PathBuf>,
 
+    /// Lint the document on stdin instead of the paths. Static rules only: the bundle beside a
+    /// stdin document does not exist.
+    #[arg(long)]
+    stdin: bool,
+
+    /// The name to report for the stdin document, and where its config is found from.
+    #[arg(long = "stdin-filename", value_name = "PATH")]
+    stdin_filename: Option<String>,
+
+    /// Print the fully-resolved config as JSON — file, flags and all — and do not lint.
+    #[arg(long)]
+    print_config: bool,
+
+    /// Print one rule's catalogue entry, then stop.
+    #[arg(long, value_name = "RULE")]
+    explain: Option<String>,
+
     /// Apply every computed fix, then lint again.
     #[arg(long)]
     fix: bool,
@@ -48,6 +65,14 @@ struct Cli {
     /// Use this config rather than looking for one.
     #[arg(long)]
     config: Option<PathBuf>,
+
+    /// Read extra ignore patterns from this file, one glob per line.
+    #[arg(long = "ignore-path", value_name = "FILE")]
+    ignore_path: Option<PathBuf>,
+
+    /// Lint everything, even what the config and --ignore-path would skip.
+    #[arg(long)]
+    no_ignore: bool,
 
     /// Run the rules that need a model. Off by default: a linter must not spend money uninvited.
     #[arg(long = "llm", visible_alias = "enable-llm-rules")]
@@ -89,6 +114,10 @@ struct Cli {
     #[arg(long, short)]
     quiet: bool,
 
+    /// Say what the run is doing — which config, how many plugins — on stderr.
+    #[arg(long, short = 'v')]
+    verbose: bool,
+
     /// Never colour the output. Colour is off automatically when stdout is not a terminal.
     #[arg(long)]
     no_color: bool,
@@ -119,6 +148,14 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Print the config file format as JSON Schema, for editor autocomplete.
+    Schema,
+    /// Write shell completions for the given shell to stdout.
+    Completions {
+        /// The shell whose completions to write.
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
 }
 
 fn main() -> ExitCode {
@@ -139,16 +176,52 @@ fn run(cli: &Cli) -> Result<u8> {
         Some(Command::Init) => return init(),
         Some(Command::InitPlugin) => return init_plugin(),
         Some(Command::Rules { json }) => return print_rules(*json),
+        Some(Command::Schema) => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&config::config_json_schema())?
+            );
+            return Ok(code::CLEAN);
+        }
+        Some(Command::Completions { shell }) => return print_completions(*shell),
         None => {}
     }
 
-    let config = resolve_config(cli)?;
+    if let Some(rule) = &cli.explain {
+        return explain_rule(rule);
+    }
+
+    let mut config = resolve_config(cli)?;
+
+    if let Some(path) = &cli.ignore_path {
+        config.ignore.extend(read_ignore_file(path)?);
+    }
+
+    if cli.no_ignore {
+        config.ignore.clear();
+    }
+
+    if cli.print_config {
+        return print_effective_config(&config);
+    }
+
+    if cli.stdin {
+        if cli.fix {
+            bail!("--stdin cannot be combined with --fix: there is no file to rewrite");
+        }
+
+        return run_stdin(cli, &config);
+    }
 
     let plugins = if cli.no_plugins {
         Vec::new()
     } else {
         plugin::load_all(&config)?
     };
+
+    if cli.verbose {
+        say_what_the_run_is(&config, &plugins, cli);
+    }
 
     let passes = Passes {
         plugins: !cli.no_plugins,
@@ -169,11 +242,7 @@ fn run(cli: &Cli) -> Result<u8> {
     }
 
     if cli.quiet {
-        for skill in &mut report.skills {
-            skill
-                .messages
-                .retain(|message| message.severity == slint::Severity::Error);
-        }
+        keep_only_errors(&mut report);
     }
 
     let colour = !cli.no_color && std::io::stdout().is_terminal();
@@ -183,6 +252,148 @@ fn run(cli: &Cli) -> Result<u8> {
     writeln!(stdout, "{text}").context("writing the report")?;
 
     Ok(exit_code(&report, cli.max_warnings))
+}
+
+/// Reads, lints and reports on the document coming in on stdin.
+///
+/// Only the static rules run: a stdin document has no bundle beside it, so the bundle rules and a
+/// model review would answer a question about files that do not exist. The note in the report says
+/// so rather than leaving the reader guessing.
+fn run_stdin(cli: &Cli, config: &Config) -> Result<u8> {
+    let mut source = String::new();
+    std::io::stdin()
+        .read_to_string(&mut source)
+        .context("reading the document from stdin")?;
+
+    let name = cli
+        .stdin_filename
+        .clone()
+        .unwrap_or_else(|| "<stdin>".to_string());
+
+    let mut skill = slint::skill::parse(&source);
+    skill.document = name.clone();
+
+    if let Some(parent) = Path::new(&name)
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        skill.directory = parent.to_path_buf();
+    }
+
+    if skill.name.is_empty() {
+        skill.name = Path::new(&name)
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("stdin")
+            .to_string();
+    }
+
+    let mut messages = engine::lint_skill(&skill, config);
+
+    // Anything the document itself asked not to hear about still applies.
+    let suppressions = engine::Suppressions::read(&source);
+    messages.retain(|message| suppressions.allows(message));
+
+    let mut notes = skill.notes.clone();
+    if cli.model_pass() {
+        notes.push(
+            "The model rules do not run with --stdin. Save the file and lint the path instead."
+                .to_string(),
+        );
+    } else {
+        let count = slint::llm::rules::all().len();
+        notes.push(format!(
+            "Skipped {count} model rules (not requested). Pass --llm to run them."
+        ));
+    }
+
+    let mut report = Report {
+        skills: vec![slint::SkillReport {
+            path: name.clone(),
+            name: skill.name,
+            messages,
+            notes,
+        }],
+        fixed: 0,
+    }
+    .sorted();
+
+    if cli.quiet {
+        keep_only_errors(&mut report);
+    }
+
+    let colour = !cli.no_color && std::io::stdout().is_terminal();
+    let text = report::render(&report, cli.format, colour);
+
+    let mut stdout = std::io::stdout().lock();
+    writeln!(stdout, "{text}").context("writing the report")?;
+
+    Ok(exit_code(&report, cli.max_warnings))
+}
+
+/// --print-config: the config as a caller can now rely on it, file and flags together.
+fn print_effective_config(config: &Config) -> Result<u8> {
+    let mut stdout = std::io::stdout().lock();
+    writeln!(
+        stdout,
+        "{}",
+        serde_json::to_string_pretty(config).context("writing the resolved config")?
+    )?;
+
+    Ok(code::CLEAN)
+}
+
+/// --explain: one rule, with the same prose the catalogue prints.
+fn explain_rule(name: &str) -> Result<u8> {
+    let Some(meta) = rules::meta_for(name) else {
+        bail!("no rule named {name} — try `slint rules` for the catalogue");
+    };
+
+    print_rule(meta);
+
+    Ok(code::CLEAN)
+}
+
+/// Extra ignore patterns, one glob per line, `#` comments allowed.
+fn read_ignore_file(path: &Path) -> Result<Vec<String>> {
+    let text =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+
+    Ok(text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(str::to_string)
+        .collect())
+}
+
+/// -v/--verbose: what the run is standing on, said before anything can go wrong.
+fn say_what_the_run_is(config: &Config, plugins: &[plugin::Plugin], cli: &Cli) {
+    let source = match &config.source {
+        Some(path) => path.display().to_string(),
+        None => "no config file found; defaults".to_string(),
+    };
+
+    eprintln!("slint: config: {source}");
+
+    if !cli.no_plugins {
+        eprintln!("slint: plugins: {}", plugins.len());
+    }
+
+    let model = if cli.model_pass() {
+        "model pass on"
+    } else {
+        "model pass off"
+    };
+    eprintln!("slint: {model}");
+}
+
+fn print_completions(shell: clap_complete::Shell) -> Result<u8> {
+    let mut command = Cli::command();
+    let name = command.get_name().to_string();
+    clap_complete::generate(shell, &mut command, name, &mut std::io::stdout().lock());
+
+    Ok(code::CLEAN)
 }
 
 /// What the run means, as a number.
@@ -318,21 +529,35 @@ fn print_rules(as_json: bool) -> Result<u8> {
     }
 
     for meta in all {
-        let needs = if meta.needs_model {
-            " · needs a model"
-        } else {
-            ""
-        };
-        let fixable = if meta.fixable { " · fixable" } else { "" };
-
-        println!("{}  [{}{needs}{fixable}]", meta.name, meta.default_severity);
-        println!("    {}", meta.summary);
-        println!("    {}", meta.rationale);
-        println!("    → {}", meta.advice);
-        println!("    {} — {}\n", meta.reference_title, meta.reference_url);
+        print_rule(meta);
     }
 
     Ok(code::CLEAN)
+}
+
+/// One rule's entry in the catalogue, as prose.
+fn print_rule(meta: &RuleMeta) {
+    let needs = if meta.needs_model {
+        " · needs a model"
+    } else {
+        ""
+    };
+    let fixable = if meta.fixable { " · fixable" } else { "" };
+
+    println!("{}  [{}{needs}{fixable}]", meta.name, meta.default_severity);
+    println!("    {}", meta.summary);
+    println!("    {}", meta.rationale);
+    println!("    → {}", meta.advice);
+    println!("    {} — {}\n", meta.reference_title, meta.reference_url);
+}
+
+/// --quiet: the warnings can come back when they are wanted.
+fn keep_only_errors(report: &mut Report) {
+    for skill in &mut report.skills {
+        skill
+            .messages
+            .retain(|message| message.severity == slint::Severity::Error);
+    }
 }
 
 #[cfg(test)]
@@ -522,10 +747,7 @@ mod tests {
             Some("skills/helper/SKILL.md")
         );
         assert!(cli.no_ignore);
-        assert_eq!(
-            cli.ignore_path.as_deref(),
-            Some(Path::new(".gitignore"))
-        );
+        assert_eq!(cli.ignore_path.as_deref(), Some(Path::new(".gitignore")));
         assert!(cli.verbose);
     }
 

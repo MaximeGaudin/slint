@@ -455,11 +455,13 @@ fn stdin_is_linted_without_a_file_on_disk() {
 
     let output = slint_from_stdin(temporary.path(), &["--stdin", "--no-llm"], BROKEN);
 
-    assert_eq!(output.status.code(), Some(1), "stdin linting finds the error");
-    assert!(
-        stdout(&output).contains("bundle/no-dangling-path"),
-        "{stdout(&output)}"
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "stdin linting finds the error"
     );
+    let text = stdout(&output);
+    assert!(text.contains("bundle/no-dangling-path"), "{text}");
 }
 
 #[test]
@@ -488,10 +490,8 @@ fn stdin_filename_names_the_file_in_the_report() {
         BROKEN,
     );
 
-    assert!(
-        stdout(&output).starts_with("skills/helper/SKILL.md:"),
-        "{stdout(&output)}"
-    );
+    let text = stdout(&output);
+    assert!(text.starts_with("skills/helper/SKILL.md:"), "{text}");
 }
 
 #[test]
@@ -505,12 +505,7 @@ fn print_config_shows_the_resolved_config_as_json() {
 
     let output = slint_in(
         temporary.path(),
-        &[
-            "--print-config",
-            "--no-llm",
-            "--rule",
-            "body/max-lines=off",
-        ],
+        &["--print-config", "--no-llm", "--rule", "body/max-lines=off"],
     );
 
     let parsed: serde_json::Value =
@@ -518,8 +513,7 @@ fn print_config_shows_the_resolved_config_as_json() {
 
     assert_eq!(parsed["rules"]["name/not-generic"], "off");
     assert_eq!(
-        parsed["rules"]["body/max-lines"],
-        "off",
+        parsed["rules"]["body/max-lines"], "off",
         "command-line overrides are part of the resolved config"
     );
     assert!(parsed["ignore"].is_array());
@@ -548,7 +542,8 @@ fn explaining_an_unknown_rule_fails_the_run() {
     let output = slint_in(temporary.path(), &["--explain", "no/such-rule"]);
 
     assert_eq!(output.status.code(), Some(3));
-    assert!(stderr(&output).contains("no/such-rule"), "{stderr(&output)}");
+    let complaints = stderr(&output);
+    assert!(complaints.contains("no/such-rule"), "{complaints}");
 }
 
 #[test]
@@ -595,7 +590,7 @@ fn ignore_path_adds_patterns_from_a_file() {
     let temporary = tempfile::tempdir().unwrap();
     write(temporary.path(), "photo-culling", GOOD);
     write(temporary.path(), "helper", BROKEN);
-    fs::write(temporary.path().join("my-ignores"), "**/helper/**\n").unwrap();
+    fs::write(temporary.path().join("my-ignores"), "**/helper\n").unwrap();
 
     let output = slint_in(
         temporary.path(),
@@ -603,10 +598,8 @@ fn ignore_path_adds_patterns_from_a_file() {
     );
 
     assert_eq!(output.status.code(), Some(0), "helper is ignored");
-    assert!(
-        !stdout(&output).contains("bundle/no-dangling-path"),
-        "{stdout(&output)}"
-    );
+    let text = stdout(&output);
+    assert!(!text.contains("bundle/no-dangling-path"), "{text}");
 }
 
 #[test]
@@ -614,7 +607,7 @@ fn no_ignore_lints_what_the_config_ignored() {
     let temporary = tempfile::tempdir().unwrap();
     fs::write(
         temporary.path().join("slint.toml"),
-        "ignore = [\"**/helper/**\"]\n",
+        "ignore = [\"**/helper\"]\n",
     )
     .unwrap();
     write(temporary.path(), "helper", BROKEN);
@@ -649,10 +642,8 @@ fn verbose_says_which_config_was_used() {
     let output = slint_in(temporary.path(), &["--no-llm", "--verbose"]);
 
     assert_eq!(output.status.code(), Some(0));
-    assert!(
-        stderr(&output).contains("slint.toml"),
-        "stderr names the config: {stderr(&output)}"
-    );
+    let complaints = stderr(&output);
+    assert!(complaints.contains("slint.toml"), "{complaints}");
 }
 
 #[test]
@@ -663,10 +654,8 @@ fn verbose_without_a_config_says_defaults_are_in_use() {
     let output = slint_in(temporary.path(), &["--no-llm", "--verbose"]);
 
     assert_eq!(output.status.code(), Some(0));
-    assert!(
-        stderr(&output).contains("config"),
-        "stderr talks about the config: {stderr(&output)}"
-    );
+    let complaints = stderr(&output);
+    assert!(complaints.contains("config"), "{complaints}");
 }
 
 // ---- https://github.com/MaximeGaudin/slint/issues/55 — a JSON Schema for the config ----
@@ -684,15 +673,33 @@ fn slint_prints_a_json_schema_for_its_config_format() {
     assert!(parsed["properties"]["llm"].is_object());
     assert!(parsed["properties"]["plugins"].is_object());
 
-    let providers = parsed["properties"]["llm"]["properties"]["provider"]["enum"]
+    let provider = &parsed["$defs"]["LlmConfig"]["properties"]["provider"];
+    let providers: Vec<&serde_json::Value> = parsed["$defs"]["Provider"]["oneOf"]
         .as_array()
-        .expect("provider is an enum");
+        .expect("provider is a choice of named constants")
+        .iter()
+        .map(|variant| &variant["const"])
+        .collect();
+    assert!(provider["$ref"].is_string(), "llm names its provider type");
     assert!(
-        providers
-            .iter()
-            .any(|provider| provider == "openrouter"),
+        providers.iter().any(|provider| **provider == "openrouter"),
         "every provider the binary accepts is in the schema: {providers:?}"
     );
+}
+
+#[test]
+fn the_committed_schema_is_the_one_the_binary_prints() {
+    // The file the docs site and the editor extension publish has to be the schema this binary
+    // would print, or an editor would autocomplete a config slint does not read. Regenerate it
+    // with `slint schema > apps/docs/public/schemas/slint-config.json` after changing the format.
+    let committed: serde_json::Value =
+        serde_json::from_str(include_str!("../../docs/public/schemas/slint-config.json"))
+            .expect("the committed schema is valid JSON");
+
+    let generated: serde_json::Value =
+        serde_json::from_str(&stdout(&slint(&["schema"]))).expect("schema prints valid JSON");
+
+    assert_eq!(generated, committed);
 }
 
 // ---- https://github.com/MaximeGaudin/slint/issues/56 — a user-global config ----
@@ -701,7 +708,9 @@ fn slint_prints_a_json_schema_for_its_config_format() {
 ///
 /// The config only sets a provider and no model, so no other test's run changes
 /// behaviour while the variable is set: the model pass stays unconfigured.
-struct UserConfig(tempfile::TempDir);
+struct UserConfig {
+    _home: tempfile::TempDir,
+}
 
 impl UserConfig {
     fn with_provider(provider: &str) -> Self {
@@ -714,10 +723,10 @@ impl UserConfig {
         )
         .unwrap();
 
-        // SAFETY: the binary is a separate process, and the variable is removed before any
-        // assertion can fail below.
+        // SAFETY: the binary is a separate process, and the variable is removed when the guard
+        // drops, before any later test reads the environment.
         unsafe { std::env::set_var("XDG_CONFIG_HOME", home.path()) };
-        UserConfig(home)
+        UserConfig { _home: home }
     }
 }
 

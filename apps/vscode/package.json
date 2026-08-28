@@ -84,6 +84,15 @@
         }
       }
     },
+    "jsonValidation": [
+      {
+        "fileMatch": [
+          "slint.config.json",
+          ".slintrc.json"
+        ],
+        "url": "https://slint.dev/schemas/slint-config.json"
+      }
+    ],
     "commands": [
       {
         "command": "slint.lintWorkspace",
