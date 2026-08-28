@@ -11,9 +11,12 @@ use crate::diagnostics::{Fix, Location, Reference, Severity};
 use crate::rules::{Rule, RuleContext, RuleMeta, sources};
 
 /// A relative path that looks like it means a bundled file.
+///
+/// `*` is in the leading set so the Markdown-bold bullet style (`**scripts/cull.py**: …`) —
+/// the convention Anthropic's own best-practices documentation shows — counts as a reference.
 static BUNDLED_REFERENCE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"(?:^|[\s`(\x22'\[])((?:scripts|references|reference|assets|templates|data)/[\w./-]+)",
+        r"(?:^|[\s`(\x22'\[*])((?:scripts|references|reference|assets|templates|data)/[\w./-]+)",
     )
     .expect("the bundled reference pattern compiles")
 });
