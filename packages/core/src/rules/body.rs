@@ -359,6 +359,22 @@ impl Rule for RelativePaths {
     }
 }
 
+/// Values that mark an assignment as author-written documentation rather than a leak: setup
+/// instructions routinely show `password="changeme123"` without anyone's real password in it.
+static PLACEHOLDER_CREDENTIAL: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?i)(change[-_ ]?me|your[-_ ]|example[-_ ]?|placeholder|dummy|sample[-_ ]|insert[-_ ]|replace[-_ ]|<[^>]+>|\$\{[^}]*\}|\*{5,}|x{5,})"#,
+    )
+    .expect("the placeholder credential pattern compiles")
+});
+
+/// The format-specific shapes (sk-…, ghp_…, AKIA…) say "real key" on their own, but an assigned
+/// password cannot: it is also how documentation writes example values. A match whose value is an
+/// obvious placeholder is therefore not reported.
+fn is_placeholder_credential(label: &str, matched: &str) -> bool {
+    label == "an assigned password" && PLACEHOLDER_CREDENTIAL.is_match(matched)
+}
+
 impl Rule for NoSecret {
     fn meta(&self) -> &'static RuleMeta {
         &NO_SECRET
@@ -367,15 +383,20 @@ impl Rule for NoSecret {
     fn check(&self, context: &mut RuleContext<'_>) {
         for (index, line) in context.skill.body.lines().enumerate() {
             for (label, pattern) in SECRETS.iter() {
-                if pattern.is_match(line) {
-                    let document_line = context.skill.document_line(index + 1);
-                    // Deliberately no quote of the match: a report that repeats the secret is a
-                    // second place it leaks from.
-                    context.report(
-                        format!("Line {document_line} looks like {label}"),
-                        Location::at(document_line, 1),
-                    );
+                let Some(whole) = pattern.find(line) else {
+                    continue;
+                };
+                if is_placeholder_credential(label, whole.as_str()) {
+                    continue;
                 }
+
+                let document_line = context.skill.document_line(index + 1);
+                // Deliberately no quote of the match: a report that repeats the secret is a
+                // second place it leaks from.
+                context.report(
+                    format!("Line {document_line} looks like {label}"),
+                    Location::at(document_line, 1),
+                );
             }
         }
 
@@ -383,14 +404,19 @@ impl Rule for NoSecret {
             let Some(text) = &file.text else { continue };
 
             for (label, pattern) in SECRETS.iter() {
-                if pattern.is_match(text) {
-                    let path = file.path.clone();
-                    context.report_in_file(
-                        &path,
-                        format!("{path} contains {label}"),
-                        Location::whole_file(),
-                    );
+                let Some(whole) = pattern.find(text) else {
+                    continue;
+                };
+                if is_placeholder_credential(label, whole.as_str()) {
+                    continue;
                 }
+
+                let path = file.path.clone();
+                context.report_in_file(
+                    &path,
+                    format!("{path} contains {label}"),
+                    Location::whole_file(),
+                );
             }
         }
     }
