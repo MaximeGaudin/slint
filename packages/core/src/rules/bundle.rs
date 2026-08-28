@@ -815,6 +815,102 @@ mod tests {
         assert!(fixed.contains("- Section 0\r\n"));
     }
 
+    /// Reproduces https://github.com/MaximeGaudin/slint/issues/90 — a `## ` line inside a fenced
+    /// code block is code, not a section heading.
+    #[test]
+    fn a_heading_inside_a_fenced_block_is_not_a_section() {
+        let mut text = String::from(
+            "# Formats\n\n## Real Section\n\nWords.\n\n```bash\n## this is a bash comment, not a heading\necho hi\n```\n\n",
+        );
+        for index in 0..40 {
+            text.push_str(&format!("## Section {index}\n\nWords.\n\n"));
+        }
+
+        let mut skill = skill_with_body("\n## Culling\n\nRead references/formats.md.\n");
+        skill
+            .files
+            .push(file("references/formats.md", &text, false));
+
+        let messages = check(&CONTENTS_RULE, &skill);
+        assert_eq!(messages.len(), 1);
+
+        let fixed = &messages[0].fix.as_ref().unwrap().replacement;
+        assert!(fixed.contains("- Real Section"));
+        assert!(
+            !fixed.contains("bash comment"),
+            "a comment inside a fence is not a section:\n{fixed}"
+        );
+    }
+
+    #[test]
+    fn a_heading_inside_a_tilde_fence_is_not_a_section_either() {
+        let mut text = String::from(
+            "# Formats\n\n~~~\n## this belongs to the fenced example, not the contents\n~~~\n\n",
+        );
+        for index in 0..40 {
+            text.push_str(&format!("## Section {index}\n\nWords.\n\n"));
+        }
+
+        let mut skill = skill_with_body("\n## Culling\n\nRead references/formats.md.\n");
+        skill
+            .files
+            .push(file("references/formats.md", &text, false));
+
+        let messages = check(&CONTENTS_RULE, &skill);
+        assert_eq!(messages.len(), 1);
+
+        let fixed = &messages[0].fix.as_ref().unwrap().replacement;
+        assert!(
+            !fixed.contains("fenced example"),
+            "a ~~~ fence hides its lines too:\n{fixed}"
+        );
+    }
+
+    #[test]
+    fn a_heading_after_the_fence_closes_is_still_a_section() {
+        let mut text = String::from("```bash\n## comment\n```\n\n");
+        for index in 0..40 {
+            text.push_str(&format!("## Section {index}\n\nWords.\n\n"));
+        }
+
+        let mut skill = skill_with_body("\n## Culling\n\nRead references/formats.md.\n");
+        skill
+            .files
+            .push(file("references/formats.md", &text, false));
+
+        let messages = check(&CONTENTS_RULE, &skill);
+        assert_eq!(messages.len(), 1);
+
+        let fixed = &messages[0].fix.as_ref().unwrap().replacement;
+        assert!(fixed.contains("- Section 0"), "the fence ended:\n{fixed}");
+    }
+
+    #[test]
+    fn a_comment_line_inside_a_fence_does_not_become_the_title() {
+        let mut text = String::from("```bash\n# a comment, not a title\n```\n\n## Alpha\n\nWords.\n\n");
+        for index in 0..40 {
+            text.push_str(&format!("## Section {index}\n\nWords.\n\n"));
+        }
+
+        let mut skill = skill_with_body("\n## Culling\n\nRead references/formats.md.\n");
+        skill
+            .files
+            .push(file("references/formats.md", &text, false));
+
+        let messages = check(&CONTENTS_RULE, &skill);
+        assert_eq!(messages.len(), 1);
+
+        // No title outside a fence, so the contents list goes at the top of the file — never
+        // inside the fenced block it was misread from.
+        let fixed = &messages[0].fix.as_ref().unwrap().replacement;
+        assert!(
+            fixed.starts_with("## Contents"),
+            "the list must not be inserted inside the fence:\n{}",
+            &fixed[..fixed.find("- Alpha").unwrap()]
+        );
+        assert!(fixed.contains("- Alpha"));
+    }
+
     #[test]
     fn an_undeclared_import_is_reported() {
         let mut skill = skill_with_body("\n## Culling\n\nRun scripts/cull.py.\n");
