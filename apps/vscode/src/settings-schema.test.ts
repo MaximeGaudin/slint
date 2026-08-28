@@ -4,9 +4,7 @@ import path from 'node:path'
 import { describe, it } from 'node:test'
 import { scanRuleCatalogue } from './rules-catalogue.js'
 
-const manifest = JSON.parse(
-  readFileSync(path.resolve(__dirname, '../package.json'), 'utf8'),
-) as {
+const manifest = JSON.parse(readFileSync(path.resolve(__dirname, '../package.json'), 'utf8')) as {
   contributes: {
     codeActions: { title: string; kind: string }[]
     configuration: { properties: Record<string, Record<string, unknown>> }
@@ -72,7 +70,10 @@ describe('code actions manifest (#49)', () => {
   it('documents the per-finding quick fix and the fix-all source action', () => {
     const kinds = manifest.contributes.codeActions.map((action) => action.kind)
 
-    assert.ok(kinds.some((kind) => kind.startsWith('quickfix')), 'expected a quickfix entry')
+    assert.ok(
+      kinds.some((kind) => kind.startsWith('quickfix')),
+      'expected a quickfix entry',
+    )
     assert.ok(
       kinds.includes('source.fixAll.slint'),
       'expected source.fixAll.slint so Fix on save can be wired in settings',

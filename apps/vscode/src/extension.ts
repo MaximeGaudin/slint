@@ -2,6 +2,12 @@ import { execFile } from 'node:child_process'
 import * as path from 'node:path'
 import { promisify } from 'node:util'
 import * as vscode from 'vscode'
+import {
+  diagnosticRangeForFinding,
+  patchText,
+  positionAtByteOffset,
+  quickFixEditForFinding,
+} from './fixes.js'
 import { ignoreEditsForFinding, ruleIdFromCode } from './ignore.js'
 import { LintRunCoordinator, type StatusUpdate } from './lint-runs.js'
 
@@ -41,7 +47,7 @@ type Finding = {
   location: { line: number; column: number; end_line?: number; end_column?: number }
   source: 'static' | 'model' | 'plugin'
   reference: { title: string; url: string }
-  fix?: { description: string }
+  fix?: { start: number; end: number; replacement: string; description: string }
 }
 
 type Spawn = {
@@ -57,6 +63,11 @@ let pending: NodeJS.Timeout | undefined
 const runs = new LintRunCoordinator()
 /** Last static envelope per target — merged back in when the model pass publishes so static never vanishes. */
 const lastStatic = new Map<string, Envelope>()
+/**
+ * Fixable findings per document, straight from the last published envelope. The Problems panel
+ * carries only rule ids and ranges, so the quick-fix provider reads the computed fixes from here.
+ */
+const fixableByFile = new Map<string, Finding[]>()
 
 export function activate(context: vscode.ExtensionContext): void {
   diagnostics = vscode.languages.createDiagnosticCollection('slint')
@@ -84,6 +95,14 @@ export function activate(context: vscode.ExtensionContext): void {
       { language: 'markdown', pattern: '**/SKILL.md' },
       new IgnoreCodeActionProvider(),
       { providedCodeActionKinds: IgnoreCodeActionProvider.providedCodeActionKinds },
+    ),
+  )
+
+  context.subscriptions.push(
+    vscode.languages.registerCodeActionsProvider(
+      { language: 'markdown', pattern: '**/SKILL.md' },
+      new FixCodeActionProvider(),
+      { providedCodeActionKinds: FixCodeActionProvider.providedCodeActionKinds },
     ),
   )
 
@@ -401,12 +420,19 @@ function publish(
   } = { target: '' },
 ): void {
   const byFile = new Map<string, vscode.Diagnostic[]>()
+  const fixable = new Map<string, Finding[]>()
   const skillPaths = envelope.data.skills.map((skill) => skill.path)
 
   const add = (finding: Finding) => {
     const list = byFile.get(finding.file) ?? []
     list.push(toDiagnostic(finding))
     byFile.set(finding.file, list)
+
+    if (finding.fix) {
+      const fixes = fixable.get(finding.file) ?? []
+      fixes.push(finding)
+      fixable.set(finding.file, fixes)
+    }
   }
 
   const emitNotes = (skill: SkillReport) => {
@@ -443,6 +469,7 @@ function publish(
 
   for (const [file, list] of byFile) {
     diagnostics.set(vscode.Uri.file(file), list)
+    fixableByFile.set(file, fixable.get(file) ?? [])
   }
 }
 
@@ -468,17 +495,15 @@ function clearSkills(skillPaths: string[]): void {
 
   for (const uri of stale) {
     diagnostics.delete(uri)
+    fixableByFile.delete(uri.fsPath)
   }
 }
 
 function toDiagnostic(finding: Finding): vscode.Diagnostic {
-  const line = Math.max(0, finding.location.line - 1)
-  const column = Math.max(0, finding.location.column - 1)
-  const endLine = Math.max(0, (finding.location.end_line ?? finding.location.line) - 1)
-  const endColumn = Math.max(0, (finding.location.end_column ?? finding.location.column + 200) - 1)
+  const range = diagnosticRangeForFinding(finding)
 
   const diagnostic = new vscode.Diagnostic(
-    new vscode.Range(line, column, endLine, endColumn),
+    new vscode.Range(range.start.line, range.start.character, range.end.line, range.end.character),
     `${finding.message}\n\nWhat to do: ${finding.advice}`,
     severityOf(finding.severity),
   )
@@ -545,6 +570,133 @@ class IgnoreCodeActionProvider implements vscode.CodeActionProvider {
 
     return actions
   }
+}
+
+/**
+ * Quick Fix entries that apply one of slint's computed fixes, plus the source action that applies
+ * every fix in the document at once.
+ *
+ * The fixes come from the last published envelope (see `fixableByFile`), matched back to the
+ * diagnostic under the cursor by rule id and range. `source.fixAll.slint` is what makes
+ * `"editor.codeActionsOnSave": { "source.fixAll.slint": "always" }` work.
+ */
+class FixCodeActionProvider implements vscode.CodeActionProvider {
+  static readonly fixAllKind = vscode.CodeActionKind.SourceFixAll.append('slint')
+  static readonly providedCodeActionKinds = [
+    vscode.CodeActionKind.QuickFix,
+    FixCodeActionProvider.fixAllKind,
+  ]
+
+  provideCodeActions(
+    document: vscode.TextDocument,
+    _range: vscode.Range | vscode.Selection,
+    context: vscode.CodeActionContext,
+  ): vscode.CodeAction[] {
+    if (!isSkill(document)) return []
+
+    const wantsQuickFix = requested(context.only, vscode.CodeActionKind.QuickFix)
+    const wantsFixAll = requested(context.only, FixCodeActionProvider.fixAllKind)
+    if (!wantsQuickFix && !wantsFixAll) return []
+
+    const actions: vscode.CodeAction[] = []
+    const findings = fixableByFile.get(document.uri.fsPath) ?? []
+    const text = document.getText()
+
+    if (wantsQuickFix) {
+      for (const diagnostic of context.diagnostics) {
+        const action = quickFixForDiagnostic(document, diagnostic, findings, text)
+        if (action) actions.push(action)
+      }
+    }
+
+    if (wantsFixAll) {
+      const action = fixAllAction(document.uri, text, findings)
+      if (action) actions.push(action)
+    }
+
+    return actions
+  }
+}
+
+/** Whether `only` (unset for the lightbulb) asks for a kind this provider serves. */
+function requested(only: vscode.CodeActionKind | undefined, kind: vscode.CodeActionKind): boolean {
+  return !only || only.intersects(kind)
+}
+
+function quickFixForDiagnostic(
+  document: vscode.TextDocument,
+  diagnostic: vscode.Diagnostic,
+  findings: Finding[],
+  text: string,
+): vscode.CodeAction | undefined {
+  if (diagnostic.source !== 'slint' && diagnostic.source !== 'slint-model') return undefined
+
+  const ruleId = ruleIdFromCode(diagnostic.code)
+  if (!ruleId) return undefined
+
+  const finding = findings.find((candidate) => {
+    if (candidate.rule !== ruleId) return false
+
+    const range = diagnosticRangeForFinding(candidate)
+    return (
+      range.start.line === diagnostic.range.start.line &&
+      range.start.character === diagnostic.range.start.character &&
+      range.end.line === diagnostic.range.end.line &&
+      range.end.character === diagnostic.range.end.character
+    )
+  })
+  if (!finding) return undefined
+
+  const edit = quickFixEditForFinding(finding, text)
+  if (!edit) return undefined
+
+  const action = new vscode.CodeAction(edit.title, vscode.CodeActionKind.QuickFix)
+  action.diagnostics = [diagnostic]
+  action.isPreferred = true
+  action.edit = new vscode.WorkspaceEdit()
+  action.edit.replace(
+    document.uri,
+    new vscode.Range(
+      edit.range.start.line,
+      edit.range.start.character,
+      edit.range.end.line,
+      edit.range.end.character,
+    ),
+    edit.replacement,
+  )
+  return action
+}
+
+/**
+ * Applies every computed fix in the document, deferring overlaps exactly like the CLI's fixer so
+ * an editor-applied fixAll can never corrupt a file.
+ */
+function fixAllAction(
+  uri: vscode.Uri,
+  text: string,
+  findings: Finding[],
+): vscode.CodeAction | undefined {
+  const { applied } = patchText(
+    text,
+    findings.flatMap((finding) => (finding.fix ? [finding.fix] : [])),
+  )
+
+  if (applied.length === 0) return undefined
+
+  const action = new vscode.CodeAction('Apply all slint fixes', FixCodeActionProvider.fixAllKind)
+  action.edit = new vscode.WorkspaceEdit()
+
+  for (const fix of applied) {
+    const start = positionAtByteOffset(text, fix.start)
+    const end = positionAtByteOffset(text, fix.end)
+    action.edit.replace(
+      uri,
+      new vscode.Range(start.line, start.character, end.line, end.character),
+      fix.replacement,
+    )
+  }
+
+  return action
 }
 
 /**

@@ -43,7 +43,7 @@
             "Run static rules only (fast, free)",
             "Run static rules, then the model pass (uses your LLM settings)"
           ],
-          "description": "What to run when you save a SKILL.md: nothing, static only (no-llm), or static then model (llm)."
+          "description": "What to run when you save a SKILL.md: nothing, static only (no-llm), or static then model (llm). To also apply the computed fixes on save, set \"editor.codeActionsOnSave\" to { \"source.fixAll.slint\": \"always\" }."
         },
         "slint.onType": {
           "type": "boolean",
@@ -104,6 +104,16 @@
       {
         "command": "slint.showOutput",
         "title": "slint: Show Output"
+      }
+    ],
+    "codeActions": [
+      {
+        "title": "Apply slint fix",
+        "kind": "quickfix.slint"
+      },
+      {
+        "title": "Apply all slint fixes",
+        "kind": "source.fixAll.slint"
       }
     ]
   },

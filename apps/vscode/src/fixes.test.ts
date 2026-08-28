@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
+import type { FixableFinding } from './fixes.js'
 import {
   diagnosticRangeForFinding,
   patchText,
   positionAtByteOffset,
   quickFixEditForFinding,
 } from './fixes.js'
-import type { FixableFinding } from './fixes.js'
 
 function findingWithFix(overrides: Partial<FixableFinding> = {}): FixableFinding {
   return {
@@ -37,9 +37,9 @@ describe('positionAtByteOffset (#49)', () => {
     const accented = 'héllo\nwörld'
     assert.deepEqual(positionAtByteOffset(accented, 7), { line: 1, character: 0 })
 
-    // An emoji is four UTF-8 bytes but two UTF-16 units.
+    // An emoji is four UTF-8 bytes but two UTF-16 units: 'a' is character 0, the emoji 1 and 2.
     const emoji = 'a😀\nb'
-    assert.deepEqual(positionAtByteOffset(emoji, 5), { line: 0, character: 2 })
+    assert.deepEqual(positionAtByteOffset(emoji, 5), { line: 0, character: 3 })
     assert.deepEqual(positionAtByteOffset(emoji, 6), { line: 1, character: 0 })
   })
 
@@ -76,13 +76,25 @@ describe('patchText (#49)', () => {
   })
 
   it('leaves a fix that overlaps one already applied for the next pass', () => {
+    // The fix furthest into the file goes in first; the one overlapping it was computed against
+    // text that has now moved, so it waits — exactly what the CLI's fixer does.
     const result = patchText('hello world', [
       { start: 0, end: 11, replacement: 'entirely new text', description: 'whole line' },
       { start: 6, end: 11, replacement: 'everyone', description: 'tail' },
     ])
 
-    assert.equal(result.text, 'entirely new text')
+    assert.equal(result.text, 'hello everyone')
     assert.equal(result.applied.length, 1)
+    assert.equal(result.skipped, 1)
+  })
+
+  it('refuses a fix that would land inside a multi-byte character', () => {
+    // 'é' sits at bytes 5 and 6, so a fix starting at byte 6 would splice inside it.
+    const result = patchText('voir émotion', [
+      { start: 6, end: 8, replacement: 'X', description: 'mid-character' },
+    ])
+
+    assert.equal(result.text, 'voir émotion')
     assert.equal(result.skipped, 1)
   })
 
@@ -106,8 +118,9 @@ describe('patchText (#49)', () => {
   })
 
   it('keeps multi-byte text intact around a splice', () => {
+    // 'voir ' is 5 bytes, 'émotion' is 8 (é is two), '\n' is 1, 'et ' is 3 — 'chemin' starts at 17.
     const result = patchText('voir émotion\net chemin', [
-      { start: 14, end: 16, replacement: 'path', description: 'translate' },
+      { start: 17, end: 23, replacement: 'path', description: 'translate' },
     ])
 
     assert.equal(result.text, 'voir émotion\net path')
@@ -148,7 +161,12 @@ describe('quickFixEditForFinding (#49)', () => {
   it('ranges the edit over the exact bytes the fix replaces', () => {
     const start = document.indexOf('scripts\\notes.md')
     const finding = findingWithFix({
-      fix: { start, end: start + 16, replacement: 'scripts/notes.md', description: 'Use forward slashes' },
+      fix: {
+        start,
+        end: start + 16,
+        replacement: 'scripts/notes.md',
+        description: 'Use forward slashes',
+      },
     })
 
     const edit = quickFixEditForFinding(finding, document)
