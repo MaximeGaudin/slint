@@ -110,28 +110,32 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.workspace.onDidSaveTextDocument((document) => {
       if (!isSkill(document)) return
 
-      const onSave = setting<string>('onSave') ?? 'no-llm'
+      const onSave = setting<string>('onSave', document.uri) ?? 'no-llm'
       if (onSave === 'nothing') return
 
-      void lint(directoryOf(document), { model: onSave === 'llm' })
+      void lint(directoryOf(document), { model: onSave === 'llm', resource: document.uri })
     }),
   )
 
   context.subscriptions.push(
     vscode.workspace.onDidChangeTextDocument((event) => {
-      if (!setting<boolean>('onType')) return
+      if (!setting<boolean>('onType', event.document.uri)) return
       if (!isSkill(event.document)) return
 
       // Debounced, and static-only: the point of linting while typing is that it is instant.
       clearTimeout(pending)
-      pending = setTimeout(() => void lint(directoryOf(event.document), { model: false }), 400)
+      pending = setTimeout(
+        () =>
+          void lint(directoryOf(event.document), { model: false, resource: event.document.uri }),
+        400,
+      )
     }),
   )
 
   // Open skills at activation: static only, so the Problems panel is populated without spending.
   for (const document of vscode.workspace.textDocuments) {
-    if (isSkill(document) && (setting<string>('onSave') ?? 'no-llm') !== 'nothing') {
-      void lint(directoryOf(document), { model: false })
+    if (isSkill(document) && (setting<string>('onSave', document.uri) ?? 'no-llm') !== 'nothing') {
+      void lint(directoryOf(document), { model: false, resource: document.uri })
     }
   }
 }
@@ -141,8 +145,10 @@ export function deactivate(): void {
   clearTimeout(pending)
 }
 
-function setting<T>(name: string): T | undefined {
-  return vscode.workspace.getConfiguration('slint').get<T>(name)
+function setting<T>(name: string, resource?: vscode.Uri): T | undefined {
+  // Passing the document's URI is what makes a setting resolve per folder: in a multi-root
+  // workspace each folder can carry its own value, and the document decides which one wins.
+  return vscode.workspace.getConfiguration('slint', resource).get<T>(name)
 }
 
 function isSkill(document: vscode.TextDocument): boolean {
@@ -163,26 +169,37 @@ function setStatus(text: string, detail?: string): void {
  *
  * LLM settings from the editor become `--llm-*` flags. The API key is never put on the command
  * line: it is injected as `SLINT_EDITOR_API_KEY` and pointed at with `--llm-api-key-env`.
+ *
+ * `resource` is the document (or folder) the run is for: every setting read here resolves against
+ * it, so two folders in one workspace can lint with different binaries, providers, or rules.
  */
-function spawnFor(target: string, options: { model?: boolean; fix?: boolean } = {}): Spawn {
+function spawnFor(
+  target: string,
+  options: { model?: boolean; fix?: boolean; resource?: vscode.Uri } = {},
+): Spawn {
   const binaryArgs: string[] = [target]
   if (options.fix) binaryArgs.push('--fix')
-  binaryArgs.push('--format', 'json', '--no-color', ...(setting<string[]>('arguments') ?? []))
+  binaryArgs.push(
+    '--format',
+    'json',
+    '--no-color',
+    ...(setting<string[]>('arguments', options.resource) ?? []),
+  )
 
   if (options.model) {
-    binaryArgs.push('--llm', ...llmArgv())
+    binaryArgs.push('--llm', ...llmArgv(options.resource))
   } else {
     binaryArgs.push('--no-llm')
   }
 
-  return { argv: binaryArgs, env: llmEnv() }
+  return { argv: binaryArgs, env: llmEnv(options.resource) }
 }
 
-function llmArgv(): string[] {
+function llmArgv(resource?: vscode.Uri): string[] {
   const args: string[] = []
-  const provider = setting<string>('llm.provider')?.trim()
-  const model = setting<string>('llm.model')?.trim()
-  const apiKey = setting<string>('llm.apiKey')?.trim()
+  const provider = setting<string>('llm.provider', resource)?.trim()
+  const model = setting<string>('llm.model', resource)?.trim()
+  const apiKey = setting<string>('llm.apiKey', resource)?.trim()
 
   if (provider) args.push('--llm-provider', provider)
   if (model) args.push('--llm-model', model)
@@ -191,8 +208,8 @@ function llmArgv(): string[] {
   return args
 }
 
-function llmEnv(): NodeJS.ProcessEnv {
-  const apiKey = setting<string>('llm.apiKey')?.trim()
+function llmEnv(resource?: vscode.Uri): NodeJS.ProcessEnv {
+  const apiKey = setting<string>('llm.apiKey', resource)?.trim()
   if (!apiKey) return { ...process.env }
 
   return { ...process.env, [EDITOR_API_KEY_ENV]: apiKey }
@@ -214,7 +231,7 @@ async function lintWorkspace(options: { model: boolean }): Promise<void> {
 
   // One slint invocation per folder: the CLI parallelizes the model pass across skills inside it.
   for (const folder of folders) {
-    await lint(folder.uri.fsPath, options)
+    await lint(folder.uri.fsPath, { ...options, resource: folder.uri })
   }
 }
 
@@ -224,12 +241,15 @@ async function lintWorkspace(options: { model: boolean }): Promise<void> {
  * Save never asks: the model pass is a command. Waiting on a provider before showing the half that
  * needs no network is how people conclude the static rules "stopped working".
  */
-async function lint(target: string, options: { model: boolean }): Promise<void> {
+async function lint(
+  target: string,
+  options: { model: boolean; resource?: vscode.Uri },
+): Promise<void> {
   const { generation, signal } = runs.begin(target)
 
   const staticResult = await runPass(
     target,
-    { model: false, followWithModel: options.model },
+    { model: false, followWithModel: options.model, resource: options.resource },
     generation,
     signal,
   )
@@ -243,7 +263,12 @@ async function lint(target: string, options: { model: boolean }): Promise<void> 
   )
   output.appendLine(`→ ${path.basename(target)} · model`)
 
-  await runPass(target, { model: true, followWithModel: false }, generation, signal)
+  await runPass(
+    target,
+    { model: true, followWithModel: false, resource: options.resource },
+    generation,
+    signal,
+  )
 }
 
 /**
@@ -252,11 +277,11 @@ async function lint(target: string, options: { model: boolean }): Promise<void> 
  */
 async function runPass(
   target: string,
-  options: { model: boolean; followWithModel: boolean },
+  options: { model: boolean; followWithModel: boolean; resource?: vscode.Uri },
   generation: number,
   signal: AbortSignal,
 ): Promise<Envelope | undefined> {
-  const binary = setting<string>('path') ?? 'slint'
+  const binary = setting<string>('path', options.resource) ?? 'slint'
   const { argv, env } = spawnFor(target, options)
   const label = path.basename(target)
 
@@ -717,9 +742,13 @@ async function fixActiveDocument(): Promise<void> {
     await editor.document.save()
   }
 
-  const binary = setting<string>('path') ?? 'slint'
+  const binary = setting<string>('path', editor.document.uri) ?? 'slint'
   const directory = directoryOf(editor.document)
-  const { argv, env } = spawnFor(directory, { fix: true, model: false })
+  const { argv, env } = spawnFor(directory, {
+    fix: true,
+    model: false,
+    resource: editor.document.uri,
+  })
 
   setStatus('$(sync~spin) slint', 'Applying fixes…')
 

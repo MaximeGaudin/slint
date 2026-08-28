@@ -27,11 +27,13 @@
       "properties": {
         "slint.path": {
           "type": "string",
+          "scope": "resource",
           "default": "slint",
           "description": "The slint binary. An absolute path, or a name found on PATH."
         },
         "slint.onSave": {
           "type": "string",
+          "scope": "resource",
           "enum": [
             "nothing",
             "no-llm",
@@ -47,11 +49,13 @@
         },
         "slint.onType": {
           "type": "boolean",
+          "scope": "resource",
           "default": false,
           "description": "Run static rules while typing a SKILL.md (debounced). Never runs the model."
         },
         "slint.llm.provider": {
           "type": "string",
+          "scope": "resource",
           "enum": [
             "",
             "openai",
@@ -66,6 +70,7 @@
         },
         "slint.llm.model": {
           "type": "string",
+          "scope": "resource",
           "default": "",
           "description": "Model id the provider understands (e.g. llama-3.1-8b-instant on Groq). Overrides [llm].model when set."
         },
@@ -76,6 +81,7 @@
         },
         "slint.arguments": {
           "type": "array",
+          "scope": "resource",
           "items": {
             "type": "string"
           },
