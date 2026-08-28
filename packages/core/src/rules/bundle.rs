@@ -632,6 +632,21 @@ mod tests {
         assert!(messages[0].fix.is_none());
     }
 
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/78 —
+    /// `**scripts/cull.py**: description` is the exact bullet-list style shown in Anthropic's
+    /// own best-practices documentation, so a bold reference must count as a reference.
+    #[test]
+    fn a_file_referenced_in_markdown_bold_counts_as_used() {
+        let mut skill = skill_with_body(
+            "\n## Utility scripts\n\n**scripts/cull.py**: Culls the shoot and writes the selects to disk.\n",
+        );
+        skill
+            .files
+            .push(file("scripts/cull.py", "print(\"cull\")\n", false));
+
+        assert!(check(&UNUSED_RULE, &skill).is_empty());
+    }
+
     /// Regression for https://github.com/MaximeGaudin/slint/issues/1 —
     /// a root companion already linked from SKILL.md must be diagnosed as
     /// layout (outside standard dirs), not as an unreferenced file.
