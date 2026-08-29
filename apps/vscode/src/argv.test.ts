@@ -8,12 +8,13 @@ const manifest = JSON.parse(readFileSync(path.join(__dirname, '..', 'package.jso
   contributes: { configuration: { properties: Record<string, { scope?: string }> } }
 }
 
-describe('package.json manifest (#33)', () => {
-  it('scopes slint.llm.apiKey to machine so a workspace cannot set the credential', () => {
-    assert.equal(
-      manifest.contributes.configuration.properties['slint.llm.apiKey'].scope,
-      'machine',
-      'an API key settable from a workspace settings.json can be committed to a repo',
+describe('package.json manifest (#33, #191)', () => {
+  it('declares no slint.llm.apiKey setting so a workspace cannot set the credential', () => {
+    // #191 moved the key into SecretStorage: the plaintext setting is gone entirely, which
+    // supersedes #33's `scope: "machine"` hardening of the same setting.
+    assert.ok(
+      !('slint.llm.apiKey' in manifest.contributes.configuration.properties),
+      'an API key in settings.json persists in plaintext and can be committed to a repo',
     )
   })
 })

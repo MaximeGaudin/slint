@@ -13,13 +13,17 @@ import { ignoreEditsForFinding, ruleIdFromCode } from './ignore.js'
 import { LintQueue, LintRunCoordinator, type StatusUpdate } from './lint-runs.js'
 import { ruleOverridesArgv } from './rules-setting.js'
 import { RunFailureNotifier } from './run-failure.js'
+import { type ApiKeyScope, planApiKeyMigration } from './secrets.js'
 import { isUnderAnyRoot } from './skill-paths.js'
 import { mayRunBinary } from './trust.js'
 
 const run = promisify(execFile)
 
-/** Env var the extension injects when `slint.llm.apiKey` is set. Never appears on the argv. */
+/** Env var the extension injects when an API key is stored. Never appears on the argv. */
 const EDITOR_API_KEY_ENV = 'SLINT_EDITOR_API_KEY'
+
+/** SecretStorage key for the model API key. */
+const API_KEY_SECRET = 'slint.llm.apiKey'
 
 /** Where a reader looking for the binary finds out how to get it. */
 const INSTALL_DOCS_URL = 'https://slint.dev'
@@ -70,6 +74,9 @@ let pending: NodeJS.Timeout | undefined
 let state: vscode.Memento | undefined
 let warnedReservedArgs = false
 let warnedWorkspaceModelPass = false
+let secrets: vscode.SecretStorage
+/** The stored API key, cached so spawn stays synchronous. Undefined when none is stored. */
+let apiKey: string | undefined
 /** Cancels superseded child processes and keeps the status bar honest across overlapping runs. */
 const runs = new LintRunCoordinator()
 /** Surfaces a "could not run" failure once per failure streak instead of on every save. */
@@ -86,6 +93,19 @@ const fixableByFile = new Map<string, Finding[]>()
 
 export function activate(context: vscode.ExtensionContext): void {
   state = context.globalState
+
+  // The keychain can fail (locked, flaky backend). Never let that kill activation: register
+  // everything first, then load — worst case the model pass runs keyless (and fails) with a
+  // warning instead of the whole extension going dark.
+  secrets = context.secrets
+  void bootstrapApiKey().catch((failure: unknown) => {
+    const message = failure instanceof Error ? failure.message : String(failure)
+    output?.appendLine(`slint secure storage unavailable, model pass disabled: ${message}`)
+    void vscode.window.showWarningMessage(
+      'slint could not access secure storage, so the stored model API key is unavailable and the model pass will not run this session.',
+    )
+  })
+
   diagnostics = vscode.languages.createDiagnosticCollection('slint')
   output = vscode.window.createOutputChannel('slint')
   status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50)
@@ -102,6 +122,8 @@ export function activate(context: vscode.ExtensionContext): void {
       lintWorkspace({ model: true }),
     ),
     vscode.commands.registerCommand('slint.fixDocument', () => fixActiveDocument()),
+    vscode.commands.registerCommand('slint.setApiKey', () => setApiKey()),
+    vscode.commands.registerCommand('slint.clearApiKey', () => clearApiKey()),
     vscode.commands.registerCommand('slint.showOutput', () => output.show(true)),
   )
 
@@ -246,14 +268,13 @@ function spawnFor(
     binaryArgs.push('--no-llm')
   }
 
-  return { argv: binaryArgs, env: llmEnv(options.resource) }
+  return { argv: binaryArgs, env: llmEnv() }
 }
 
 function llmArgv(resource?: vscode.Uri): string[] {
   const args: string[] = []
   const provider = setting<string>('llm.provider', resource)?.trim()
   const model = setting<string>('llm.model', resource)?.trim()
-  const apiKey = setting<string>('llm.apiKey', resource)?.trim()
 
   if (provider) args.push('--llm-provider', provider)
   if (model) args.push('--llm-model', model)
@@ -262,11 +283,99 @@ function llmArgv(resource?: vscode.Uri): string[] {
   return args
 }
 
-function llmEnv(resource?: vscode.Uri): NodeJS.ProcessEnv {
-  const apiKey = setting<string>('llm.apiKey', resource)?.trim()
+function llmEnv(): NodeJS.ProcessEnv {
   if (!apiKey) return { ...process.env }
 
   return { ...process.env, [EDITOR_API_KEY_ENV]: apiKey }
+}
+
+async function loadApiKey(): Promise<void> {
+  apiKey = (await secrets.get(API_KEY_SECRET))?.trim() || undefined
+}
+
+async function setApiKey(): Promise<void> {
+  const input = await vscode.window.showInputBox({
+    password: true,
+    ignoreFocusOut: true,
+    prompt: 'API key for the slint model provider',
+    placeHolder: 'Stored in secure storage, never in settings.json',
+  })
+  if (input === undefined) return
+
+  const value = input.trim()
+  if (!value) return
+
+  await secrets.store(API_KEY_SECRET, value)
+  apiKey = value
+}
+
+async function clearApiKey(): Promise<void> {
+  await secrets.delete(API_KEY_SECRET)
+  apiKey = undefined
+}
+
+/** Activate's async half: load the stored key, then migrate any plaintext copy out of settings. */
+async function bootstrapApiKey(): Promise<void> {
+  await loadApiKey()
+  await migrateApiKeyFromSettings()
+}
+
+/**
+ * Keys that predate SecretStorage sit in settings.json in plaintext. Move the most specific one
+ * into secure storage and wipe every plaintext copy, so nothing secret survives the move.
+ *
+ * inspect() is resource-sensitive: folder-scoped values only appear when asked per folder, so the
+ * sweep runs for the window itself and for every workspace folder.
+ */
+async function migrateApiKeyFromSettings(): Promise<void> {
+  const folders = vscode.workspace.workspaceFolders ?? []
+
+  const found: { scope: ApiKeyScope; value: string; resource?: vscode.Uri }[] = []
+  for (const resource of [undefined, ...folders.map((folder) => folder.uri)]) {
+    const info = vscode.workspace.getConfiguration('slint', resource).inspect<string>('llm.apiKey')
+    if (!info) continue
+    if (info.globalValue?.trim()) found.push({ scope: 'global', value: info.globalValue.trim() })
+    if (info.workspaceValue?.trim())
+      found.push({ scope: 'workspace', value: info.workspaceValue.trim(), resource })
+    if (info.workspaceFolderValue?.trim())
+      found.push({ scope: 'workspaceFolder', value: info.workspaceFolderValue.trim(), resource })
+  }
+
+  const mostSpecific = (scope: ApiKeyScope) => found.find((entry) => entry.scope === scope)?.value
+  const plan = planApiKeyMigration(
+    {
+      global: mostSpecific('global'),
+      workspace: mostSpecific('workspace'),
+      workspaceFolder: mostSpecific('workspaceFolder'),
+    },
+    apiKey ?? null,
+  )
+  if (!plan) return
+
+  if (plan.value !== undefined) {
+    await secrets.store(API_KEY_SECRET, plan.value)
+    apiKey = plan.value
+  }
+
+  for (const scope of plan.clear) {
+    const entry = found.find((candidate) => candidate.scope === scope)
+    if (!entry) continue
+    await vscode.workspace
+      .getConfiguration('slint', entry.resource)
+      .update('llm.apiKey', undefined, CONFIGURATION_TARGETS[scope])
+  }
+
+  void vscode.window.showInformationMessage(
+    plan.value !== undefined
+      ? 'slint moved your LLM API key from settings to secure storage.'
+      : 'slint removed a leftover LLM API key from settings.',
+  )
+}
+
+const CONFIGURATION_TARGETS: Record<ApiKeyScope, vscode.ConfigurationTarget> = {
+  global: vscode.ConfigurationTarget.Global,
+  workspace: vscode.ConfigurationTarget.Workspace,
+  workspaceFolder: vscode.ConfigurationTarget.WorkspaceFolder,
 }
 
 /**
