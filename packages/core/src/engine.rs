@@ -210,13 +210,21 @@ impl Suppressions {
                 continue;
             }
 
-            if let Some(found) = DISABLE_LINE.captures(line) {
-                let rules = split_rules(&found[1]);
+            // Every directive of a kind on the line takes effect, not just the
+            // first: two comments on one line are as legal as two rules in one
+            // comment. A line that matches a stronger form is still read only
+            // once — the branch order below keeps the old precedence.
+            let mut next_line_rules: Vec<String> = Vec::new();
+            for found in DISABLE_LINE.captures_iter(line) {
+                next_line_rules.extend(split_rules(&found[1]));
+            }
+
+            if !next_line_rules.is_empty() {
                 // Normally the next line only. When that line opens a fenced
                 // code block, cover every line inside the fence too — example
                 // paths live on the lines after ```, not on the fence marker.
                 let covered = lines_covered_by_disable_next(&lines, index);
-                for rule in rules {
+                for rule in next_line_rules {
                     suppressions
                         .lines
                         .extend(covered.iter().map(|line| (*line, rule.clone())));
@@ -230,12 +238,14 @@ impl Suppressions {
                 continue;
             }
 
-            if let Some(found) = DISABLE_START.captures(line) {
+            for found in DISABLE_START.captures_iter(line) {
                 open_ranges.extend(
                     split_rules(&found[1])
                         .into_iter()
                         .map(|rule| (rule, number)),
                 );
+            }
+            if DISABLE_START.is_match(line) {
                 continue;
             }
 
@@ -244,7 +254,7 @@ impl Suppressions {
                 continue;
             }
 
-            if let Some(found) = ENABLE.captures(line) {
+            for found in ENABLE.captures_iter(line) {
                 let named = found.get(1).map(|rules| split_rules(rules.as_str()));
                 let lifted = lift_file_disables(&mut suppressions, named.as_deref(), number);
                 let closed = close_ranges(
@@ -272,10 +282,12 @@ impl Suppressions {
                         });
                     }
                 }
+            }
+            if ENABLE.is_match(line) {
                 continue;
             }
 
-            if let Some(found) = DISABLE_FILE.captures(line) {
+            for found in DISABLE_FILE.captures_iter(line) {
                 for rule in split_rules(&found[1]) {
                     suppressions.file.insert(rule.clone());
                     suppressions.directives.push(Directive {
@@ -1225,6 +1237,46 @@ mod tests {
 
         assert!(suppressions.file.contains("body/posix-paths"));
         assert!(suppressions.file.contains("name/not-generic"));
+    }
+
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/274 —
+    /// a second directive on the same line used to be dropped: only the first match was read.
+    #[test]
+    fn every_disable_comment_on_a_line_takes_effect() {
+        let suppressions = Suppressions::read(
+            "<!-- slint-disable body/posix-paths --> <!-- slint-disable name/not-generic -->\n",
+        );
+
+        assert!(suppressions.file.contains("body/posix-paths"));
+        assert!(
+            suppressions.file.contains("name/not-generic"),
+            "the second directive on the line must take effect too: {:?}",
+            suppressions.file
+        );
+    }
+
+    #[test]
+    fn every_disable_next_line_comment_on_a_line_takes_effect() {
+        let suppressions = Suppressions::read(
+            "one\n<!-- slint-disable-next-line body/posix-paths --> <!-- slint-disable-next-line body/no-secret -->\ntwo\n",
+        );
+
+        assert!(
+            suppressions
+                .lines
+                .iter()
+                .any(|(line, rule)| *line == 3 && rule == "body/posix-paths"),
+            "{:?}",
+            suppressions.lines
+        );
+        assert!(
+            suppressions
+                .lines
+                .iter()
+                .any(|(line, rule)| *line == 3 && rule == "body/no-secret"),
+            "the second directive on the line must take effect too: {:?}",
+            suppressions.lines
+        );
     }
 
     #[test]
