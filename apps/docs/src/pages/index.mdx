@@ -58,10 +58,11 @@ import ModelRuleCount from '../components/ModelRuleCount.astro'
 ## Install
 
 ```bash
-cargo install slint-cli
+# macOS (Apple Silicon)
+curl -fsSL https://github.com/MaximeGaudin/slint/releases/latest/download/slint-darwin-arm64.tar.gz | sudo tar xz -C /usr/local/bin
 ```
 
-Or from this repo: `cargo install --path apps/cli`. Put `~/.cargo/bin` on your `PATH`.
+Prebuilt binaries are published for every release — macOS (Apple Silicon, Intel), Linux (x86_64, arm64), and Windows. Or build from this repo: `cargo install --path apps/cli` (needs Rust 1.95+). Put `~/.cargo/bin` on your `PATH`.
 
   </div>
   <div>
@@ -80,8 +81,9 @@ slint --llm                   # also run model rules
   </div>
 </div>
 
-Exit codes match the convention other skill linters settled on: `0` clean, `1` errors, `2`
-warnings only, `3` slint itself failed.
+Exit codes: `0` clean, `1` errors, `2` warnings only, `3` slint itself failed, `4` nothing was linted (no `SKILL.md` was found under the
+given path). Running `slint init` when a config already exists is an idempotent no-op and exits
+`0`; nothing is overwritten.
 
 ## The model half
 
