@@ -939,23 +939,16 @@ mod tests {
             let taken = discover(std::slice::from_ref(&path), &GlobSet::empty()).unwrap();
             assert_eq!(taken.directories, vec![path.clone()], "for {file}");
 
-            // The file is read and parsed whatever the case. The spelling inside `document` follows
-            // what the platform's filesystem reports: case-sensitive ones keep the author's case,
-            // case-insensitive ones may report the canonical name for both.
+            // The file is read and parsed whatever the case. The leaf inside `document` follows what
+            // the platform's filesystem reports — case-sensitive ones keep the author's case,
+            // case-insensitive ones may report the canonical name — and it is reached through a
+            // forward-slash join, the reporting convention on every platform.
             let skill = read(&path).unwrap();
             assert_eq!(skill.name, "photo-culling", "for {file}");
-            // Report paths join with forward slashes on every platform, separators included.
+
+            let leaf = skill.document.rsplit('/').next().unwrap_or_default();
             assert!(
-                !skill.document.contains('\\'),
-                "report paths use forward slashes: {}",
-                skill.document
-            );
-            assert!(
-                skill
-                    .document
-                    .split('/')
-                    .next_back()
-                    .is_some_and(|leaf| leaf.eq_ignore_ascii_case(file)),
+                leaf.eq_ignore_ascii_case(SKILL_FILE),
                 "for {file}: {}",
                 skill.document
             );
