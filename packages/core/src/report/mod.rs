@@ -121,6 +121,7 @@ mod tests {
                 notes: vec!["8 rules need a model and none is configured.".into()],
             }],
             fixed: 0,
+            notes: Vec::new(),
         }
     }
 

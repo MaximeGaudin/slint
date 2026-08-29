@@ -52,6 +52,10 @@ fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).to_string()
 }
 
+fn stderr(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stderr).to_string()
+}
+
 #[test]
 fn a_clean_base_exits_zero_and_says_so() {
     let temporary = tempfile::tempdir().unwrap();
@@ -61,6 +65,53 @@ fn a_clean_base_exits_zero_and_says_so() {
 
     assert_eq!(output.status.code(), Some(0));
     assert!(stdout(&output).contains("Nothing to report"));
+}
+
+#[test]
+fn linting_a_file_that_is_not_a_skill_says_so_instead_of_passing() {
+    // https://github.com/MaximeGaudin/slint/issues/36
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(temporary.path().join("random.txt"), "hello\n").unwrap();
+
+    let output = slint(&[
+        temporary.path().join("random.txt").to_str().unwrap(),
+        "--no-llm",
+    ]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(4),
+        "nothing was linted, which is not a clean pass"
+    );
+    let text = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(text.contains("random.txt"), "{text}");
+    assert!(text.contains("not linted"), "{text}");
+}
+
+#[test]
+fn an_empty_directory_is_a_failure_not_a_clean_run() {
+    // https://github.com/MaximeGaudin/slint/issues/118
+    let temporary = tempfile::tempdir().unwrap();
+    let empty = temporary.path().join("no-skills-here");
+    fs::create_dir_all(&empty).unwrap();
+
+    let output = slint(&[empty.to_str().unwrap(), "--no-llm"]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(4),
+        "a run that checked zero skills must not read as success"
+    );
+    assert!(
+        !stdout(&output).contains("Nothing to report"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(
+        stdout(&output).contains("No SKILL.md"),
+        "{}",
+        stdout(&output)
+    );
 }
 
 #[test]
@@ -309,7 +360,9 @@ fn plugins_can_be_skipped_without_editing_the_config() {
 }
 
 #[test]
-fn init_writes_a_config_and_refuses_to_overwrite_one() {
+fn init_writes_a_config_and_leaves_an_existing_one_alone() {
+    // https://github.com/MaximeGaudin/slint/issues/35: running init twice is an expected,
+    // idempotent no-op, not a failure of slint itself.
     let temporary = tempfile::tempdir().unwrap();
 
     let first = Command::new(env!("CARGO_BIN_EXE_slint"))
@@ -329,7 +382,12 @@ fn init_writes_a_config_and_refuses_to_overwrite_one() {
 
     assert_eq!(
         second.status.code(),
-        Some(3),
+        Some(0),
+        "nothing was asked for and nothing is broken"
+    );
+    assert!(stderr(&second).contains("already exists"));
+    assert!(
+        temporary.path().join("slint.toml").is_file(),
         "it does not clobber what is there"
     );
 }
