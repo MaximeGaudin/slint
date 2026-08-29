@@ -323,6 +323,57 @@ fn a_narrow_column_wraps_the_stylish_report_instead_of_running_past_the_pane() {
     }
 }
 
+/// Regression for https://github.com/MaximeGaudin/slint/issues/22 —
+/// --quiet used to strip the warnings from the report before the exit code was computed,
+/// so `--quiet` turned a warnings-only run into a clean exit. The budget verdict lives in
+/// the JSON envelope; the exit code only ever says errors, warnings-only, or clean.
+#[test]
+fn a_quiet_run_still_enforces_the_warning_budget() {
+    let temporary = tempfile::tempdir().unwrap();
+    write(
+        temporary.path(),
+        "helper",
+        "---\nname: helper\ndescription: Culls a photo shoot in Lightroom by flagging the keepers and rejecting the rest. Use when triaging RAW files after a session.\n---\n\n## Helper\n\n1. Import the files.\n",
+    );
+
+    let output = slint(&[
+        temporary.path().to_str().unwrap(),
+        "--no-llm",
+        "--quiet",
+        "--max-warnings",
+        "0",
+    ]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "--quiet must not flip a warnings-only run to a clean exit"
+    );
+    // And --quiet still does what it says: the warning itself is not printed.
+    assert!(!stdout(&output).contains("name/not-generic"));
+}
+
+/// Regression for https://github.com/MaximeGaudin/slint/issues/23 — same root cause:
+/// --quiet is about what is printed, not about what the run found.
+#[test]
+fn a_quiet_run_keeps_the_exit_code_the_full_run_would_have() {
+    let temporary = tempfile::tempdir().unwrap();
+    write(
+        temporary.path(),
+        "helper",
+        "---\nname: helper\ndescription: Culls a photo shoot in Lightroom by flagging the keepers and rejecting the rest. Use when triaging RAW files after a session.\n---\n\n## Helper\n\n1. Import the files.\n",
+    );
+
+    let output = slint(&[temporary.path().to_str().unwrap(), "--no-llm", "--quiet"]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "--quiet hides the warning from the report, not from the exit code"
+    );
+    assert!(!stdout(&output).contains("name/not-generic"));
+}
+
 #[test]
 fn a_rule_can_be_turned_off_from_the_command_line() {
     let temporary = tempfile::tempdir().unwrap();
@@ -836,6 +887,26 @@ fn a_clean_stdin_document_exits_zero() {
     let output = slint_from_stdin(temporary.path(), &["--stdin", "--no-llm"], GOOD);
 
     assert_eq!(output.status.code(), Some(0));
+}
+
+/// Regression for https://github.com/MaximeGaudin/slint/issues/22 — same root cause on the
+/// stdin path: --quiet is about what is printed, not about what the run found.
+#[test]
+fn a_quiet_stdin_run_keeps_the_warnings_only_exit_code() {
+    let temporary = tempfile::tempdir().unwrap();
+
+    let output = slint_from_stdin(
+        temporary.path(),
+        &["--stdin", "--no-llm", "--quiet"],
+        "---\nname: helper\ndescription: Culls a photo shoot in Lightroom by flagging the keepers and rejecting the rest. Use when triaging RAW files after a session.\n---\n\n## Helper\n\n1. Import the files.\n",
+    );
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "--quiet hides the warning from the report, not from the exit code"
+    );
+    assert!(!stdout(&output).contains("name/not-generic"));
 }
 
 #[test]

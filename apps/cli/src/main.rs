@@ -249,6 +249,10 @@ fn run(cli: &Cli) -> Result<u8> {
         })?;
     }
 
+    // The exit code reflects what the run found, not what --quiet chooses to hide: a
+    // warnings-only run stays a warnings-only run on the way out, with or without --quiet.
+    let code = exit_code(&report);
+
     if cli.quiet {
         keep_only_errors(&mut report);
     }
@@ -266,7 +270,7 @@ fn run(cli: &Cli) -> Result<u8> {
         Err(error) => return Err(error).context("writing the report"),
     }
 
-    Ok(exit_code(&report))
+    Ok(code)
 }
 
 /// Reads, lints and reports on the document coming in on stdin.
@@ -334,6 +338,9 @@ fn run_stdin(cli: &Cli, config: &Config) -> Result<u8> {
     }
     .sorted();
 
+    // Same as a file run: the exit code is what the document earned, not what --quiet prints.
+    let code = exit_code(&report);
+
     if cli.quiet {
         keep_only_errors(&mut report);
     }
@@ -351,7 +358,7 @@ fn run_stdin(cli: &Cli, config: &Config) -> Result<u8> {
         Err(error) => return Err(error).context("writing the report"),
     }
 
-    Ok(exit_code(&report))
+    Ok(code)
 }
 
 /// --print-config: the config as a caller can now rely on it, file and flags together.
