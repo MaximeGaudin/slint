@@ -364,6 +364,42 @@ mod tests {
     }
 
     #[test]
+    fn a_wide_rule_name_pads_to_its_display_width_not_its_char_count() {
+        // https://github.com/MaximeGaudin/slint/issues/163: a CJK rule name is 12 scalar values
+        // but 18 terminal columns; padding by scalar values pushes the message column of every
+        // row sharing the width out of line with the wide row.
+        fn display_width(text: &str) -> usize {
+            // Enough of an oracle for this test: ASCII is one column, the CJK Unified
+            // Ideographs used here are East Asian Wide, two columns.
+            text.chars()
+                .map(|c| if ('\u{4E00}'..='\u{9FFF}').contains(&c) { 2 } else { 1 })
+                .sum()
+        }
+
+        let mut report = sample();
+        report.skills[0].messages[0].rule = "house/规则名称测试".into();
+        report.skills[0].messages[1].rule = "house/x".into();
+
+        let text = render(&report, false);
+        let finding_row = |needle: &str| {
+            text.lines()
+                .find(|line| line.contains(needle))
+                .expect("each finding renders on its own row")
+        };
+
+        // The display width of everything left of the message must be the same on both rows.
+        let message_column = |line: &str, needle: &str| {
+            display_width(&line[..line.find(needle).expect("the message is on its row")])
+        };
+
+        assert_eq!(
+            message_column(finding_row("says nothing about what this does"), "says nothing"),
+            message_column(finding_row("The instructions name scripts"), "The instructions name"),
+            "both message columns must begin on the same display column"
+        );
+    }
+
+    #[test]
     fn colour_is_optional_and_off_leaves_no_escape_codes() {
         let text = render(&sample(), false);
         assert!(!text.contains('\u{1b}'));
