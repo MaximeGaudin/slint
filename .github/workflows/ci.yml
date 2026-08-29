@@ -102,6 +102,9 @@ jobs:
         with:
           command: check
 
+      - name: Advisory ignore deadlines
+        run: node scripts/check-ignore-deadlines.mjs
+
   coverage:
     name: Coverage
     needs: fmt
