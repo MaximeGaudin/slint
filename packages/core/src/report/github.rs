@@ -5,6 +5,21 @@
 
 use crate::diagnostics::{Report, Severity};
 
+/// Escapes the data part of a workflow command, in the order the GitHub Actions spec requires:
+/// `%` first (so a literal `%0A` in user text cannot be read back as a newline), then `\r` and
+/// `\n` (or the command ends at the first real newline, taking the rest of the annotation).
+fn escape_data(text: &str) -> String {
+    text.replace('%', "%25")
+        .replace('\r', "%0D")
+        .replace('\n', "%0A")
+}
+
+/// Escapes a property value like `file=` or `title=`, which additionally cannot contain the
+/// delimiters `,` and `:` GitHub's naive property parser splits on.
+fn escape_property(text: &str) -> String {
+    escape_data(text).replace(':', "%3A").replace(',', "%2C")
+}
+
 pub fn render(report: &Report) -> String {
     let mut lines = Vec::new();
 
@@ -16,18 +31,18 @@ pub fn render(report: &Report) -> String {
                 Severity::Info => "notice",
             };
 
-            // Newlines have to be escaped or the command ends at the first one, taking the rest of
-            // the annotation with it.
-            let body = format!(
-                "{} ({})%0A%0A{}%0A{}",
+            let body = escape_data(&format!(
+                "{} ({})\n\n{}\n{}",
                 message.message, message.rule, message.advice, message.reference.url
-            )
-            .replace('\n', "%0A")
-            .replace('\r', "");
+            ));
 
             lines.push(format!(
                 "::{level} file={},line={},col={},title=slint {}::{}",
-                message.file, message.location.line, message.location.column, message.rule, body
+                escape_property(&message.file),
+                message.location.line,
+                message.location.column,
+                escape_property(&message.rule),
+                body
             ));
         }
     }
@@ -75,6 +90,50 @@ mod tests {
 
         assert_eq!(text.lines().count(), 2, "still one line per finding");
         assert!(text.contains("first line%0Asecond line"));
+    }
+
+    #[test]
+    fn a_comma_in_a_file_path_cannot_split_the_property_list() {
+        let mut report = sample();
+        report.skills[0].messages[0].file = "/tmp/f/skill, oddly named/SKILL.md".into();
+
+        let text = render(&report);
+
+        assert!(text.contains("file=/tmp/f/skill%2C oddly named/SKILL.md"));
+        assert!(!text.contains("file=/tmp/f/skill, oddly named"));
+    }
+
+    #[test]
+    fn a_colon_in_a_file_path_is_encoded_for_the_property_parser() {
+        let mut report = sample();
+        report.skills[0].messages[0].file = "/tmp/weird:name/SKILL.md".into();
+
+        let text = render(&report);
+
+        assert!(text.contains("file=/tmp/weird%3Aname/SKILL.md"));
+    }
+
+    #[test]
+    fn a_literal_percent_sequence_in_user_text_is_never_reinterpreted() {
+        let mut report = sample();
+        report.skills[0].messages[0].message =
+            "\"helper%0Adiscount\" has characters outside a-z".into();
+
+        let text = render(&report);
+
+        assert!(text.contains("helper%250Adiscount"));
+        assert!(!text.contains("helper%0Adiscount"));
+    }
+
+    #[test]
+    fn a_carriage_return_is_encoded_rather_than_deleted() {
+        let mut report = sample();
+        report.skills[0].messages[0].message = "first\rsecond".into();
+
+        let text = render(&report);
+
+        assert!(text.contains("first%0Dsecond"));
+        assert_eq!(text.lines().count(), 2, "still one line per finding");
     }
 
     #[test]
