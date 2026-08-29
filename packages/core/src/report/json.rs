@@ -52,6 +52,16 @@ mod tests {
     use super::*;
     use crate::report::tests::sample;
 
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/125 —
+    /// a consumer can only parse a moving format safely if the envelope says
+    /// which version of it they are looking at.
+    #[test]
+    fn the_envelope_names_its_schema_version_so_consumers_can_detect_change() {
+        let parsed: serde_json::Value = serde_json::from_str(&render(&sample())).unwrap();
+
+        assert_eq!(parsed["schemaVersion"], 1);
+    }
+
     #[test]
     fn the_envelope_says_whether_anything_is_broken_before_the_data_is_read() {
         let text = render(&sample());
