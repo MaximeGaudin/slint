@@ -103,7 +103,7 @@ pub fn discover(paths: &[PathBuf], ignore: &GlobSet) -> Result<Discovery> {
     let mut discovery = Discovery::default();
 
     for path in paths {
-        if path.join(SKILL_FILE).is_file() {
+        if find_manifest(path).is_some() {
             discovery.directories.push(path.clone());
             continue;
         }
@@ -111,7 +111,9 @@ pub fn discover(paths: &[PathBuf], ignore: &GlobSet) -> Result<Discovery> {
         if path.is_file() {
             // A path straight to a SKILL.md is the shape an editor integration sends. Anything
             // else was asked for by name, so leaving it out without a word hides the whole run.
-            if path.file_name().and_then(|name| name.to_str()) == Some(SKILL_FILE)
+            if path
+                .file_name()
+                .is_some_and(|name| name.eq_ignore_ascii_case(SKILL_FILE))
                 && let Some(parent) = path.parent()
             {
                 discovery.directories.push(parent.to_path_buf());
@@ -133,7 +135,7 @@ pub fn discover(paths: &[PathBuf], ignore: &GlobSet) -> Result<Discovery> {
             if !entry.file_type().is_file() {
                 continue;
             }
-            if entry.file_name() != SKILL_FILE {
+            if !entry.file_name().eq_ignore_ascii_case(SKILL_FILE) {
                 continue;
             }
 
@@ -150,6 +152,24 @@ pub fn discover(paths: &[PathBuf], ignore: &GlobSet) -> Result<Discovery> {
     discovery.directories.dedup();
 
     Ok(discovery)
+}
+
+/// The manifest of a skill directory, named the way this author spelled it.
+///
+/// The specification shows `SKILL.md`, but a manifest typed as `skill.md` is still the manifest —
+/// a linter that reads only one spelling reports a clean run where it read nothing at all. The
+/// exact spelling wins when both exist, so a directory is read the same on every platform.
+fn find_manifest(directory: &Path) -> Option<PathBuf> {
+    let exact = directory.join(SKILL_FILE);
+    if exact.is_file() {
+        return Some(exact);
+    }
+
+    let entries = fs::read_dir(directory).ok()?;
+    entries
+        .flatten()
+        .find(|entry| entry.file_name().eq_ignore_ascii_case(SKILL_FILE) && entry.path().is_file())
+        .map(|entry| entry.path())
 }
 
 fn is_never_a_skill(path: &Path) -> bool {
@@ -171,13 +191,14 @@ pub fn build_ignore(patterns: &[String]) -> Result<GlobSet> {
 
 /// Reads one skill directory.
 pub fn read(directory: &Path) -> Result<Skill> {
-    let document_path = directory.join(SKILL_FILE);
+    let document_path = find_manifest(directory)
+        .with_context(|| format!("{} holds no {}", directory.display(), SKILL_FILE))?;
     let source = fs::read_to_string(&document_path)
         .with_context(|| format!("reading {}", document_path.display()))?;
 
     let mut skill = parse(&source);
     skill.directory = directory.to_path_buf();
-    skill.document = format!("{}/{SKILL_FILE}", directory.display());
+    skill.document = document_path.display().to_string();
 
     if skill.name.is_empty() {
         // The directory name is what an agent would see if the frontmatter is silent, and it makes
@@ -830,13 +851,19 @@ mod tests {
             let taken = discover(&[path.clone()], &GlobSet::empty()).unwrap();
             assert_eq!(taken.directories, vec![path.clone()], "for {file}");
 
-            let skill = read(&path).unwrap();
-            assert_eq!(skill.name, "photo-culling", "for {file}");
-            assert!(
-                skill.document.ends_with(file),
-                "for {file}: {}",
-                skill.document
-            );
+        // The file is read and parsed whatever the case. The spelling inside `document` follows
+        // what the platform's filesystem reports: case-sensitive ones keep the author's case,
+        // case-insensitive ones may report the canonical name for both.
+        let skill = read(&path).unwrap();
+        assert_eq!(skill.name, "photo-culling", "for {file}");
+        assert!(
+            skill
+                .document
+                .to_ascii_lowercase()
+                .ends_with(&file.to_ascii_lowercase()),
+            "for {file}: {}",
+            skill.document
+        );
         }
     }
 
