@@ -1,8 +1,8 @@
 //! The command line.
 //!
 //! Exit codes follow the convention the other skill linters settled on, so a CI script written for
-//! one works here: 0 clean, 1 errors, 2 warnings only, 3 slint itself failed. Data goes to stdout
-//! and everything else to stderr, so `slint --format json | jq` is always safe.
+//! one works here: 0 clean, 1 errors, 2 warnings only, 3 slint itself failed, 4 nothing was linted.
+//! Data goes to stdout and everything else to stderr, so `slint --format json | jq` is always safe.
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -23,6 +23,8 @@ mod code {
     pub const ERRORS: u8 = 1;
     pub const WARNINGS: u8 = 2;
     pub const FAILED: u8 = 3;
+    /// The run looked at zero skills: a typo'd path must not read as success.
+    pub const NOTHING_LINTED: u8 = 4;
 }
 
 #[derive(Parser, Debug)]
@@ -89,7 +91,9 @@ struct Cli {
     #[arg(long, short)]
     quiet: bool,
 
-    /// Never colour the output. Colour is off automatically when stdout is not a terminal.
+    /// Never colour the output. Beyond the flag, colour follows the usual environment conventions:
+    /// NO_COLOR, CLICOLOR=0, and TERM=dumb turn it off; CLICOLOR_FORCE and FORCE_COLOR turn it on;
+    /// and a stdout that is not a terminal is plain.
     #[arg(long)]
     no_color: bool,
 
@@ -109,9 +113,10 @@ impl Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Write a starter config in the current directory.
+    /// Write a starter config in the current directory. An existing one is left alone.
     Init,
-    /// Write a starter rule pack, to be edited and pointed at from the config.
+    /// Write a starter rule pack, to be edited and pointed at from the config. An existing one is
+    /// left alone.
     InitPlugin,
     /// Print the rule catalogue: what each rule checks, and where the claim comes from.
     Rules {
@@ -176,22 +181,67 @@ fn run(cli: &Cli) -> Result<u8> {
         }
     }
 
-    let colour = !cli.no_color && std::io::stdout().is_terminal();
-    let text = report::render(&report, cli.format, colour);
+    let colour = colour_allowed(cli.no_color);
+    let text = report::render(&report, cli.format, colour, cli.max_warnings);
 
     let mut stdout = std::io::stdout().lock();
-    writeln!(stdout, "{text}").context("writing the report")?;
+    match writeln!(stdout, "{text}").and_then(|()| stdout.flush()) {
+        Ok(()) => {}
+        // A downstream reader that hung up (`slint … | head`) is not a failure of the run: the
+        // report went wherever it was still wanted, and the Unix convention is to bow out
+        // quietly rather than complain about a pipe nobody is reading.
+        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => return Ok(code::CLEAN),
+        Err(error) => return Err(error).context("writing the report"),
+    }
 
     Ok(exit_code(&report, cli.max_warnings))
 }
 
-/// What the run means, as a number.
-fn exit_code(report: &Report, max_warnings: i64) -> u8 {
-    if report.errors() > 0 {
-        return code::ERRORS;
+/// Whether the report may be coloured, from the flag, the environment, and stdout.
+///
+/// The conventions this follows are https://no-color.org and https://bixense.com/clicolors/, so
+/// slint behaves like every other tool in a pipeline. Highest first:
+///
+/// 1. `--no-color`, an explicit refusal on the command line.
+/// 2. NO_COLOR set to anything non-empty, CLICOLOR=0, or TERM=dumb — each turns colour off.
+/// 3. CLICOLOR_FORCE or FORCE_COLOR set to anything non-empty but "0" — colour on, even piped.
+/// 4. Otherwise colour only when stdout is a terminal.
+fn colour_allowed(no_color_flag: bool) -> bool {
+    if no_color_flag {
+        return false;
     }
 
-    if max_warnings >= 0 && report.warnings() as i64 > max_warnings {
+    if std::env::var_os("NO_COLOR").is_some_and(|value| !value.is_empty()) {
+        return false;
+    }
+
+    if std::env::var("CLICOLOR").is_ok_and(|value| value == "0") {
+        return false;
+    }
+
+    if std::env::var("TERM").is_ok_and(|value| value == "dumb") {
+        return false;
+    }
+
+    let forced = ["CLICOLOR_FORCE", "FORCE_COLOR"]
+        .iter()
+        .any(|name| std::env::var(name).is_ok_and(|value| !value.is_empty() && value != "0"));
+    if forced {
+        return true;
+    }
+
+    std::io::stdout().is_terminal()
+}
+
+/// What the run means, as a number.
+fn exit_code(report: &Report, max_warnings: i64) -> u8 {
+    // Nothing was looked at: a typo'd path or an empty directory is not a clean pass, and a CI
+    // job pointed at the wrong directory must not sit green forever.
+    if report.skills.is_empty() {
+        return code::NOTHING_LINTED;
+    }
+
+    if !report.passes(max_warnings) {
         return code::ERRORS;
     }
 
@@ -270,11 +320,13 @@ fn init() -> Result<u8> {
     let path = PathBuf::from("slint.toml");
 
     if path.exists() {
+        // An expected no-op, not a failure: nothing was asked for and nothing is broken, so the
+        // exit code stays clean and the explanation goes to stderr, where the report never goes.
         eprintln!(
             "slint: {} already exists, so nothing was written",
             path.display()
         );
-        return Ok(code::FAILED);
+        return Ok(code::CLEAN);
     }
 
     std::fs::write(&path, config::STARTER_CONFIG)
@@ -291,11 +343,12 @@ fn init_plugin() -> Result<u8> {
     let path = PathBuf::from("slint-house-rules.toml");
 
     if path.exists() {
+        // As with init: an expected no-op, not a failure of slint itself.
         eprintln!(
             "slint: {} already exists, so nothing was written",
             path.display()
         );
-        return Ok(code::FAILED);
+        return Ok(code::CLEAN);
     }
 
     std::fs::write(&path, plugin::STARTER_PACK)
@@ -368,6 +421,7 @@ mod tests {
                 notes: vec![],
             }],
             fixed: 0,
+            notes: Vec::new(),
         }
     }
 
@@ -392,6 +446,18 @@ mod tests {
         assert_eq!(exit_code(&report_with(0, 3), 3), code::WARNINGS);
         assert_eq!(exit_code(&report_with(0, 4), 3), code::ERRORS);
         assert_eq!(exit_code(&report_with(0, 1), 0), code::ERRORS);
+    }
+
+    #[test]
+    fn a_run_that_lints_nothing_is_its_own_verdict_not_a_clean_pass() {
+        // https://github.com/MaximeGaudin/slint/issues/118
+        let report = Report {
+            skills: vec![],
+            fixed: 0,
+            notes: Vec::new(),
+        };
+
+        assert_eq!(exit_code(&report, -1), code::NOTHING_LINTED);
     }
 
     #[test]

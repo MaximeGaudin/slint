@@ -260,6 +260,7 @@ mod tests {
                 notes: vec![],
             }],
             fixed: 0,
+            notes: Vec::new(),
         };
 
         let applied = apply(&report).unwrap();
@@ -292,6 +293,7 @@ mod tests {
                 notes: vec![],
             }],
             fixed: 0,
+            notes: Vec::new(),
         };
 
         assert_eq!(apply(&report).unwrap(), Applied::default());
@@ -317,6 +319,7 @@ mod tests {
                 notes: vec![],
             }],
             fixed: 0,
+            notes: Vec::new(),
         };
 
         apply(&report).unwrap();

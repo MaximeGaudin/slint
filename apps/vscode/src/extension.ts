@@ -9,8 +9,9 @@ import {
   quickFixEditForFinding,
 } from './fixes.js'
 import { ignoreEditsForFinding, ruleIdFromCode } from './ignore.js'
-import { LintRunCoordinator, type StatusUpdate } from './lint-runs.js'
+import { LintQueue, LintRunCoordinator, type StatusUpdate } from './lint-runs.js'
 import { ruleOverridesArgv } from './rules-setting.js'
+import { isUnderAnyRoot } from './skill-paths.js'
 
 const run = promisify(execFile)
 
@@ -62,6 +63,8 @@ let status: vscode.StatusBarItem
 let pending: NodeJS.Timeout | undefined
 /** Cancels superseded child processes and keeps the status bar honest across overlapping runs. */
 const runs = new LintRunCoordinator()
+/** Serializes slint invocations across targets so two runs can never publish over each other. */
+const queue = new LintQueue()
 /** Last static envelope per target — merged back in when the model pass publishes so static never vanishes. */
 const lastStatic = new Map<string, Envelope>()
 /**
@@ -77,7 +80,6 @@ export function activate(context: vscode.ExtensionContext): void {
   status.command = 'slint.showOutput'
   status.tooltip = 'Show the slint output channel'
   status.text = 'slint'
-  status.show()
 
   context.subscriptions.push(diagnostics, output, status)
 
@@ -133,12 +135,27 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   )
 
+  // A skill that disappears must not haunt the Problems panel (deleted in the Explorer, or moved
+  // to a new path by a rename). Nothing will ever re-lint the old target string, so clear now.
+  context.subscriptions.push(
+    vscode.workspace.onDidDeleteFiles((event) => dropDiagnostics(event.files)),
+    vscode.workspace.onDidRenameFiles((event) =>
+      dropDiagnostics(event.files.map((rename) => rename.oldUri)),
+    ),
+  )
+
   // Open skills at activation: static only, so the Problems panel is populated without spending.
   for (const document of vscode.workspace.textDocuments) {
     if (isSkill(document) && (setting<string>('onSave', document.uri) ?? 'no-llm') !== 'nothing') {
       void lint(directoryOf(document), { model: false, resource: document.uri })
     }
   }
+
+  // The extension no longer activates on every Markdown file (#59), so the status bar entry
+  // appears only where slint is relevant: a skill exists in the workspace, or one is open.
+  void vscode.workspace.findFiles('**/SKILL.md', undefined, 1).then((found) => {
+    if (found.length > 0) status.show()
+  })
 }
 
 export function deactivate(): void {
@@ -160,9 +177,22 @@ function directoryOf(document: vscode.TextDocument): string {
   return path.dirname(document.fileName)
 }
 
+/**
+ * Working directory for a slint run: the workspace folder that owns the target, or the target's
+ * own directory for a loose file. Never inherit the extension host's cwd — behavior must not
+ * depend on where VS Code happened to start.
+ */
+function cwdFor(target: string): string {
+  return (
+    vscode.workspace.getWorkspaceFolder(vscode.Uri.file(target))?.uri.fsPath ?? path.dirname(target)
+  )
+}
+
 function setStatus(text: string, detail?: string): void {
   status.text = text
   status.tooltip = detail ?? 'Show the slint output channel'
+  // Lazy visibility: a run starting (or finishing) is proof slint is relevant here.
+  status.show()
 }
 
 /**
@@ -233,6 +263,14 @@ async function lintActiveWithModel(): Promise<void> {
 async function lintWorkspace(options: { model: boolean }): Promise<void> {
   const folders = vscode.workspace.workspaceFolders ?? []
 
+  // Single-file mode: there is no workspace to iterate, so say so instead of doing nothing.
+  if (folders.length === 0) {
+    void vscode.window.showInformationMessage(
+      'Open a folder to lint the whole workspace; use "slint: Lint with model (current skill)" for a single file.',
+    )
+    return
+  }
+
   // One slint invocation per folder: the CLI parallelizes the model pass across skills inside it.
   for (const folder of folders) {
     await lint(folder.uri.fsPath, { ...options, resource: folder.uri })
@@ -278,6 +316,9 @@ async function lint(
 /**
  * Runs one slint pass and publishes if this generation is still current.
  * Returns the envelope on success, or undefined when the binary failed.
+ *
+ * Every pass goes through the global queue: cancellation only protects a target from itself, so a
+ * workspace lint and a per-file lint over the same files are serialized instead of racing.
  */
 async function runPass(
   target: string,
@@ -285,87 +326,100 @@ async function runPass(
   generation: number,
   signal: AbortSignal,
 ): Promise<Envelope | undefined> {
-  const binary = setting<string>('path', options.resource) ?? 'slint'
-  const { argv, env } = spawnFor(target, options)
-  const label = path.basename(target)
+  return queue.run(async () => {
+    // Superseded while waiting in the queue: do nothing, not even status churn.
+    if (signal.aborted || !runs.isCurrent(target, generation)) {
+      output.appendLine(`· ${path.basename(target)} · cancelled while queued`)
+      return undefined
+    }
 
-  runs.markStarted()
-  if (!options.model) {
-    setStatus('$(sync~spin) slint', `Linting ${label}…`)
-    output.appendLine(`→ ${label} · static`)
-  }
+    const binary = setting<string>('path', options.resource) ?? 'slint'
+    const { argv, env } = spawnFor(target, options)
+    const label = path.basename(target)
 
-  let stdout: string
+    runs.markStarted()
+    if (!options.model) {
+      setStatus('$(sync~spin) slint', `Linting ${label}…`)
+      output.appendLine(`→ ${label} · static`)
+    }
 
-  try {
-    const result = await run(binary, argv, { maxBuffer: 16 * 1024 * 1024, env, signal })
-    stdout = result.stdout
-  } catch (failure) {
-    if (isAbortError(failure) || signal.aborted || !runs.isCurrent(target, generation)) {
-      output.appendLine(`· ${label} · cancelled (newer lint started)`)
+    let stdout: string
+
+    try {
+      const result = await run(binary, argv, {
+        maxBuffer: 16 * 1024 * 1024,
+        env,
+        signal,
+        cwd: cwdFor(target),
+      })
+      stdout = result.stdout
+    } catch (failure) {
+      if (isAbortError(failure) || signal.aborted || !runs.isCurrent(target, generation)) {
+        output.appendLine(`· ${label} · cancelled (newer lint started)`)
+        applyStatus(runs.markFinished({ superseded: true }))
+        return undefined
+      }
+
+      const error = failure as { stdout?: string; code?: number; message?: string }
+
+      // Findings are not failures: slint exits 1/2 when it found problems, and that run is the useful
+      // one. Only an empty stdout means slint itself could not run.
+      if (!error.stdout) {
+        output.appendLine(`slint could not run: ${error.message ?? 'unknown failure'}`)
+        output.appendLine(`  ${binary} ${argv.join(' ')}`)
+        finishStatus(
+          '$(error) slint failed',
+          error.message ?? 'slint could not run — click for details',
+        )
+        return undefined
+      }
+
+      stdout = error.stdout
+    }
+
+    if (!runs.isCurrent(target, generation)) {
       applyStatus(runs.markFinished({ superseded: true }))
       return undefined
     }
 
-    const error = failure as { stdout?: string; code?: number; message?: string }
+    let envelope: Envelope
 
-    // Findings are not failures: slint exits 1/2 when it found problems, and that run is the useful
-    // one. Only an empty stdout means slint itself could not run.
-    if (!error.stdout) {
-      output.appendLine(`slint could not run: ${error.message ?? 'unknown failure'}`)
-      output.appendLine(`  ${binary} ${argv.join(' ')}`)
-      finishStatus(
-        '$(error) slint failed',
-        error.message ?? 'slint could not run — click for details',
-      )
+    try {
+      envelope = JSON.parse(stdout) as Envelope
+    } catch {
+      output.appendLine('slint answered with something that was not JSON.')
+      finishStatus('$(error) slint failed', 'slint answered with something that was not JSON')
       return undefined
     }
 
-    stdout = error.stdout
-  }
+    publish(envelope, {
+      target,
+      // The model pass must not erase the static findings already on screen. Seed from the static
+      // envelope we just published; prefer any static/plugin rows the --llm run also returned.
+      keepStatic: options.model ? lastStatic.get(target) : undefined,
+      // Static-only runs always skip the model by design — don't spam the output channel with
+      // "Skipped N model rules" as if something went wrong.
+      silenceSkippedModelNote: !options.model,
+    })
 
-  if (!runs.isCurrent(target, generation)) {
-    applyStatus(runs.markFinished({ superseded: true }))
-    return undefined
-  }
+    if (!options.model) {
+      lastStatic.set(target, envelope)
+    }
 
-  let envelope: Envelope
+    const kind = options.model ? 'model' : 'static'
+    const summary = summarizePublished(envelope, options.model ? lastStatic.get(target) : undefined)
+    output.appendLine(`✓ ${label} · ${kind}: ${summary}`)
 
-  try {
-    envelope = JSON.parse(stdout) as Envelope
-  } catch {
-    output.appendLine('slint answered with something that was not JSON.')
-    finishStatus('$(error) slint failed', 'slint answered with something that was not JSON')
-    return undefined
-  }
+    if (options.followWithModel) {
+      // Model pass is about to start — free this slot without clearing the "running" feel.
+      runs.releaseSlot()
+      setStatus(`$(check) slint: ${summary}`, 'Static done — model pass starting…')
+    } else {
+      finishFromSummaryText(summary, envelope.summary.skills)
+    }
 
-  publish(envelope, {
-    target,
-    // The model pass must not erase the static findings already on screen. Seed from the static
-    // envelope we just published; prefer any static/plugin rows the --llm run also returned.
-    keepStatic: options.model ? lastStatic.get(target) : undefined,
-    // Static-only runs always skip the model by design — don't spam the output channel with
-    // "Skipped N model rules" as if something went wrong.
-    silenceSkippedModelNote: !options.model,
+    return envelope
   })
-
-  if (!options.model) {
-    lastStatic.set(target, envelope)
-  }
-
-  const kind = options.model ? 'model' : 'static'
-  const summary = summarizePublished(envelope, options.model ? lastStatic.get(target) : undefined)
-  output.appendLine(`✓ ${label} · ${kind}: ${summary}`)
-
-  if (options.followWithModel) {
-    // Model pass is about to start — free this slot without clearing the "running" feel.
-    runs.releaseSlot()
-    setStatus(`$(check) slint: ${summary}`, 'Static done — model pass starting…')
-  } else {
-    finishFromSummaryText(summary, envelope.summary.skills)
-  }
-
-  return envelope
 }
 
 function isAbortError(failure: unknown): boolean {
@@ -509,22 +563,28 @@ function isSkippedModelNote(note: string): boolean {
 
 function clearSkills(skillPaths: string[]): void {
   const stale: vscode.Uri[] = []
-
   diagnostics.forEach((uri) => {
-    const file = uri.fsPath
-    if (
-      skillPaths.some(
-        (root) =>
-          file === root || file.startsWith(root + path.sep) || file === path.join(root, 'SKILL.md'),
-      )
-    ) {
-      stale.push(uri)
-    }
+    if (isUnderAnyRoot(uri.fsPath, skillPaths)) stale.push(uri)
   })
 
   for (const uri of stale) {
     diagnostics.delete(uri)
     fixableByFile.delete(uri.fsPath)
+  }
+}
+
+/** Removes every diagnostic for the given paths, or for anything inside them (folder deletes). */
+function dropDiagnostics(uris: readonly vscode.Uri[]): void {
+  const roots = uris.map((uri) => uri.fsPath)
+  const stale: vscode.Uri[] = []
+
+  diagnostics.forEach((uri) => {
+    if (isUnderAnyRoot(uri.fsPath, roots)) stale.push(uri)
+  })
+
+  for (const uri of stale) {
+    diagnostics.delete(uri)
+    output.appendLine(`· ${path.basename(uri.fsPath)} · diagnostics cleared (no longer exists)`)
   }
 }
 
@@ -546,8 +606,10 @@ function toDiagnostic(finding: Finding): vscode.Diagnostic {
     target: vscode.Uri.parse(finding.reference.url),
   }
 
+  // Fixable findings are faded: the text is flagged as something slint can clean up for you
+  // (`slint --fix`, or the "Apply the computed fixes" command). An empty tag array showed nothing.
   if (finding.fix) {
-    diagnostic.tags = []
+    diagnostic.tags = [vscode.DiagnosticTag.Unnecessary]
   }
 
   return diagnostic
@@ -757,7 +819,7 @@ async function fixActiveDocument(): Promise<void> {
   setStatus('$(sync~spin) slint', 'Applying fixes…')
 
   try {
-    await run(binary, argv, { maxBuffer: 16 * 1024 * 1024, env })
+    await run(binary, argv, { maxBuffer: 16 * 1024 * 1024, env, cwd: cwdFor(directory) })
   } catch (failure) {
     const error = failure as { stdout?: string; message?: string }
     if (!error.stdout) {

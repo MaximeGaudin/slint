@@ -43,11 +43,12 @@ impl FromStr for Format {
     }
 }
 
-/// Renders a report in the chosen format.
-pub fn render(report: &Report, format: Format, colour: bool) -> String {
+/// Renders a report in the chosen format. The warning budget only matters to the JSON envelope:
+/// it is what the exit code is judged against, and `ok` says the same thing.
+pub fn render(report: &Report, format: Format, colour: bool, max_warnings: i64) -> String {
     match format {
         Format::Stylish => stylish::render(report, colour),
-        Format::Json => json::render(report),
+        Format::Json => json::render(report, max_warnings),
         Format::Github => github::render(report),
         Format::Compact => compact(report),
     }
@@ -120,6 +121,7 @@ mod tests {
                 notes: vec!["8 rules need a model and none is configured.".into()],
             }],
             fixed: 0,
+            notes: Vec::new(),
         }
     }
 
@@ -150,9 +152,9 @@ mod tests {
     fn rendering_dispatches_to_the_chosen_format() {
         let report = sample();
 
-        assert!(render(&report, Format::Json, false).starts_with('{'));
-        assert!(render(&report, Format::Github, false).starts_with("::"));
-        assert!(render(&report, Format::Compact, false).contains("SKILL.md:2:1"));
-        assert!(render(&report, Format::Stylish, false).contains("helper"));
+        assert!(render(&report, Format::Json, false, -1).starts_with('{'));
+        assert!(render(&report, Format::Github, false, -1).starts_with("::"));
+        assert!(render(&report, Format::Compact, false, -1).contains("SKILL.md:2:1"));
+        assert!(render(&report, Format::Stylish, false, -1).contains("helper"));
     }
 }

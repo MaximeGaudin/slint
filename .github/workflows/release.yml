@@ -114,6 +114,49 @@ jobs:
             gh release create "$TAG" artifacts/* --title "v${TAG}" --notes-file /tmp/release-notes.md
           fi
 
+  vscode:
+    name: Publish VS Code extension
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.21.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build extension
+        run: pnpm exec turbo run build --filter=slint-vscode
+
+      - name: Publish to the VS Code Marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          if [ -z "${VSCE_PAT:-}" ]; then
+            echo "::warning::VSCE_PAT not set — skipping VS Code Marketplace publish."
+            exit 0
+          fi
+          pnpm --filter slint-vscode publish:marketplace
+
+      - name: Publish to Open VSX
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: |
+          if [ -z "${OVSX_PAT:-}" ]; then
+            echo "::warning::OVSX_PAT not set — skipping Open VSX publish."
+            exit 0
+          fi
+          pnpm --filter slint-vscode publish:openvsx
+
   homebrew:
     name: Update Homebrew tap
     needs: release
