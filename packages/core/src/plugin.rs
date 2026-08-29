@@ -494,18 +494,13 @@ pub fn plugin_abi_json_schema() -> serde_json::Value {
             { "$ref": "#/$defs/PluginOutput" }
         ]),
     );
-    schema.insert(
-        "$defs".into(),
-        serde_json::Value::Object(definitions),
-    );
+    schema.insert("$defs".into(), serde_json::Value::Object(definitions));
 
     serde_json::Value::Object(schema)
 }
 
 /// Lifts a schema's `$defs` map out of its root, leaving the root bare.
-fn take_definitions(
-    schema: &mut serde_json::Value,
-) -> serde_json::Map<String, serde_json::Value> {
+fn take_definitions(schema: &mut serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
     schema
         .as_object_mut()
         .and_then(|object| object.remove("$defs"))

@@ -1429,17 +1429,18 @@ fn the_committed_report_schema_is_the_one_the_binary_prints() {
     // The file the docs site publishes for `--format json` has to be the schema this binary would
     // print, or a consumer would validate a report against a shape slint does not emit.
     // Regenerate it with `slint schema report > apps/docs/public/schemas/report.json`.
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../docs/public/schemas/report.json");
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../docs/public/schemas/report.json"
+    );
     let committed: serde_json::Value = serde_json::from_str(
         &fs::read_to_string(path)
             .expect("the committed report schema exists; regenerate it with `slint schema report`"),
     )
     .expect("the committed report schema is valid JSON");
 
-    let generated: serde_json::Value = serde_json::from_str(&stdout(&slint(&[
-        "schema", "report",
-    ])))
-    .expect("schema prints valid JSON");
+    let generated: serde_json::Value = serde_json::from_str(&stdout(&slint(&["schema", "report"])))
+        .expect("schema prints valid JSON");
 
     assert_eq!(generated, committed);
 }
@@ -1449,19 +1450,18 @@ fn the_committed_plugin_abi_schema_is_the_one_the_binary_prints() {
     // The file the plugin ABI page publishes has to be the schema this binary would print, or a
     // plugin author would validate the wire format against a shape slint does not speak.
     // Regenerate it with `slint schema plugin-abi > apps/docs/public/schemas/plugin-abi.json`.
-    let path =
-        concat!(env!("CARGO_MANIFEST_DIR"), "/../docs/public/schemas/plugin-abi.json");
-    let committed: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(path).expect(
-            "the committed plugin ABI schema exists; regenerate it with `slint schema plugin-abi`",
-        ),
-    )
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../docs/public/schemas/plugin-abi.json"
+    );
+    let committed: serde_json::Value = serde_json::from_str(&fs::read_to_string(path).expect(
+        "the committed plugin ABI schema exists; regenerate it with `slint schema plugin-abi`",
+    ))
     .expect("the committed plugin ABI schema is valid JSON");
 
-    let generated: serde_json::Value = serde_json::from_str(&stdout(&slint(&[
-        "schema", "plugin-abi",
-    ])))
-    .expect("schema prints valid JSON");
+    let generated: serde_json::Value =
+        serde_json::from_str(&stdout(&slint(&["schema", "plugin-abi"])))
+            .expect("schema prints valid JSON");
 
     assert_eq!(generated, committed);
 }

@@ -21,7 +21,9 @@ pub(crate) fn strip_control(text: &str) -> String {
 }
 
 /// How much a finding matters. Ordered worst-first, so a sort is a sort.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
     /// The skill is broken, or the specification would refuse it.
