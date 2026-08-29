@@ -207,7 +207,16 @@ pub fn read(directory: &Path) -> Result<Skill> {
 
     let mut skill = parse(&source);
     skill.directory = directory.to_path_buf();
-    skill.document = document_path.display().to_string();
+    // The leaf is the manifest as the author spelled it; the join stays a forward slash, the
+    // reporting convention on every platform.
+    skill.document = format!(
+        "{}/{}",
+        directory.display(),
+        document_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(SKILL_FILE)
+    );
 
     if !skill.name_declared && skill.name.is_empty() {
         // The directory name is what an agent would see if the frontmatter is silent, and it makes
@@ -935,11 +944,18 @@ mod tests {
             // case-insensitive ones may report the canonical name for both.
             let skill = read(&path).unwrap();
             assert_eq!(skill.name, "photo-culling", "for {file}");
+            // Report paths join with forward slashes on every platform, separators included.
+            assert!(
+                !skill.document.contains('\\'),
+                "report paths use forward slashes: {}",
+                skill.document
+            );
             assert!(
                 skill
                     .document
-                    .to_ascii_lowercase()
-                    .ends_with(&file.to_ascii_lowercase()),
+                    .split('/')
+                    .next_back()
+                    .is_some_and(|leaf| leaf.eq_ignore_ascii_case(file)),
                 "for {file}: {}",
                 skill.document
             );
