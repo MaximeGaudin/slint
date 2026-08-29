@@ -26,7 +26,8 @@ pub struct BundledFile {
     pub path: String,
     pub bytes: usize,
     pub executable: bool,
-    /// `None` for anything that is not UTF-8 text: an image is a file to count, not to read.
+    /// `None` for anything that is not UTF-8 text, or above [`MAX_TEXT_FILE_BYTES`]: an image
+    /// is a file to count, not to read.
     pub text: Option<String>,
 }
 
@@ -165,13 +166,16 @@ pub fn read(directory: &Path) -> Result<Skill> {
             .to_string();
     }
 
-    skill.files = read_bundle(directory)?;
+    let (files, bundle_notes) = read_bundle(directory)?;
+    skill.files = files;
+    skill.notes.extend(bundle_notes);
 
     Ok(skill)
 }
 
-fn read_bundle(directory: &Path) -> Result<Vec<BundledFile>> {
+fn read_bundle(directory: &Path) -> Result<(Vec<BundledFile>, Vec<String>)> {
     let mut files = Vec::new();
+    let mut notes = Vec::new();
 
     for entry in WalkDir::new(directory)
         .follow_links(false)
@@ -197,9 +201,19 @@ fn read_bundle(directory: &Path) -> Result<Vec<BundledFile>> {
             .metadata()
             .map(|meta| meta.len() as usize)
             .unwrap_or(0);
-        let text = fs::read(entry.path())
-            .ok()
-            .and_then(|raw| String::from_utf8(raw).ok());
+
+        // The size is known before anything is read, so an oversized asset never reaches
+        // memory at all — it is counted and named, the way an image already is.
+        let text = if bytes > MAX_TEXT_FILE_BYTES {
+            notes.push(format!(
+                "{relative} is {bytes} bytes, above the {MAX_TEXT_FILE_BYTES}-byte limit for bundled text, so it was counted but not read."
+            ));
+            None
+        } else {
+            fs::read(entry.path())
+                .ok()
+                .and_then(|raw| String::from_utf8(raw).ok())
+        };
 
         files.push(BundledFile {
             path: relative,
@@ -210,7 +224,7 @@ fn read_bundle(directory: &Path) -> Result<Vec<BundledFile>> {
     }
 
     files.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(files)
+    Ok((files, notes))
 }
 
 #[cfg(unix)]

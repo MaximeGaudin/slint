@@ -9,7 +9,7 @@ use anyhow::Result;
 use rayon::prelude::*;
 use regex::Regex;
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use crate::config::Config;
@@ -247,10 +247,14 @@ pub fn run(
         })
         .collect();
 
+    // A finding is filed under the directory it names, matched exactly. A string prefix would let
+    // `a` swallow every finding about a sibling `ab`, since `ab/SKILL.md` starts with `a`.
     for message in lint_project(&skills, config) {
+        let directory = Path::new(&message.file).parent();
+
         if let Some(report) = per_skill
             .iter_mut()
-            .find(|one| message.file.starts_with(&one.path))
+            .find(|one| directory == Some(Path::new(&one.path)))
         {
             report.messages.push(message);
         }
@@ -311,10 +315,12 @@ pub fn run(
     } else if !passes.model {
         // Intentional skip, not a failure. Keep it short: the editor runs --no-llm on every
         // static pass and a lecture about slint.toml there reads like something went wrong.
+        // Every report carries it, because a consumer that renders one skill at a time would
+        // otherwise read an empty notes list as "the model pass ran and found nothing".
         let count = llm::rules::all().len();
 
-        if let Some(first) = per_skill.first_mut() {
-            first.notes.push(format!(
+        for report in &mut per_skill {
+            report.notes.push(format!(
                 "Skipped {count} model rules (not requested). Pass --llm to run them."
             ));
         }
