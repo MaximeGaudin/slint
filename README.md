@@ -120,11 +120,11 @@ Exit codes: `0` clean, `1` errors, `2` warnings only, `3` slint itself failed, `
 | `--llm-model ID`        | Override `[llm].model` from the config.                            |
 | `--llm-base-url URL`    | Override `[llm].base_url` from the config.                         |
 | `--llm-api-key-env VAR` | Override `[llm].api_key_env` from the config.                      |
-| `--no-plugins`          | Skip plugins, whatever the config says.                            |
+| `--plugins`             | Run the plugins the config names. Off by default: the config belongs to the project being scanned. |
+| `--no-plugins`          | Kept so existing scripts keep working: plugins are off unless `--plugins` is passed. |
 | `--quiet`               | Errors only.                                                       |
 | `-v` / `--verbose`      | Say which config and how many plugins, on stderr.                  |
 | `--no-color`            | Never colour the output.                                           |
-
 
 
 
@@ -210,6 +210,8 @@ reference = { title = "House style", url = "https://example.com/style" }
 **A WebAssembly plugin** is code, run through [Extism](https://extism.org). Point the config at a `.wasm` file; slint calls its exported `lint` function with the parsed skill as JSON and reads messages back. It runs sandboxed — no filesystem, no network.
 
 Both are held to the same standard as the built-in catalogue: a namespaced rule name, and a citation.
+
+Plugins are off by default and run only with `--plugins`. The config that names them lives in the project being scanned — a linter does not execute code a scanned project ships without being asked. When a config names plugins and they do not run, the report says so.
 
 ## Editors
 

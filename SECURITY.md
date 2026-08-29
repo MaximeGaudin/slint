@@ -28,7 +28,7 @@ What follows is the model the code is actually built against. Each claim here co
 ### What slint processes
 
 - **Skill content** — `SKILL.md` files and any files bundled with them — is **untrusted input**. slint parses it, lints it, and reports on it. It never executes a bundled file, never follows a path out of the bundle, and never treats skill text as instructions to slint itself. Model-authored finding text is stripped of control characters before it is shown (see `strip_control` in `packages/core/src/diagnostics.rs`).
-- **Config files** (`slint.toml`, `slint.config.json`, `.slintrc.json`) are trusted configuration: whoever can write one can already run arbitrary code on your machine by other means. They decide which plugins load and where model requests go, so treat a config from an untrusted source with the same suspicion as a plugin.
+- **Config files** (`slint.toml`, `slint.config.json`, `.slintrc.json`) are trusted configuration: whoever can write one can already run arbitrary code on your machine by other means. They decide which plugins load and where model requests go. Plugins load only when the run asks for them (`--plugins`), so a scanned project's config alone executes nothing; but a config from an untrusted source still deserves the same suspicion as a plugin the moment you opt in.
 - **Suppression comments** (`<!-- slint-disable … -->`) are honoured only for the rules and scopes they name; a skill cannot disable slint's own guardrails for other documents.
 
 ### Wasm plugins (Extism sandbox)

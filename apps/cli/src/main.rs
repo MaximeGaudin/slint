@@ -105,7 +105,12 @@ struct Cli {
     #[arg(long = "llm-api-key-env", value_name = "VAR")]
     llm_api_key_env: Option<String>,
 
-    /// Skip plugins, whatever the config says.
+    /// Run the plugins the config names. Off by default: the config naming them belongs to the
+    /// project being scanned, and running code a scanned project ships is not a linter's default.
+    #[arg(long)]
+    plugins: bool,
+
+    /// Skip plugins, whatever the config says. Kept for scripts that already pass it.
     #[arg(long)]
     no_plugins: bool,
 
@@ -223,10 +228,12 @@ fn run(cli: &Cli) -> Result<u8> {
         return run_stdin(cli, &config);
     }
 
-    let plugins = if cli.no_plugins {
-        Vec::new()
-    } else {
+    let run_plugins = cli.plugins && !cli.no_plugins;
+
+    let plugins = if run_plugins {
         plugin::load_all(&config)?
+    } else {
+        Vec::new()
     };
 
     config::check_rule_names(&config, &plugins)?;
@@ -236,7 +243,7 @@ fn run(cli: &Cli) -> Result<u8> {
     }
 
     let passes = Passes {
-        plugins: !cli.no_plugins,
+        plugins: run_plugins,
         model: cli.model_pass(),
     };
 
