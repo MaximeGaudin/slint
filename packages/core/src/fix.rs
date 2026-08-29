@@ -3,11 +3,13 @@
 //! Only ever computed ones: a model never edits a file here. A fix is a byte range and a
 //! replacement, so applying several to one file is a sort and a splice — and two fixes that overlap
 //! mean one of them was resolved against text the other already changed, so the second is left for
-//! the next pass rather than applied against a moved target.
+//! the next pass rather than applied against a moved target. Files are replaced by rename rather
+//! than rewritten in place, so a crash mid-fix never leaves half of each.
 
 use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 
 use crate::diagnostics::{Fix, Report};
@@ -77,7 +79,7 @@ fn apply_to_file(path: &Path, fixes: &[&Fix]) -> Result<Applied> {
     let (patched, count, deferred) = patch(&original, &edits);
 
     if count > 0 {
-        fs::write(path, patched).with_context(|| format!("writing {}", path.display()))?;
+        write_atomically(path, &patched).with_context(|| format!("writing {}", path.display()))?;
     }
 
     applied.fixes += count;
@@ -121,6 +123,45 @@ pub fn patch(text: &str, fixes: &[&&Fix]) -> (String, usize, usize) {
     }
 
     (patched, applied, deferred)
+}
+
+/// Replaces a file by rename rather than truncating it in place.
+///
+/// The new content is written to a temporary file in the same directory, flushed, and renamed over
+/// the original. rename(2) is atomic, so a crash or a full disk mid-write leaves either the old
+/// content or the new one on disk — never a half-written file and no way back to the original.
+fn write_atomically(path: &Path, contents: &str) -> Result<()> {
+    let directory = path.parent().unwrap_or_else(|| Path::new("."));
+
+    let temporary = tempfile::Builder::new()
+        .prefix(".slint-fix-")
+        .tempfile_in(directory)
+        .with_context(|| format!("creating a temporary file beside {}", path.display()))?;
+
+    {
+        let mut file = temporary.as_file();
+        file.write_all(contents.as_bytes())
+            .with_context(|| format!("writing {}", temporary.path().display()))?;
+        file.sync_all()
+            .with_context(|| format!("flushing {}", temporary.path().display()))?;
+    }
+
+    // A fresh temporary file is private to its creator; the file it replaces keeps the mode it had.
+    #[cfg(unix)]
+    {
+        let permissions = fs::metadata(path)
+            .with_context(|| format!("reading {}", path.display()))?
+            .permissions();
+        fs::set_permissions(temporary.path(), permissions)
+            .with_context(|| format!("chmod {}", temporary.path().display()))?;
+    }
+
+    temporary
+        .persist(path)
+        .map_err(|error| error.error)
+        .with_context(|| format!("replacing {}", path.display()))?;
+
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -260,6 +301,7 @@ mod tests {
                 notes: vec![],
             }],
             fixed: 0,
+            notes: Vec::new(),
         };
 
         let applied = apply(&report).unwrap();
@@ -272,6 +314,78 @@ mod tests {
                 deferred: 0
             }
         );
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "Read scripts/notes.md.\n"
+        );
+    }
+
+    /// A report whose one skill carries one fix for the given path.
+    fn report_fixing(path: &Path, fix: Fix) -> Report {
+        Report {
+            skills: vec![SkillReport {
+                path: path.parent().unwrap().display().to_string(),
+                name: "a".into(),
+                messages: vec![message(path.to_str().unwrap(), Some(fix))],
+                notes: vec![],
+            }],
+            fixed: 0,
+            notes: Vec::new(),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fix_replaces_the_file_rather_than_rewriting_it_in_place() {
+        // The observable signature of temp-file + rename: what is on disk afterwards is a new
+        // file. A truncate-and-write keeps the old one, so a crash mid-write leaves it half
+        // written with the original gone.
+        use std::os::unix::fs::MetadataExt;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("SKILL.md");
+        fs::write(&path, "Read scripts\\notes.md.\n").unwrap();
+        let before = fs::metadata(&path).unwrap().ino();
+
+        apply(&report_fixing(&path, fix(0, 22, "Read scripts/notes.md."))).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "Read scripts/notes.md.\n"
+        );
+        assert_ne!(
+            before,
+            fs::metadata(&path).unwrap().ino(),
+            "the file was replaced, not truncated"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_replaced_file_keeps_the_permissions_it_had() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("SKILL.md");
+        fs::write(&path, "Read scripts\\notes.md.\n").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+
+        apply(&report_fixing(&path, fix(0, 22, "Read scripts/notes.md."))).unwrap();
+
+        let mode = fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o644, "the replacement keeps the file's mode");
+    }
+
+    #[test]
+    fn applying_a_fix_leaves_no_temporary_files_behind() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("SKILL.md");
+        fs::write(&path, "Read scripts\\notes.md.\n").unwrap();
+
+        apply(&report_fixing(&path, fix(0, 22, "Read scripts/notes.md."))).unwrap();
+
+        let entries = fs::read_dir(temporary.path()).unwrap().count();
+        assert_eq!(entries, 1, "only the skill file remains");
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
             "Read scripts/notes.md.\n"
@@ -292,6 +406,7 @@ mod tests {
                 notes: vec![],
             }],
             fixed: 0,
+            notes: Vec::new(),
         };
 
         assert_eq!(apply(&report).unwrap(), Applied::default());
@@ -317,6 +432,7 @@ mod tests {
                 notes: vec![],
             }],
             fixed: 0,
+            notes: Vec::new(),
         };
 
         apply(&report).unwrap();

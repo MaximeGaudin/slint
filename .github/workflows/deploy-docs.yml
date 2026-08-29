@@ -1,0 +1,45 @@
+name: Deploy docs
+
+on:
+  push:
+    branches: [main]
+    paths: ['apps/docs/**', '.github/workflows/deploy-docs.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Build and deploy to GitHub Pages
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.21.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build the docs site
+        run: pnpm exec turbo run build --filter=slint-docs
+      # Astro ships hashed assets under _astro/, which Jekyll would ignore.
+      - name: Disable Jekyll processing
+        run: touch apps/docs/dist/.nojekyll
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/docs/dist
+      - id: deployment
+        uses: actions/deploy-pages@v4
