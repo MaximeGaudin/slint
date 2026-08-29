@@ -301,7 +301,7 @@ fn run_stdin(cli: &Cli, config: &Config) -> Result<u8> {
 
     // Anything the document itself asked not to hear about still applies.
     let suppressions = engine::Suppressions::read(&source);
-    messages.retain(|message| suppressions.allows(message));
+    messages.retain(|message| suppressions.allows(&skill.document, message));
 
     let mut notes = skill.notes.clone();
     if cli.model_pass() {
