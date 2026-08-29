@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **JSON envelope versioning** — `--format json` opens with `schemaVersion: 1`, and the full envelope shape is documented field by field at slint.dev/json.
+- **WebAssembly plugin ABI spec** — the wire contract for plugin authors (export, input, output, validation, failure semantics) is specified field by field at slint.dev/plugin-abi, written from the implementation.
+- **Community files** — `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md` (vulnerability reporting plus the threat model for plugin execution, LLM transmission, and cloned-repo configs), and GitHub issue/PR templates.
+
+### Fixed
+
+- **Dogfooding** — slint passes on its own bundled `.cursor/skills` again: the fix-github-issue skill's pre-flight script reference is written as a repo-root path (`./scripts/check.sh`) instead of a bundled one, and a regression test keeps the shipped skills passing slint itself.
+
 ## [0.2.0] - 2026-08-20
 
 ### Added
