@@ -13,7 +13,7 @@ pub mod stylish;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
-use crate::diagnostics::Report;
+use crate::diagnostics::{Report, Severity};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -69,14 +69,16 @@ fn compact(report: &Report) -> String {
 
     for skill in &report.skills {
         for message in &skill.messages {
+            // The ESLint compact convention, which the name promises: the position in prose,
+            // a capitalised severity, and the rule in brackets at the end of the line.
             lines.push(format!(
-                "{}:{}:{}: {} [{}] {}",
+                "{}: line {}, col {}, {} - {} ({})",
                 message.file,
                 message.location.line,
                 message.location.column,
-                message.severity,
-                message.rule,
-                message.message
+                severity_word(message.severity),
+                message.message,
+                message.rule
             ));
         }
 
@@ -92,6 +94,16 @@ fn compact(report: &Report) -> String {
     }
 
     lines.join("\n")
+}
+
+/// ESLint's compact format capitalises the severity; an `info` is a `note` here, the word every
+/// other format uses for a judgement call.
+fn severity_word(severity: Severity) -> &'static str {
+    match severity {
+        Severity::Error => "Error",
+        Severity::Warning => "Warning",
+        Severity::Info => "Note",
+    }
 }
 
 #[cfg(test)]
