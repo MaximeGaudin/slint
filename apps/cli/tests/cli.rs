@@ -199,6 +199,38 @@ fn a_warning_budget_does_not_relabel_a_warnings_only_run() {
 }
 
 #[test]
+fn a_narrow_column_wraps_the_stylish_report_instead_of_running_past_the_pane() {
+    // https://github.com/MaximeGaudin/slint/issues/164: the report never measured the
+    // terminal, so a narrow split pane received 100+ column lines. COLUMNS pins the width a
+    // terminal would have reported; stdout here is a pipe, so this exercises the whole
+    // detection path end to end.
+    let temporary = tempfile::tempdir().unwrap();
+    write(temporary.path(), "helper", BROKEN);
+
+    let roomy = slint(&[temporary.path().to_str().unwrap(), "--no-llm"]);
+    let narrow = slint_with_environment(
+        &[("COLUMNS", "40")],
+        &[temporary.path().to_str().unwrap(), "--no-llm"],
+    );
+
+    // The long advice line runs whole when there is room, and is folded when there is not —
+    // with every word kept.
+    let advice = "Use forward slashes. Bundled paths are POSIX wherever the agent unpacks them.";
+    assert!(stdout(&roomy).contains(advice), "{:?}", stdout(&roomy));
+    assert!(
+        !stdout(&narrow).contains(advice),
+        "the advice must not run past 40 columns: {:?}",
+        stdout(&narrow)
+    );
+    for word in advice.split(' ') {
+        assert!(
+            stdout(&narrow).contains(word),
+            "wrapping must not lose a word: missing {word}"
+        );
+    }
+}
+
+#[test]
 fn a_rule_can_be_turned_off_from_the_command_line() {
     let temporary = tempfile::tempdir().unwrap();
     write(temporary.path(), "helper", BROKEN);
