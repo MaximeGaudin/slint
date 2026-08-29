@@ -1,0 +1,22 @@
+---
+/**
+ * 404: static output lands at the site root (dist/404.html) and GitHub Pages serves it
+ * for any unknown path.
+ */
+import Page from '../layouts/Page.astro'
+---
+
+<Page title="404 — slint" description="This page does not exist on the slint docs site.">
+  <div class="page-intro">
+    <h1>404</h1>
+    <p class="lead">
+      {
+        'Nothing lives at this address. The page may have moved — try the home page or the rule catalogue instead.'
+      }
+    </p>
+    <p>
+      <a class="btn btn-primary" href="/">Back to the home page</a>
+      <a class="btn btn-ghost" href="/rules/">Browse the rule catalogue</a>
+    </p>
+  </div>
+</Page>

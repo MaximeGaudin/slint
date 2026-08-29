@@ -15,6 +15,7 @@ pub mod metadata;
 pub mod naming;
 pub mod project;
 
+use anyhow::{Context, Result};
 use serde::Serialize;
 
 use crate::config::Config;
@@ -45,6 +46,12 @@ pub mod sources {
     pub const SPECIFICATION: (&str, &str) = (
         "The AgentSkill specification",
         "https://agentskills.io/specification",
+    );
+    /// slint's own authoring conventions, for rules the project asserts on its own
+    /// authority rather than attributing to an external document.
+    pub const PROJECT_CONVENTIONS: (&str, &str) = (
+        "slint's own authoring conventions",
+        "https://slint.dev/rules",
     );
     pub const OPTIONAL_DIRECTORIES: (&str, &str) = (
         "The AgentSkill specification — Optional directories",
@@ -237,6 +244,32 @@ pub fn all_meta() -> Vec<&'static RuleMeta> {
 
 pub fn meta_for(name: &str) -> Option<&'static RuleMeta> {
     all_meta().into_iter().find(|meta| meta.name == name)
+}
+
+/// Checks that the options object a rule was given is one the rule reads.
+///
+/// `RuleContext::option` falls back to the rule's defaults whenever a read fails, so without this
+/// a negative `max` or a misspelt key is swallowed and the rule runs as if the config said nothing.
+/// Refusing the config at load time is the same move an unknown severity or provider already makes.
+pub fn validate_rule_options(rule: &str, options: &serde_json::Value) -> Result<()> {
+    match rule {
+        "body/max-lines" => read_options::<body::LineOptions>(rule, options),
+        "body/token-budget" => read_options::<body::TokenOptions>(rule, options),
+        "description/min-length" => read_options::<description::LengthOptions>(rule, options),
+        "project/distinct-descriptions" => read_options::<project::DistinctOptions>(rule, options),
+        // A rule that takes no options has nothing to check; a name nobody has wired in cannot
+        // be mistaken for one that does.
+        _ => Ok(()),
+    }
+}
+
+fn read_options<T: serde::de::DeserializeOwned>(
+    rule: &str,
+    options: &serde_json::Value,
+) -> Result<()> {
+    serde_json::from_value::<T>(options.clone())
+        .with_context(|| format!("{rule}: these are not options the rule reads"))?;
+    Ok(())
 }
 
 /// Helpers every rule's own tests use.
