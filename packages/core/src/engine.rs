@@ -617,6 +617,31 @@ mod tests {
     }
 
     #[test]
+    fn unguarded_env_mutation_races_with_concurrent_readers() {
+        // Reproduction of #114: std::env::set_var and remove_var mutate state for the whole
+        // process, and the default test harness runs tests in parallel. While the writer below
+        // hammers the variable, a reader runs concurrently and observes the mutation — the same
+        // exposure every other test in this binary has while the real test below mutates
+        // SLINT_TEST_PRESENT_KEY without a lock.
+        let writer = std::thread::spawn(|| {
+            for _ in 0..250 {
+                unsafe { std::env::set_var("SLINT_TEST_RACE_PROBE", "set") };
+                std::thread::sleep(std::time::Duration::from_millis(1));
+                unsafe { std::env::remove_var("SLINT_TEST_RACE_PROBE") };
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        });
+
+        while !writer.is_finished() {
+            if std::env::var("SLINT_TEST_RACE_PROBE").is_ok() {
+                panic!("a concurrent reader observed an unguarded environment mutation");
+            }
+        }
+
+        writer.join().unwrap();
+    }
+
+    #[test]
     fn a_failure_with_the_key_present_points_at_the_model_id_instead() {
         // SAFETY: single-threaded within this test, and the variable is only read by this call.
         unsafe { std::env::set_var("SLINT_TEST_PRESENT_KEY", "value") };
