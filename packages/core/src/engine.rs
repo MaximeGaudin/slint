@@ -760,6 +760,77 @@ mod tests {
         assert!(lint_skill(&good_skill(), &Config::default()).is_empty());
     }
 
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/122 — dogfooding. The bundled
+    /// fix-github-issue skill names `scripts/check.sh` in its local-gate step: a repository-root
+    /// script, not a bundled file, yet bundle/no-dangling-path read it as one and failed the run.
+    /// The excerpt mirrors the shipped text without depending on `.cursor/` existing.
+    #[test]
+    fn the_bundled_local_gate_reference_is_not_a_dangling_bundle_path() {
+        let temporary = tempfile::tempdir().unwrap();
+        write_skill(
+            temporary.path(),
+            "fix-github-issue",
+            "---\nname: fix-github-issue\ndescription: Investigate a GitHub issue using TDD in an isolated git worktree — write a failing regression test first, commit it, implement the fix, align and run local checks that mirror CI before push, open a PR, and wait until CI is green. Use when the user pastes a GitHub issue URL/number, or asks to fix, investigate, or implement an issue.\n---\n\n### 6a. Make local lint/check match CI\n\nBefore running checks, compare CI to local entrypoints:\n\n1. Read `.github/workflows/*` (and similar) for every required job/step (fmt, lint, tests, deny, typecheck, …)\n2. Read the project’s local gate: `./scripts/check.sh`, `Makefile`, `package.json` scripts (`lint`, `test`, `check`), `turbo` tasks, etc.\n",
+        );
+
+        let report = run(
+            &[temporary.path().to_path_buf()],
+            &Config::default(),
+            &[],
+            Passes {
+                plugins: false,
+                model: false,
+            },
+        )
+        .unwrap();
+
+        let dangling: Vec<String> = report
+            .skills
+            .iter()
+            .flat_map(|one| one.messages.iter())
+            .filter(|one| one.rule == "bundle/no-dangling-path")
+            .map(|one| format!("{}: {}", one.rule, one.message))
+            .collect();
+
+        assert!(
+            dangling.is_empty(),
+            "the local gate names the repository's check script, which is not a bundle-relative path: {dangling:#?}"
+        );
+    }
+
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/236 — the required `name`
+    /// field was never validated, because read() backfilled it from the directory name before
+    /// any rule ran, so a SKILL.md omitting `name:` produced zero findings about it.
+    #[test]
+    fn a_missing_name_field_is_an_error_even_though_the_directory_names_it() {
+        let temporary = tempfile::tempdir().unwrap();
+        write_skill(
+            temporary.path(),
+            "raw-export-helper",
+            "---\ndescription: Culls a photo shoot in Lightroom by flagging the keepers and rejecting the rest. Use when triaging RAW files after a session.\n---\n\n## Culling\n\n1. Import the RAW files.\n",
+        );
+
+        let report = run(
+            &[temporary.path().to_path_buf()],
+            &Config::default(),
+            &[],
+            Passes {
+                plugins: false,
+                model: false,
+            },
+        )
+        .unwrap();
+
+        assert!(
+            report.skills[0]
+                .messages
+                .iter()
+                .any(|one| one.rule == "name/format" && one.message.contains("no name")),
+            "a missing required name field must be an error, got {:?}",
+            report.skills[0].messages
+        );
+    }
+
     #[test]
     fn default_passes_do_not_opt_into_the_model_pass() {
         assert!(
