@@ -214,15 +214,17 @@ fn a_narrow_column_wraps_the_stylish_report_instead_of_running_past_the_pane() {
     );
 
     // The long advice line runs whole when there is room, and is folded when there is not —
-    // with every word kept.
-    let advice = "Use forward slashes. Bundled paths are POSIX wherever the agent unpacks them.";
+    // with every word kept. (A 40-column pane is narrower than the report's own columns, so
+    // finding rows degrade to their natural length there; the advice lines, the widest thing
+    // the report draws, always wrap.)
+    let advice = "Expand to at least 80 characters — what it does, then when to use it, in the words a request would use.";
     assert!(stdout(&roomy).contains(advice), "{:?}", stdout(&roomy));
     assert!(
         !stdout(&narrow).contains(advice),
         "the advice must not run past 40 columns: {:?}",
         stdout(&narrow)
     );
-    for word in advice.split(' ') {
+    for word in advice.split_whitespace() {
         assert!(
             stdout(&narrow).contains(word),
             "wrapping must not lose a word: missing {word}"

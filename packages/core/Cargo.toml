@@ -29,6 +29,9 @@ ureq = { workspace = true }
 walkdir = { workspace = true }
 yaml-rust2 = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
 [dev-dependencies]
 serde_json = { workspace = true }
 tempfile = { workspace = true }

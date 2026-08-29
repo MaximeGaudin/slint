@@ -11,6 +11,13 @@ use unicode_width::UnicodeWidthStr;
 use crate::diagnostics::{Message, Report, Severity, Source};
 
 pub fn render(report: &Report, colour: bool) -> String {
+    render_with_width(report, colour, terminal_width())
+}
+
+/// Like render, with the wrap width given outright. A test process has no terminal to measure,
+/// so this is the seam the tests pin: `Some(width)` wraps, `None` runs the lines at their
+/// natural length, exactly as when no width can be known.
+pub fn render_with_width(report: &Report, colour: bool, width: Option<usize>) -> String {
     let mut out = String::new();
     // A rule's citation is printed the first time it appears and not again. Forty findings each
     // repeating the same URL is a wall of identical grey text that stops being read by the third.
@@ -19,7 +26,7 @@ pub fn render(report: &Report, colour: bool) -> String {
     // The longest position and rule, so the columns line up rather than each row being its own
     // ragged shape. Widths are display columns — a CJK rule name is two columns per character,
     // and counting scalar values would leave its neighbours' messages hanging in the air.
-    let width = |pick: fn(&Message) -> String| {
+    let width_of = |pick: fn(&Message) -> String| {
         report
             .skills
             .iter()
@@ -29,8 +36,18 @@ pub fn render(report: &Report, colour: bool) -> String {
             .unwrap_or(0)
     };
 
-    let position_width = width(position_of);
-    let rule_width = width(|message| message.rule.clone());
+    let position_width = width_of(position_of);
+    let rule_width = width_of(|message| message.rule.clone());
+
+    // What hangs under the message column of the row above, so a wrapped finding still reads as
+    // one finding. Both gutters are plain spaces of the same display width as the row's prefix.
+    let message_gutter = format!(
+        "  {}  {}  {}  ",
+        " ".repeat(position_width),
+        "       ",
+        " ".repeat(rule_width)
+    );
+    let advice_gutter = format!("  {}  {}  ", " ".repeat(position_width), "       ");
 
     for skill in &report.skills {
         if skill.messages.is_empty() && skill.notes.is_empty() {
@@ -48,28 +65,50 @@ pub fn render(report: &Report, colour: bool) -> String {
 
         for message in &skill.messages {
             let position = position_of(message);
+            let marker_text = marker(message.severity, colour);
+            let rule_text = paint(&pad(&message.rule, rule_width), Paint::Dim, colour);
 
-            out.push_str(&format!(
-                "  {:>position_width$}  {}  {}  {}{}\n",
-                paint(&position, Paint::Dim, colour),
-                marker(message.severity, colour),
-                paint(&pad(&message.rule, rule_width), Paint::Dim, colour),
-                message.message,
-                origin(message, colour),
-            ));
+            // The message and its advice wrap when a terminal width is known; the citation URL
+            // never does — a URL broken across lines is a URL that no longer works.
+            let message_lines = fitted(
+                &message.message,
+                width.map(|width| width.saturating_sub(position_width + rule_width + 15)),
+            );
+            let source = origin(message, colour);
+
+            for (index, line) in message_lines.iter().enumerate() {
+                if index == 0 {
+                    out.push_str(&format!(
+                        "  {:>position_width$}  {}  {}  ",
+                        paint(&position, Paint::Dim, colour),
+                        marker_text,
+                        rule_text,
+                    ));
+                } else {
+                    out.push_str(&message_gutter);
+                }
+
+                out.push_str(line);
+
+                if index + 1 == message_lines.len() {
+                    out.push_str(&source);
+                }
+
+                out.push('\n');
+            }
 
             // The advice sits under the finding, indented past the columns so the eye follows one
             // line rather than scanning back to the left margin.
-            out.push_str(&format!(
-                "  {:>position_width$}  {}  {}\n",
-                "",
-                "       ",
-                paint(
-                    &format!("What to do: {}", message.advice),
-                    Paint::Dim,
-                    colour
-                ),
-            ));
+            let advice_lines = fitted(
+                &format!("What to do: {}", message.advice),
+                width.map(|width| width.saturating_sub(position_width + 13)),
+            );
+
+            for line in &advice_lines {
+                out.push_str(&advice_gutter);
+                out.push_str(&paint(line, Paint::Dim, colour));
+                out.push('\n');
+            }
 
             if cited.insert(message.rule.as_str()) {
                 out.push_str(&format!(
@@ -106,6 +145,77 @@ pub fn render(report: &Report, colour: bool) -> String {
     out.push('\n');
 
     out
+}
+
+/// Below this a "wrapped" row is one word per line — no report is readable like that, so narrow
+/// panes get the natural-length lines instead.
+const MIN_WRAP_WIDTH: usize = 12;
+
+/// `text` as the lines that fit the available columns, or whole when there is no usable width or
+/// the text already fits. Words are kept whole; one longer than the line gets the line to itself.
+fn fitted(text: &str, available: Option<usize>) -> Vec<String> {
+    match available.filter(|available| *available >= MIN_WRAP_WIDTH) {
+        Some(width) if text.width() > width => wrap(text, width),
+        _ => vec![text.to_string()],
+    }
+}
+
+/// Greedy word wrap on spaces, measured in display columns.
+fn wrap(text: &str, width: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+
+    for word in text.split(' ') {
+        if !current.is_empty() && current.width() + 1 + word.width() > width {
+            lines.push(std::mem::take(&mut current));
+        }
+
+        if !current.is_empty() {
+            current.push(' ');
+        }
+
+        current.push_str(word);
+    }
+
+    if !current.is_empty() {
+        lines.push(current);
+    }
+
+    lines
+}
+
+/// The width to wrap at, when one can be known: COLUMNS wins, because a caller that pinned it
+/// knows the pane better than the ioctl does; then the terminal's own size; then nothing, and
+/// nothing means the lines run their natural length.
+fn terminal_width() -> Option<usize> {
+    width_from_environment().or_else(width_from_terminal)
+}
+
+fn width_from_environment() -> Option<usize> {
+    std::env::var("COLUMNS")
+        .ok()
+        .and_then(|columns| columns.trim().parse::<usize>().ok())
+        .filter(|columns| *columns > 0)
+}
+
+#[cfg(unix)]
+fn width_from_terminal() -> Option<usize> {
+    let mut window = libc::winsize {
+        ws_row: 0,
+        ws_col: 0,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+
+    // SAFETY: TIOCGWINSZ with a valid, mutable winsize — the kernel only fills the struct in.
+    let measured = unsafe { libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, &mut window) };
+
+    (measured == 0 && window.ws_col > 0).then_some(window.ws_col as usize)
+}
+
+#[cfg(not(unix))]
+fn width_from_terminal() -> Option<usize> {
+    None
 }
 
 /// `SKILL.md:10:1`, or the bundled file's own name when the finding is about one.
@@ -417,6 +527,54 @@ mod tests {
             ),
             "both message columns must begin on the same display column"
         );
+    }
+
+    #[test]
+    fn a_narrow_width_wraps_the_message_and_its_advice_under_the_same_column() {
+        use unicode_width::UnicodeWidthStr as _;
+
+        // Wide enough that no single word exceeds the room left after the columns, so every
+        // wrapped line can genuinely fit. Pre-fix, the longest finding ran past 100 columns.
+        let text = render_with_width(&sample(), false, Some(80));
+
+        for line in text.lines() {
+            assert!(line.width() <= 80, "every line fits the width: {line}");
+        }
+
+        // Nothing is lost to the wrapping: the message and the advice, words in order. Wrapped
+        // continuation lines carry their gutter, so whitespace is normalised before matching.
+        let folded = text
+            .lines()
+            .flat_map(|line| line.split_whitespace())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            folded.contains("The instructions name scripts/cull.py, which is not in the bundle"),
+            "{folded}"
+        );
+        assert!(
+            folded.contains("What to do: Rename it after what it does."),
+            "{folded}"
+        );
+    }
+
+    #[test]
+    fn without_a_usable_width_the_lines_run_at_their_natural_length() {
+        let text = render_with_width(&sample(), false, None);
+
+        assert!(
+            text.lines().any(|line| line
+                .contains("The instructions name scripts/cull.py, which is not in the bundle")),
+            "no width to wrap to, so the finding stays on its one line: {text}"
+        );
+    }
+
+    #[test]
+    fn wrapping_keeps_whole_words_and_gives_a_long_word_its_own_line() {
+        assert_eq!(wrap("aa bb cc", 5), vec!["aa bb", "cc"]);
+        assert_eq!(wrap("aaaaa bb", 5), vec!["aaaaa", "bb"]);
+        assert_eq!(wrap("already fits", 40), vec!["already fits"]);
+        assert_eq!(wrap("", 40), Vec::<String>::new());
     }
 
     #[test]
