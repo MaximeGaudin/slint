@@ -18,16 +18,24 @@ globset = { workspace = true }
 owo-colors = { workspace = true }
 rayon = { workspace = true }
 regex = { workspace = true }
+schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-tokio = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
 toml = { workspace = true }
+unicode-width = { workspace = true }
 ureq = { workspace = true }
 walkdir = { workspace = true }
+yaml-rust2 = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
 tempfile = { workspace = true }
+reqwest = { version = "0.13", default-features = false }
 
 [lints]
 workspace = true

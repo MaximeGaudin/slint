@@ -1,4 +1,9 @@
-# Pin the Rust toolchain so every developer and CI use the same rustc/clippy.
+# Local toolchain: the current `stable` channel with rustfmt and clippy.
+# `stable` is a floating channel, so this does not pin an exact version —
+# rustup resolves it to the stable release current on the machine.
+#
+# Note: rustup prefers this file over a `rustup default`, so the channel also
+# takes effect in CI, ahead of the per-job dtolnay/rust-toolchain defaults.
 #
 # Workspace MSRV is 1.95 (see root Cargo.toml rust-version).
 [toolchain]

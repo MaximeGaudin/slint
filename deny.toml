@@ -13,8 +13,14 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 # cannot move yet are listed below with reasons and an expiry date.
 unmaintained = "all"
 ignore = [
-    # Transitive via extism → wasmtime ^43; no safe bump until Extism moves.
-    { id = "RUSTSEC-2026-0222", reason = "wasmtime pin owned by extism 1.30" },
+    # Transitive via extism 1.30, which pins wasmtime ^43. RUSTSEC-2026-0222
+    # (GHSA-hgjw-h833-99q9) is patched only in >= 46.0.2 and >= 47.0.3; no
+    # 43.x release fixes it, and extism 1.30.0 is the newest extism release,
+    # so no bump is possible until extism itself moves. Time-boxed: CI fails
+    # when the date below passes, forcing a re-evaluation (extism on a
+    # patched wasmtime, or a local patch).
+    # expires: 2026-10-31
+    { id = "RUSTSEC-2026-0222", reason = "wasmtime 43.x has no patched release; owned by extism 1.30" },
     # Archived upstream; pulled in via wasm-compose → wasmtime 43, which extism 1.30 pins.
     # No alternative on this path until extism moves. Re-evaluate when the date passes.
     # expires: 2026-10-31
@@ -42,7 +48,6 @@ allow = [
     "Apache-2.0 WITH LLVM-exception",
     "BSD-2-Clause",
     "BSD-3-Clause",
-    "BSD-1-Clause",
     "BSL-1.0",
     "ISC",
     "Unlicense",
@@ -53,7 +58,6 @@ allow = [
     "MPL-2.0",
     "Unicode-3.0",
     "CDLA-Permissive-2.0",
-    "OpenSSL",
 ]
 
 [licenses.private]
@@ -65,6 +69,6 @@ wildcards = "allow"
 
 [sources]
 unknown-registry = "warn"
-unknown-git = "allow"
+unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = []
