@@ -37,13 +37,15 @@ impl Default for Passes {
 }
 
 /// `<!-- slint-disable rule -->` anywhere in the document, and its per-line form.
+/// The keyword is matched case-insensitively — an author who shouts is still
+/// understood, and one who misspells it in caps is still diagnosed as unused.
 static DISABLE_FILE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"<!--\s*slint-disable\s+([^\s>-][^>]*?)\s*-->")
+    Regex::new(r"<!--\s*(?i:slint-disable)\s+([^\s>-][^>]*?)\s*-->")
         .expect("the disable pattern compiles")
 });
 
 static DISABLE_LINE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"<!--\s*slint-disable-next-line\s+([^\s>-][^>]*?)\s*-->")
+    Regex::new(r"<!--\s*(?i:slint-disable-next-line)\s+([^\s>-][^>]*?)\s*-->")
         .expect("the disable-next-line pattern compiles")
 });
 
