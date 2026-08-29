@@ -51,8 +51,10 @@ slint --fix                   # apply computed fixes, then lint again
 slint --format json | jq      # data on stdout, everything else on stderr
 slint rules                   # the catalogue: what each rule checks and why
 slint --llm                   # also run model rules (once [llm] is configured)
+slint --print-config          # the resolved config, file and flags together
+slint --explain body/max-lines  # one rule, not the whole catalogue
+slint completions zsh         # shell completions (bash, zsh, fish, powershell)
 ```
-
 ```
 $ slint skills
 
@@ -77,12 +79,18 @@ Exit codes match the convention other skill linters settled on, so a CI script w
 | Flag                | What it does                                        |
 | ------------------- | --------------------------------------------------- |
 | `--fix`             | Apply every computed fix, then lint again.          |
-| `--format`          | `stylish` (default), `json`, `github`, `compact`.   |
+| `--format`          | `stylish` (default), `json`, `github`, `sarif`, `compact`. |
+| `--stdin`           | Lint the document on stdin (`--stdin-filename` names it). |
+| `--print-config`    | Print the resolved config as JSON and stop.         |
+| `--explain RULE`    | Print one rule's catalogue entry and stop.          |
+| `--ignore-path F`   | Extra ignore patterns, one glob per line.           |
+| `--no-ignore`       | Lint everything, even what the config ignores.      |
 | `--rule name=level` | Override one rule (`off`, `info`, `warn`, `error`). |
 | `--max-warnings N`  | Fail when there are more warnings than this.        |
 | `--llm`             | Run the rules that need a model. Off by default.    |
 | `--no-plugins`      | Skip plugins, whatever the config says.             |
 | `--quiet`           | Errors only.                                        |
+| `-v` / `--verbose`  | Say which config and how many plugins, on stderr.   |
 
 
 
@@ -118,7 +126,16 @@ api_key_env = "OPENAI_API_KEY"   # the variable holding the key, never the key i
 path = "./slint-house-rules.toml"
 ```
 
-`slint.config.json` and `.slintrc.json` work too. The file is found by walking up from whatever you asked slint to lint.
+`slint.config.json` and `.slintrc.json` work too. The file is found by walking up from whatever you asked slint to lint. When no project config exists anywhere up the tree, a user-global one is used: `$XDG_CONFIG_HOME/slint/config.toml`, or `~/.config/slint/config.toml` — the place for a personal provider or a severity you always disagree with. A project config always wins.
+
+For editor autocomplete over the JSON shapes, point `$schema` at the published schema:
+
+```json
+{
+  "$schema": "https://slint.dev/schemas/slint-config.json",
+  "rules": { "description/says-when": "error" }
+}
+```
 
 A document can also opt out of a rule for itself:
 

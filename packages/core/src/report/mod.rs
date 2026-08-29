@@ -6,6 +6,7 @@
 
 pub mod github;
 pub mod json;
+pub mod sarif;
 pub mod stylish;
 
 use serde::{Deserialize, Serialize};
@@ -23,6 +24,8 @@ pub enum Format {
     Json,
     /// For CI: workflow commands GitHub turns into annotations on the diff.
     Github,
+    /// For scanners and quality dashboards: SARIF 2.1.0, one result per finding.
+    Sarif,
     /// One line per finding, for grep and for editors that expect a compiler.
     Compact,
 }
@@ -35,9 +38,10 @@ impl FromStr for Format {
             "stylish" => Ok(Format::Stylish),
             "json" => Ok(Format::Json),
             "github" => Ok(Format::Github),
+            "sarif" => Ok(Format::Sarif),
             "compact" => Ok(Format::Compact),
             other => Err(format!(
-                "unknown format \"{other}\" — try stylish, json, github or compact"
+                "unknown format \"{other}\" — try stylish, json, github, sarif or compact"
             )),
         }
     }
@@ -50,6 +54,7 @@ pub fn render(report: &Report, format: Format, colour: bool, max_warnings: i64) 
         Format::Stylish => stylish::render(report, colour),
         Format::Json => json::render(report, max_warnings),
         Format::Github => github::render(report),
+        Format::Sarif => sarif::render(report),
         Format::Compact => compact(report),
     }
 }
@@ -130,6 +135,7 @@ mod tests {
         assert_eq!("stylish".parse::<Format>().unwrap(), Format::Stylish);
         assert_eq!("json".parse::<Format>().unwrap(), Format::Json);
         assert_eq!("github".parse::<Format>().unwrap(), Format::Github);
+        assert_eq!("sarif".parse::<Format>().unwrap(), Format::Sarif);
         assert_eq!("compact".parse::<Format>().unwrap(), Format::Compact);
 
         let failure = "yaml".parse::<Format>().unwrap_err();
