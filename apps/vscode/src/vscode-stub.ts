@@ -56,14 +56,31 @@ export const DiagnosticSeverity = { Error: 0, Warning: 1, Information: 2, Hint: 
 
 export class WorkspaceEdit {
   readonly inserts: { uri: Uri; line: number; character: number; text: string }[] = []
+  readonly replaces: { uri: Uri; range: Range; text: string }[] = []
   insert(uri: Uri, position: Position, text: string): void {
     this.inserts.push({ uri, line: position.line, character: position.character, text })
   }
+  replace(uri: Uri, range: Range, text: string): void {
+    this.replaces.push({ uri, range, text })
+  }
 }
+
+export const DiagnosticTag = { Unnecessary: 1, Deprecated: 2 } as const
 
 export class CodeActionKind {
   static readonly QuickFix = new CodeActionKind('QuickFix')
+  static readonly Source = new CodeActionKind('Source')
+  static readonly SourceFixAll = new CodeActionKind('Source.fixAll')
   constructor(readonly value: string) {}
+  append(suffix: string): CodeActionKind {
+    return new CodeActionKind(`${this.value}.${suffix}`)
+  }
+  contains(other: CodeActionKind): boolean {
+    return this.value === other.value || other.value.startsWith(`${this.value}.`)
+  }
+  intersects(other: CodeActionKind): boolean {
+    return this.contains(other) || other.contains(this)
+  }
 }
 
 export class CodeAction {
@@ -143,6 +160,8 @@ export const state = {
   textDocuments: [] as FakeTextDocument[],
   saveHandlers: [] as ((document: FakeTextDocument) => void)[],
   changeHandlers: [] as ((event: unknown) => void)[],
+  deleteHandlers: [] as ((event: { files: Uri[] }) => void)[],
+  renameHandlers: [] as ((event: { files: { oldUri: Uri; newUri: Uri }[] }) => void)[],
 }
 
 export function resetForTest(): void {
@@ -159,6 +178,8 @@ export function resetForTest(): void {
   state.textDocuments.length = 0
   state.saveHandlers.length = 0
   state.changeHandlers.length = 0
+  state.deleteHandlers.length = 0
+  state.renameHandlers.length = 0
 }
 
 const fakeVscode = {
@@ -205,12 +226,23 @@ const fakeVscode = {
     getConfiguration: (_section: string) => ({
       get: (key: string) => state.settings[key],
     }),
+    findFiles: (): Promise<Uri[]> => Promise.resolve([]),
+    getWorkspaceFolder: (uri: Uri) =>
+      state.workspaceFolders.find((folder) => folder.uri.fsPath === uri.fsPath),
     onDidSaveTextDocument: (handler: (document: FakeTextDocument) => void) => {
       state.saveHandlers.push(handler)
       return { dispose() {} }
     },
     onDidChangeTextDocument: (handler: (event: unknown) => void) => {
       state.changeHandlers.push(handler)
+      return { dispose() {} }
+    },
+    onDidDeleteFiles: (handler: (event: { files: Uri[] }) => void) => {
+      state.deleteHandlers.push(handler)
+      return { dispose() {} }
+    },
+    onDidRenameFiles: (handler: (event: { files: { oldUri: Uri; newUri: Uri }[] }) => void) => {
+      state.renameHandlers.push(handler)
       return { dispose() {} }
     },
     get textDocuments() {
