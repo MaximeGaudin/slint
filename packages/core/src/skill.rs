@@ -711,6 +711,36 @@ mod tests {
     }
 
     #[test]
+    fn discovery_skips_dot_directories_it_was_not_told_to_enter() {
+        // Regression for #268: only a fixed six-name denylist used to be skipped, so tool and
+        // editor state directories (.mystuff, .cache, .worktrees, …) had any skill inside them
+        // linted twice or presented as first-class. Everything dotted stays out of the walk; an
+        // explicit path argument is still entered, because being asked for is the opt-in.
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path();
+
+        let visible = root.join("skills").join("one");
+        fs::create_dir_all(&visible).unwrap();
+        fs::write(visible.join(SKILL_FILE), DOCUMENT).unwrap();
+
+        for hidden in [".mystuff/nested-skill", ".cache/kept-skill", ".worktrees/wt"] {
+            let directory = root.join(hidden);
+            fs::create_dir_all(&directory).unwrap();
+            fs::write(directory.join(SKILL_FILE), DOCUMENT).unwrap();
+        }
+
+        let discovery = discover(&[root.to_path_buf()], &GlobSet::empty()).unwrap();
+        assert_eq!(discovery.directories, vec![visible]);
+
+        // Naming a dot-directory yourself is the opt-in: it is walked like any other argument.
+        let explicit = discover(&[root.join(".mystuff")], &GlobSet::empty()).unwrap();
+        assert_eq!(
+            explicit.directories,
+            vec![root.join(".mystuff").join("nested-skill")]
+        );
+    }
+
+    #[test]
     fn discovery_honours_an_ignore_pattern() {
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path();
