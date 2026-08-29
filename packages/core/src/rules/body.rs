@@ -40,8 +40,9 @@ fn is_versioned_api_route(path: &str) -> bool {
     path.strip_prefix('/')
         .and_then(|rest| rest.split('/').next())
         .is_some_and(|root| {
-            root.strip_prefix('v')
-                .is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit()))
+            root.strip_prefix('v').is_some_and(|digits| {
+                !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
+            })
         })
 }
 
