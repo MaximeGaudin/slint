@@ -547,6 +547,7 @@ pre code {
   max-width: none;
   padding: 16px 18px 20px;
   font-size: 12.5px;
+  white-space: pre-wrap;
 }
 
 .tok-err {

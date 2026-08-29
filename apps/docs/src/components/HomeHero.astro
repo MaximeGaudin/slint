@@ -33,23 +33,28 @@
         <circle cx="300" cy="180" r="3.5"></circle>
       </svg>
 
-      <div class="console" role="img" aria-label="Example slint terminal output">
+      <div class="console" role="img" aria-label="Real slint terminal output">
         <div class="console-bar">
           <span>agent · skill route</span>
           <span class="live">linting</span>
         </div>
+        <!--
+          Real captured output: `slint skills` (debug build of apps/cli) run against a
+          sample skill at skills/issue-triage whose body references scripts/cull.py
+          without shipping it, and whose description lacks a trigger clause.
+        -->
         <pre><code><span class="tok-dim">$</span> slint skills
 
-skills/helper
-  <span class="tok-err">10:1  error</span>    The instructions name scripts/cull.py,
-                 which is not in the bundle
-                 <span class="tok-rule">bundle/no-dangling-path</span>
-                 <span class="tok-dim">↳ Add the file, or take the reference out.</span>
-                 <span class="tok-dim">  https://agentskills.io/specification</span>
+skills/issue-triage  1 error, 1 warning
+  <span class="tok-err">SKILL.md:5:1  error</span>    <span class="tok-rule">bundle/no-dangling-path</span>  The instructions name scripts/cull.py, which is not in the bundle
+                         <span class="tok-dim">What to do: Either add the missing file under the skill directory, or remove that path from the instructions.</span>
+                         <span class="tok-dim">https://agentskills.io/specification</span>
 
-   <span class="tok-warn">3:1  warning</span>  The description never says when to use this
-                 <span class="tok-rule">description/says-when</span>
-                 <span class="tok-dim">↳ Append “Use when …” followed by the situation.</span>
+  <span class="tok-warn">SKILL.md:3:1  warning</span>  <span class="tok-rule">description/says-when</span>    The description never says when to use this
+                         <span class="tok-dim">What to do: Add a clause like "Use when …" with the situation, using phrasing a real user request would use.</span>
+                         <span class="tok-dim">https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices</span>
+
+  <span class="tok-dim">note  Skipped 8 model rules (not requested). Pass --llm to run them.</span>
 
 <span class="tok-ok">2 problems across 1 skill.</span>
 1 of them are computed fixes: run again with --fix.<span class="cursor"></span></code></pre>

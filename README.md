@@ -1,6 +1,6 @@
 # slint
 
-slint banner
+![slint - the linter for Agent Skills](docs/assets/readme-banner.svg)
 
 [License: MIT](LICENSE)
 [Rust](Cargo.toml)
@@ -9,7 +9,7 @@ slint banner
 
 It is built for terminals, CI, and editors:
 
-- **Static first** — twenty-nine of thirty-seven rules never touch a model; no network, no tokens, no waiting
+- **Static first** — thirty-four of forty-two rules never touch a model; no network, no tokens, no waiting
 - **Cited findings** — every rule names the document its claim comes from; the citation travels into every output format
 - **Computed fixes** — `--fix` normalises paths, sets executable bits, writes contents lists; a model never edits your files
 - **Optional LLM pass** — eight rules that need a reader run only when you pass `--llm`, as their own pass
@@ -18,6 +18,18 @@ It is built for terminals, CI, and editors:
 - **Editor integration** — VS Code extension turns findings into diagnostics on save
 
 **Start here:** [Install](#install) · [Quick start](#quick-start) · [Configuration](#configure) · [Model pass](#the-model-half) · [Plugins](#plugins) · [Monorepo layout](#monorepo-layout) · [Docs site](apps/docs)
+
+## Prerequisites
+
+Before the first command below you need two things:
+
+- **Rust** — install [rustup](https://rustup.rs). It picks up the toolchain pinned in
+  `rust-toolchain.toml`; the workspace MSRV is 1.95 (see the root `Cargo.toml`).
+- **pnpm** — enable [corepack](https://nodejs.org/api/corepack.html) with Node.js 22+
+  (`corepack enable pnpm`); it supplies the version pinned in `package.json` (`pnpm@11.21.0`).
+
+`pnpm install:cli` needs both: pnpm runs the script, Cargo builds `apps/cli` and installs the
+`slint` binary into `~/.cargo/bin`.
 
 ## Install
 
@@ -30,7 +42,9 @@ pnpm install:cli
 slint --help
 ```
 
-Release binaries (after the first GitHub release):
+Building from source requires **Rust 1.95+** (the workspace MSRV, pinned in `Cargo.toml` and enforced by CI). MSRV bumps are not treated as breaking changes.
+
+Release binaries (latest release: [v0.2.0](https://github.com/MaximeGaudin/slint/releases/tag/0.2.0); macOS (Apple Silicon, Intel), Linux (x86_64, arm64), and Windows (`slint-windows-amd64.zip`) assets are published for each release):
 
 ```bash
 # macOS (Apple Silicon)
@@ -58,39 +72,50 @@ slint completions zsh         # shell completions (bash, zsh, fish, powershell)
 ```
 $ slint skills
 
-skills/helper  1 error, 2 warnings
-  SKILL.md:10:1  error    bundle/no-dangling-path  The instructions name scripts/cull.py, which is not in the bundle
-                          Add the file to the bundle, or take the reference out of the instructions.
-                          https://agentskills.io/specification
+skills/photo-culling  1 error, 2 warnings
+   SKILL.md:10:1  error    bundle/no-dangling-path  The instructions name scripts/cull.py, which is not in the bundle
+                           What to do: Either add the missing file under the skill directory, or remove that path from the instructions.
+                           https://agentskills.io/specification
 
-   SKILL.md:3:1  warning  description/says-when    The description never says when to use this
-                          Append a trigger clause — "Use when …" followed by the situation.
+    SKILL.md:3:1  warning  description/says-when    The description never says when to use this
+                           What to do: Add a clause like "Use when …" with the situation, using phrasing a real user request would use.
+                           https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices
 
-   SKILL.md:9:9  warning  body/posix-paths         "scripts\notes.md" is a Windows path
-                          Use forward slashes. Bundled paths are POSIX wherever the agent unpacks them.
+  SKILL.md:11:10  warning  body/posix-paths         "scripts\notes.md" is a Windows path
+                           What to do: Replace \ with / in every bundled path.
+                           https://agentskills.io/specification
+
+  note  Skipped 8 model rules (not requested). Pass --llm to run them.
 
 3 problems: 1 error, 2 warnings, 0 notes across 1 skill.
 1 of them are computed fixes: run again with --fix.
 ```
 
-Exit codes match the convention other skill linters settled on, so a CI script written for one works here: `0` clean, `1` errors, `2` warnings only, `3` slint itself failed, `4` nothing was linted (no `SKILL.md` was found under the given path — check the path before trusting a green run). Running `slint init` when a config already exists is an idempotent no-op and exits `0`; nothing is overwritten.
+Exit codes: `0` clean, `1` errors, `2` warnings only, `3` slint itself failed, `4` nothing was linted (no `SKILL.md` was found under the given path — check the path before trusting a green run). Running `slint init` when a config already exists is an idempotent no-op and exits `0`; nothing is overwritten.
 
 
-| Flag                | What it does                                        |
-| ------------------- | --------------------------------------------------- |
-| `--fix`             | Apply every computed fix, then lint again.          |
-| `--format`          | `stylish` (default), `json`, `github`, `sarif`, `compact`. |
-| `--stdin`           | Lint the document on stdin (`--stdin-filename` names it). |
-| `--print-config`    | Print the resolved config as JSON and stop.         |
-| `--explain RULE`    | Print one rule's catalogue entry and stop.          |
-| `--ignore-path F`   | Extra ignore patterns, one glob per line.           |
-| `--no-ignore`       | Lint everything, even what the config ignores.      |
-| `--rule name=level` | Override one rule (`off`, `info`, `warn`, `error`). |
-| `--max-warnings N`  | Fail when there are more warnings than this.        |
-| `--llm`             | Run the rules that need a model. Off by default.    |
-| `--no-plugins`      | Skip plugins, whatever the config says.             |
-| `--quiet`           | Errors only.                                        |
-| `-v` / `--verbose`  | Say which config and how many plugins, on stderr.   |
+| Flag                    | What it does                                                       |
+| ----------------------- | ------------------------------------------------------------------ |
+| `--fix`                 | Apply every computed fix, then lint again.                         |
+| `--format`              | `stylish` (default), `json`, `github`, `sarif`, `compact`.         |
+| `--stdin`               | Lint the document on stdin (static rules only).                    |
+| `--stdin-filename PATH` | The name to report for the stdin document.                         |
+| `--print-config`        | Print the resolved config as JSON and stop.                        |
+| `--explain RULE`        | Print one rule's catalogue entry and stop.                         |
+| `--config CONFIG`       | Use this config rather than looking for one.                       |
+| `--ignore-path F`       | Extra ignore patterns, one glob per line.                          |
+| `--no-ignore`           | Lint everything, even what the config ignores.                     |
+| `--rule name=level`     | Override one rule (`off`, `info`, `warn`, `error`).                |
+| `--max-warnings N`      | Fail when there are more warnings than this.                       |
+| `--llm`                 | Run the rules that need a model. Off by default.                   |
+| `--llm-provider NAME`   | Override `[llm].provider` from the config.                         |
+| `--llm-model ID`        | Override `[llm].model` from the config.                            |
+| `--llm-base-url URL`    | Override `[llm].base_url` from the config.                         |
+| `--llm-api-key-env VAR` | Override `[llm].api_key_env` from the config.                      |
+| `--no-plugins`          | Skip plugins, whatever the config says.                            |
+| `--quiet`               | Errors only.                                                       |
+| `-v` / `--verbose`      | Say which config and how many plugins, on stderr.                  |
+| `--no-color`            | Never colour the output.                                           |
 
 
 
@@ -142,9 +167,12 @@ A document can also opt out of a rule for itself:
 ```markdown
 <!-- slint-disable name/not-generic -->
 <!-- slint-disable-next-line body/posix-paths -->
+<!-- slint-disable-start body/* -->
+…a section the rule does not apply to…
+<!-- slint-disable-end -->
 ```
 
-
+Wildcards, ranges and `slint-enable` are documented in [the configuration page](https://slint.dev/config/).
 
 ## The model half
 
@@ -177,7 +205,7 @@ Both are held to the same standard as the built-in catalogue: a namespaced rule 
 
 ## Editors
 
-`[apps/vscode](apps/vscode)` is a VS Code extension that runs slint on save (and optionally the model pass), merges static and model diagnostics, and shows citations on hover. It targets VS Code 1.90+; forks such as Cursor are expected to work (the extension sticks to long-stable APIs) but are not CI-verified.
+[`apps/vscode`](apps/vscode) is a VS Code extension that runs slint on save (and optionally the model pass), merges static and model diagnostics, and shows citations on hover. It targets VS Code 1.90+; forks such as Cursor are expected to work (the extension sticks to long-stable APIs) but are not CI-verified.
 
 ```bash
 pnpm install
@@ -190,12 +218,12 @@ pnpm build:vscode
 ## Monorepo layout
 
 
-| Path                             | What it is                                                       |
-| -------------------------------- | ---------------------------------------------------------------- |
-| `[apps/cli](apps/cli)`           | `slint` binary (Rust)                                            |
-| `[apps/vscode](apps/vscode)`     | VS Code extension                                                |
-| `[apps/docs](apps/docs)`         | Astro documentation site (rule catalogue synced from the binary) |
-| `[packages/core](packages/core)` | Shared Rust library (`slint`) used by the CLI                    |
+| Path                                 | What it is                                                       |
+| ------------------------------------ | ---------------------------------------------------------------- |
+| [`apps/cli`](apps/cli)               | `slint` binary (Rust)                                            |
+| [`apps/vscode`](apps/vscode)         | VS Code extension                                                |
+| [`apps/docs`](apps/docs)             | Astro documentation site (rule catalogue synced from the binary) |
+| [`packages/core`](packages/core)     | Shared Rust library (`slint`) used by the CLI                    |
 
 
 JS/TS apps use **pnpm workspaces** + **Turborepo**. Rust stays on a **Cargo workspace**.
@@ -227,14 +255,14 @@ pnpm sync:docs            # refresh apps/docs/src/data/rules.json from the CLI
 pnpm dev:docs             # Astro docs at http://localhost:4321
 ```
 
-Coverage needs `[cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov)` and the `llvm-tools-preview` rustup component (`rustup component add llvm-tools-preview && cargo install cargo-llvm-cov --locked`).
+Coverage needs [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) and the `llvm-tools-preview` rustup component (`rustup component add llvm-tools-preview && cargo install cargo-llvm-cov --locked`).
 
-`slint rules` prints the catalogue. `slint rules --json` feeds the docs site, so the site and the binary never disagree about what a rule does.
+`slint rules` prints the catalogue. `slint rules --json` feeds the docs site, and CI fails when `apps/docs/src/data/rules.json` no longer matches the binary's catalogue, so the site and the binary never disagree about what a rule does.
 
-More detail: `[apps/docs/README.md](apps/docs/README.md)`.
+More detail: [`apps/docs/README.md`](apps/docs/README.md).
 
 ## License
 
-Copyright (C) 2026 Maxime Gaudin
+Copyright (c) 2026 Maxime Gaudin
 
 MIT — see [LICENSE](LICENSE).
