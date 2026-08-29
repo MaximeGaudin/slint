@@ -10,28 +10,63 @@
     "type": "git",
     "url": "https://github.com/MaximeGaudin/slint"
   },
+  "icon": "icon.png",
+  "extensionKind": [
+    "workspace"
+  ],
+  "bugs": {
+    "url": "https://github.com/MaximeGaudin/slint/issues"
+  },
   "engines": {
     "vscode": "^1.90.0"
   },
   "categories": [
     "Linters"
   ],
+  "keywords": [
+    "agent skills",
+    "linter",
+    "SKILL.md",
+    "claude"
+  ],
+  "galleryBanner": {
+    "color": "#0c1618",
+    "theme": "dark"
+  },
   "activationEvents": [
-    "onLanguage:markdown",
-    "workspaceContains:**/SKILL.md"
+    "workspaceContains:**/SKILL.md",
+    "onCommand:slint.lintWorkspace",
+    "onCommand:slint.lintWithModel",
+    "onCommand:slint.lintWorkspaceWithModel",
+    "onCommand:slint.fixDocument",
+    "onCommand:slint.showOutput"
   ],
   "main": "./out/extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "restrictedConfigurations": [
+        "slint.path",
+        "slint.arguments",
+        "slint.llm.provider",
+        "slint.llm.model",
+        "slint.llm.apiKey"
+      ]
+    }
+  },
   "contributes": {
     "configuration": {
       "title": "slint",
       "properties": {
         "slint.path": {
           "type": "string",
+          "scope": "resource",
           "default": "slint",
           "description": "The slint binary. An absolute path, or a name found on PATH."
         },
         "slint.onSave": {
           "type": "string",
+          "scope": "resource",
           "enum": [
             "nothing",
             "no-llm",
@@ -43,15 +78,17 @@
             "Run static rules only (fast, free)",
             "Run static rules, then the model pass (uses your LLM settings)"
           ],
-          "description": "What to run when you save a SKILL.md: nothing, static only (no-llm), or static then model (llm)."
+          "description": "What to run when you save a SKILL.md: nothing, static only (no-llm), or static then model (llm). To also apply the computed fixes on save, set \"editor.codeActionsOnSave\" to { \"source.fixAll.slint\": \"always\" }."
         },
         "slint.onType": {
           "type": "boolean",
+          "scope": "resource",
           "default": false,
           "description": "Run static rules while typing a SKILL.md (debounced). Never runs the model."
         },
         "slint.llm.provider": {
           "type": "string",
+          "scope": "resource",
           "enum": [
             "",
             "openai",
@@ -66,24 +103,548 @@
         },
         "slint.llm.model": {
           "type": "string",
+          "scope": "resource",
           "default": "",
           "description": "Model id the provider understands (e.g. llama-3.1-8b-instant on Groq). Overrides [llm].model when set."
         },
         "slint.llm.apiKey": {
           "type": "string",
+          "scope": "machine",
           "default": "",
-          "description": "API key for the provider. Prefer User settings (not workspace) so it is not committed. Passed to slint via a process env var, never as a CLI flag."
+          "description": "API key for the provider. User settings only, so it can never be committed to a repo. Passed to slint via a process env var, never as a CLI flag."
         },
         "slint.arguments": {
           "type": "array",
+          "scope": "resource",
           "items": {
             "type": "string"
           },
           "default": [],
-          "description": "Extra arguments passed to slint, such as --rule name=off."
+          "description": "Extra arguments passed to slint, such as --rule name=off. Model-pass flags (--llm, --llm-provider, --llm-model, --llm-base-url, --llm-api-key-env) are reserved for the extension's own settings and are ignored here."
+        },
+        "slint.rules": {
+          "scope": "resource",
+          "type": "object",
+          "default": {},
+          "additionalProperties": {
+            "type": "string",
+            "enum": [
+              "off",
+              "error",
+              "warning",
+              "info"
+            ],
+            "description": "Severity for this rule, or off."
+          },
+          "properties": {
+            "body/hardcoded-repo-path": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "warning",
+              "description": "Do not hard-require consumer-repo paths without a missing-path fallback. (default: warning)."
+            },
+            "body/imperative-instructions": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "warning",
+              "description": "Write instructional steps as direct orders, not conversational or passive advice. (default: warning)."
+            },
+            "body/max-lines": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "warning",
+              "description": "Keep SKILL.md short enough to read end-to-end (about 500 lines max). (default: warning)."
+            },
+            "body/no-secret": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "error",
+              "description": "Do not put API keys, passwords, or other secrets in the skill. (default: error)."
+            },
+            "body/no-time-bomb": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "warning",
+              "description": "Do not make instructions depend on calendar dates. (default: warning)."
+            },
+            "body/not-empty": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "error",
+              "description": "SKILL.md must contain real instructions, not only headings. (default: error)."
+            },
+            "body/posix-paths": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "warning",
+              "description": "Use forward slashes in paths (scripts/foo.py), not backslashes. (default: warning)."
+            },
+            "body/relative-paths": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "warning",
+              "description": "Paths must be relative to the skill folder, not absolute machine paths. (default: warning)."
+            },
+            "body/token-budget": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "warning",
+              "description": "Keep the body within a reasonable token budget (~5000 tokens). (default: warning)."
+            },
+            "body/undeclared-tool": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "warning",
+              "description": "Host-specific tools in the body must be declared in allowed-tools or given a portable fallback. (default: warning)."
+            },
+            "bundle/contents-list": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "info",
+              "description": "Long reference files should start with a table of contents. (default: info)."
+            },
+            "bundle/declared-dependencies": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "warning",
+              "description": "Third-party packages a script imports must be named in the install instructions. (default: warning)."
+            },
+            "bundle/executable-script": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "warning",
+              "description": "Scripts that start with a shebang (#!) must be marked executable. (default: warning)."
+            },
+            "bundle/flat-references": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "warning",
+              "description": "Link bundled files from SKILL.md, not only from other bundled files. (default: warning)."
+            },
+            "bundle/no-dangling-path": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "error",
+              "description": "Every path mentioned in the instructions must exist in the skill folder. (default: error)."
+            },
+            "bundle/script-prerequisites": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "warning",
+              "description": "Skills that ship scripts must document runtime needs in a Prerequisites section. (default: warning)."
+            },
+            "bundle/unused-file": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "warning",
+              "description": "Every file in the skill folder should be referenced from the instructions (or another linked file). (default: warning)."
+            },
+            "description/concrete-noun": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "info",
+              "description": "The description should name concrete tools, formats, or systems users would mention. (default: info)."
+            },
+            "description/max-length": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "error",
+              "description": "Keep the description at or under 1024 characters. (default: error)."
+            },
+            "description/min-length": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "warning",
+              "description": "The description must be long enough to explain what the skill does and when to use it. (default: warning)."
+            },
+            "description/no-markup": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "error",
+              "description": "The description must be plain text — no HTML or Markdown tags. (default: error)."
+            },
+            "description/not-just-name": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "warning",
+              "description": "The description must add information beyond repeating the skill name. (default: warning)."
+            },
+            "description/present": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "error",
+              "description": "Every skill must have a description in the frontmatter. (default: error)."
+            },
+            "description/says-when": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "warning",
+              "description": "The description must say when to use the skill. (default: warning)."
+            },
+            "description/third-person": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "warning",
+              "description": "Write the description in the third person (\\ (default: warning)."
+            },
+            "frontmatter/compatibility-max-length": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "error",
+              "description": "Keep the compatibility field at or under 500 characters. (default: error)."
+            },
+            "frontmatter/key-format": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "info",
+              "description": "Frontmatter keys should be lowercase with hyphens (no spaces). (default: info)."
+            },
+            "frontmatter/present": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "error",
+              "description": "SKILL.md must start with a YAML frontmatter block (--- ... ---). (default: error)."
+            },
+            "frontmatter/type-error": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "error",
+              "description": "name and description must be YAML strings. (default: error)."
+            },
+            "frontmatter/unknown-field": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "warning",
+              "description": "Top-level frontmatter keys must be agentskills.io fields, Claude Code extensions, or live under metadata. (default: warning)."
+            },
+            "llm/consistent-terminology": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "warning",
+              "description": "Use one name for each concept everywhere in the skill. (default: warning)."
+            },
+            "llm/default-choice": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "info",
+              "description": "When several approaches are listed, mark which one to use by default. (default: info)."
+            },
+            "llm/failure-path": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "info",
+              "description": "Steps that can fail say what to do when they fail. (default: info)."
+            },
+            "llm/no-ambiguity": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "warning",
+              "description": "Every instruction has one clear meaning; none contradict another. (default: warning)."
+            },
+            "llm/no-known-context": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "warning",
+              "description": "Do not explain things a capable model already knows. (default: warning)."
+            },
+            "llm/output-example": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "info",
+              "description": "When the output format matters, show a concrete example. (default: info)."
+            },
+            "llm/specificity-matches-risk": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "warning",
+              "description": "Risky steps get precise instructions; judgement calls stay flexible. (default: warning)."
+            },
+            "llm/trigger-coverage": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "warning",
+              "description": "The description matches how users would actually ask for this skill. (default: warning)."
+            },
+            "name/format": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "error",
+              "description": "Skill names must be lowercase, use hyphens, and be at most 64 characters. (default: error)."
+            },
+            "name/matches-directory": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "warning",
+              "description": "The name in the frontmatter must match the skill folder name. (default: warning)."
+            },
+            "name/no-reserved-word": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "error",
+              "description": "Do not put reserved vendor words (like anthropic or claude) in the skill name. (default: error)."
+            },
+            "name/not-generic": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "warning",
+              "description": "The skill name should describe what the skill does. (default: warning)."
+            },
+            "project/consistent-naming-style": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "info",
+              "description": "Skill names in the same project should follow one naming convention. (default: info)."
+            },
+            "project/distinct-descriptions": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "warning",
+              "description": "Skill descriptions in the same project should not sound like the same offer. (default: warning)."
+            },
+            "project/unique-name": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "error",
+              "description": "No two skills in the project may share the same name. (default: error)."
+            }
+          }
         }
       }
     },
+    "jsonValidation": [
+      {
+        "fileMatch": [
+          "slint.config.json",
+          ".slintrc.json"
+        ],
+        "url": "https://slint.dev/schemas/slint-config.json"
+      }
+    ],
     "commands": [
       {
         "command": "slint.lintWorkspace",
@@ -105,6 +666,16 @@
         "command": "slint.showOutput",
         "title": "slint: Show Output"
       }
+    ],
+    "codeActions": [
+      {
+        "title": "Apply slint fix",
+        "kind": "quickfix.slint"
+      },
+      {
+        "title": "Apply all slint fixes",
+        "kind": "source.fixAll.slint"
+      }
     ]
   },
   "scripts": {
@@ -113,13 +684,16 @@
     "lint": "biome check --error-on-warnings . && tsc -p ./ --noEmit && node ../../scripts/check-no-todos.mjs apps/vscode/src",
     "format": "biome check --write .",
     "test": "tsc -p ./ && node --test out/*.test.js",
-    "package": "vsce package --no-dependencies"
+    "package": "vsce package --no-dependencies",
+    "publish:marketplace": "vsce publish --no-dependencies",
+    "publish:openvsx": "ovsx publish"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.8",
     "@types/node": "^22.10.2",
     "@types/vscode": "^1.90.0",
     "@vscode/vsce": "^3.9.2",
+    "ovsx": "^0.10.12",
     "typescript": "^5.7.2"
   }
 }
