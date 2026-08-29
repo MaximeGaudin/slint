@@ -809,6 +809,38 @@ mod tests {
     }
 
     #[test]
+    fn a_manifest_written_in_another_case_is_still_the_document() {
+        // Regression for #267: `skill.md` and `Skill.MD` are the manifest with the letters the
+        // author happened to type. Discovery and the reader must both take them, and the report
+        // must name the file as it is written, not as the constant spells it.
+        let temporary = tempfile::tempdir().unwrap();
+
+        for (directory, file) in [("lower", "skill.md"), ("mixed", "Skill.MD")] {
+            let path = temporary.path().join(directory);
+            fs::create_dir_all(&path).unwrap();
+            fs::write(path.join(file), DOCUMENT).unwrap();
+
+            let walked = discover(&[temporary.path().to_path_buf()], &GlobSet::empty()).unwrap();
+            assert!(
+                walked.directories.contains(&path),
+                "walking must find {file}: {:?}",
+                walked.directories
+            );
+
+            let taken = discover(&[path.clone()], &GlobSet::empty()).unwrap();
+            assert_eq!(taken.directories, vec![path.clone()], "for {file}");
+
+            let skill = read(&path).unwrap();
+            assert_eq!(skill.name, "photo-culling", "for {file}");
+            assert!(
+                skill.document.ends_with(file),
+                "for {file}: {}",
+                skill.document
+            );
+        }
+    }
+
+    #[test]
     fn a_skill_with_no_name_in_its_frontmatter_is_named_after_its_directory() {
         let temporary = tempfile::tempdir().unwrap();
         let directory = temporary.path().join("named-by-folder");
