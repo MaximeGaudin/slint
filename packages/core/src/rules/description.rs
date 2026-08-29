@@ -352,16 +352,22 @@ impl Rule for ConcreteNoun {
 
         // A proper noun, an extension, a path or a CamelCase product name. One is enough: the rule
         // is looking for any anchor a request could share, not for a well-stocked vocabulary.
-        let has_anchor = description.split_whitespace().skip(1).any(|word| {
-            let cleaned = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '.');
+        let has_anchor = description
+            .split_whitespace()
+            .enumerate()
+            .any(|(index, word)| {
+                let cleaned = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '.');
 
-            looks_like_a_file(cleaned)
-                // An acronym: RAW, PDF, API.
-                || cleaned.chars().filter(|c| c.is_uppercase()).count() > 1
-                // A proper noun: Lightroom, Excel, YouTube.
-                || (cleaned.chars().next().is_some_and(|c| c.is_uppercase())
-                    && cleaned.chars().skip(1).any(|c| c.is_lowercase()))
-        });
+                looks_like_a_file(cleaned)
+                    // An acronym: RAW, PDF, API.
+                    || cleaned.chars().filter(|c| c.is_uppercase()).count() > 1
+                    // A proper noun: Lightroom, Excel, YouTube. Not in the first position:
+                    // there the capital is usually the leading verb ("Processes"), which this
+                    // heuristic cannot tell from a product name.
+                    || (index > 0
+                        && cleaned.chars().next().is_some_and(|c| c.is_uppercase())
+                        && cleaned.chars().skip(1).any(|c| c.is_lowercase()))
+            });
 
         if !has_anchor {
             context.report(
@@ -615,6 +621,18 @@ mod tests {
     fn a_description_with_no_concrete_noun_is_reported() {
         let skill = skill_described(
             "handles the relevant items in the usual way. use when the situation calls for it and things need doing.",
+        );
+
+        assert_eq!(check(&CONCRETE_NOUN_RULE, &skill).len(), 1);
+    }
+
+    /// The skip the fix above replaced existed for a reason: the first word of a third-person
+    /// description is usually the verb, and the proper-noun heuristic would happily read
+    /// "Processes" as a product name. Position 0 still only counts anchors a verb cannot be.
+    #[test]
+    fn a_leading_verb_is_still_not_an_anchor() {
+        let skill = skill_described(
+            "Processes the relevant items in the usual way, and finishes whenever the situation calls for it and things need doing.",
         );
 
         assert_eq!(check(&CONCRETE_NOUN_RULE, &skill).len(), 1);
