@@ -167,9 +167,12 @@ A document can also opt out of a rule for itself:
 ```markdown
 <!-- slint-disable name/not-generic -->
 <!-- slint-disable-next-line body/posix-paths -->
+<!-- slint-disable-start body/* -->
+…a section the rule does not apply to…
+<!-- slint-disable-end -->
 ```
 
-
+Wildcards, ranges and `slint-enable` are documented in [the configuration page](https://slint.dev/config/).
 
 ## The model half
 

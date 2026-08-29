@@ -93,12 +93,30 @@ project config always wins when there is one — the fallback never edits what a
 ```markdown
 <!-- slint-disable name/not-generic -->
 <!-- slint-disable-next-line body/posix-paths -->
+<!-- slint-disable-start body/max-lines -->
+
+…a section the rule does not apply to…
+
+<!-- slint-disable-end -->
 ```
 
-The first turns a rule off for the whole document; the second for the line beneath it. Both take
-several rule names, separated by commas.
+The first turns a rule off for the whole document; the second for the line beneath it; the pair
+for everything between the two comments (a range never closed runs to the end of the document).
+All of them take several rule names, separated by commas — and the keyword itself is matched
+case-insensitively, so `SLINT-DISABLE` works the same as `slint-disable`.
 
-Three things to know:
+A rule name can end in `*` to cover a whole namespace, so `body/*` silences every `body/…` rule
+instead of one at a time:
+
+```markdown
+<!-- slint-disable body/* -->
+```
+
+`<!-- slint-enable rule -->` re-activates a rule that a file-wide `slint-disable` — or an open
+`slint-disable-start` — turned off, from that line to the end of the document, the way
+`eslint-enable` does. A bare `slint-enable` re-activates everything.
+
+Four things to know:
 
 - A comment is scoped to the document it is written in. A `slint-disable` in `SKILL.md` says nothing
   about findings on the files bundled beside it — silence those in the bundled file itself, or with
@@ -106,7 +124,11 @@ Three things to know:
 - A comment inside a fenced code block is an example, not a directive, so documenting the syntax
   does not silence anything.
 - A comment that silenced nothing is reported as a `suppression/unused` warning — a typo'd rule name
-  suppresses nothing, and the author has to hear about it.
+  suppresses nothing, and the author has to hear about it. An `slint-enable` that names a rule
+  nothing is disabled for is reported the same way.
+- `slint-enable` names must match what the disable named: `slint-enable body/posix-paths` lifts a
+  `slint-disable body/*` (the pattern matches the rule), but there is no way to lift one rule out of
+  a list — repeat the disable without it instead.
 
 ## A model, for the rules that need one
 
