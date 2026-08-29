@@ -663,6 +663,161 @@ mod tests {
         );
     }
 
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/87 —
+    /// a disable comment inside a fenced code block documents the syntax;
+    /// it is an example, not a live directive for the rest of the document.
+    #[test]
+    fn a_disable_comment_inside_a_fence_is_documentation_not_a_directive() {
+        for (open, close) in [("```markdown", "```"), ("~~~", "~~~")] {
+            let source = format!(
+                "one\n{open}\n<!-- slint-disable body/posix-paths -->\nRead scripts\\notes.md.\n{close}\ntwo\n"
+            );
+            let suppressions = Suppressions::read(&source);
+
+            assert!(suppressions.file.is_empty(), "{open}: {suppressions:?}");
+            assert!(suppressions.lines.is_empty(), "{open}: {suppressions:?}");
+        }
+    }
+
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/87 —
+    /// the documented-but-not-live comment must leave the real findings alone.
+    #[test]
+    fn a_disable_comment_inside_a_fence_does_not_silence_the_live_document() {
+        let temporary = tempfile::tempdir().unwrap();
+        write_skill(
+            temporary.path(),
+            "fence-documented-disable",
+            "---\nname: fence-documented-disable\ndescription: Documents how to write slint-disable comments for skill authors. Use when writing docs about suppression syntax.\n---\n\n## How to suppress a rule\n\n```markdown\n<!-- slint-disable body/posix-paths -->\n```\n\n## Actual instructions\n\nRead scripts\\notes.md.\n",
+        );
+
+        let report = run(
+            &[temporary.path().to_path_buf()],
+            &Config::default(),
+            &[],
+            Passes {
+                plugins: false,
+                model: false,
+            },
+        )
+        .unwrap();
+
+        assert!(
+            report.skills[0]
+                .messages
+                .iter()
+                .any(|one| one.rule == "body/posix-paths"),
+            "a disable comment documented inside a fence must not silence the live document, got {:?}",
+            report.skills[0].messages
+        );
+    }
+
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/88 —
+    /// a disable comment is scoped to the document it is written in; it must
+    /// not reach into files bundled beside that document.
+    #[test]
+    fn a_disable_comment_in_the_document_does_not_reach_into_bundled_files() {
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = write_skill(
+            temporary.path(),
+            "cross-file-suppress",
+            "---\nname: cross-file-suppress\ndescription: Culls a photo shoot in Lightroom by flagging keepers and rejecting the rest. Use when triaging RAW files after a session.\n---\n\n<!-- slint-disable bundle/contents-list -->\n\n## Steps\n\nSee references/big.md for details on this whole workflow end to end.\n",
+        );
+
+        let mut long = String::from("# Big reference\n\nProse about the workflow, at length.\n");
+        for index in 1..=120 {
+            long.push_str(&format!("\n## Section {index}\n\nSome prose about step {index} of the workflow.\n"));
+        }
+        fs::create_dir_all(directory.join("references")).unwrap();
+        fs::write(directory.join("references/big.md"), long).unwrap();
+
+        let report = run(
+            &[temporary.path().to_path_buf()],
+            &Config::default(),
+            &[],
+            Passes {
+                plugins: false,
+                model: false,
+            },
+        )
+        .unwrap();
+
+        assert!(
+            report.skills[0].messages.iter().any(|one| one.rule == "bundle/contents-list"
+                && one.file.ends_with("references/big.md")),
+            "a disable comment written in SKILL.md must not silence findings on bundled files, got {:?}",
+            report.skills[0].messages
+        );
+    }
+
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/113 —
+    /// a directive that suppressed nothing is dead weight at best and a typo
+    /// at worst, so it is reported the way eslint reports unused directives.
+    #[test]
+    fn an_unused_disable_comment_is_reported() {
+        let temporary = tempfile::tempdir().unwrap();
+        write_skill(
+            temporary.path(),
+            "typo-rule",
+            "---\nname: typo-rule\ndescription: Demonstrates an unused suppression comment with a misspelled rule name in it here. Use when checking suppression reporting.\n---\n\n<!-- slint-disable body/posix-path -->\n\n## Actual instructions\n\nNothing wrong here at all really, just prose about the workflow steps involved.\n",
+        );
+
+        let report = run(
+            &[temporary.path().to_path_buf()],
+            &Config::default(),
+            &[],
+            Passes {
+                plugins: false,
+                model: false,
+            },
+        )
+        .unwrap();
+
+        let unused = report.skills[0]
+            .messages
+            .iter()
+            .find(|one| one.rule == "suppression/unused");
+        let unused = unused.unwrap_or_else(|| {
+            panic!(
+                "expected an unused-suppression finding, got {:?}",
+                report.skills[0].messages
+            )
+        });
+
+        assert_eq!(unused.severity, Severity::Warning);
+        assert!(unused.message.contains("body/posix-path"), "{:?}", unused.message);
+        assert_eq!(unused.location.line, 6, "{:?}", unused.message);
+    }
+
+    #[test]
+    fn a_used_disable_comment_is_not_reported() {
+        let temporary = tempfile::tempdir().unwrap();
+        write_skill(
+            temporary.path(),
+            "helper",
+            "---\nname: helper\ndescription: Culls a photo shoot in Lightroom by flagging the keepers and rejecting the rest. Use when triaging RAW files after a session.\n---\n\n<!-- slint-disable name/not-generic -->\n\n## Helper\n\nDo them.\n",
+        );
+
+        let report = run(
+            &[temporary.path().to_path_buf()],
+            &Config::default(),
+            &[],
+            Passes {
+                plugins: false,
+                model: false,
+            },
+        )
+        .unwrap();
+
+        assert!(
+            !report.skills[0]
+                .messages
+                .iter()
+                .any(|one| one.rule == "suppression/unused"),
+            "a directive that silenced a real finding is not unused, got {:?}",
+            report.skills[0].messages
+        );
+    }
+
     #[test]
     fn a_directory_that_cannot_be_read_is_reported_rather_than_failing_the_run() {
         let temporary = tempfile::tempdir().unwrap();
