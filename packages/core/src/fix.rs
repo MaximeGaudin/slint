@@ -12,7 +12,7 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 
-use crate::diagnostics::{Fix, Fingerprint, Report};
+use crate::diagnostics::{Fingerprint, Fix, Report};
 
 /// What `--fix` did.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -79,11 +79,7 @@ pub fn apply(report: &Report) -> Applied {
     applied
 }
 
-fn apply_to_file(
-    path: &Path,
-    fixes: &[&Fix],
-    expected: Option<&Fingerprint>,
-) -> Result<Applied> {
+fn apply_to_file(path: &Path, fixes: &[&Fix], expected: Option<&Fingerprint>) -> Result<Applied> {
     let permission_changes = fixes
         .iter()
         .filter(|fix| fix.start == 0 && fix.end == 0 && fix.replacement.is_empty())
@@ -407,7 +403,9 @@ mod tests {
         assert_eq!(applied.fixes, 0, "stale fixes are not applied");
         assert_eq!(applied.failed.len(), 1, "{:?}", applied.failed);
         assert!(
-            applied.failed[0].reason.contains("changed since it was linted"),
+            applied.failed[0]
+                .reason
+                .contains("changed since it was linted"),
             "{:?}",
             applied.failed[0].reason
         );

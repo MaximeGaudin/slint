@@ -79,8 +79,8 @@ fn region(location: Location) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
     use crate::diagnostics::{Message, Reference, SkillReport, Source};
+    use std::collections::BTreeMap;
 
     fn report() -> Report {
         Report {

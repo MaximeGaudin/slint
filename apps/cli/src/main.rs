@@ -587,9 +587,7 @@ fn fix_until_converged(
     let failures: Vec<slint::fix::FileFailure> = failed
         .into_iter()
         .map(|(file, reason)| {
-            report
-                .notes
-                .push(format!("Fixing {file} failed: {reason}"));
+            report.notes.push(format!("Fixing {file} failed: {reason}"));
 
             slint::fix::FileFailure { file, reason }
         })
@@ -997,7 +995,9 @@ mod tests {
         );
         assert_eq!(
             report.notes,
-            vec!["Fixing skills/locked/SKILL.md failed: Permission denied (os error 13)".to_string()]
+            vec![
+                "Fixing skills/locked/SKILL.md failed: Permission denied (os error 13)".to_string()
+            ]
         );
     }
 

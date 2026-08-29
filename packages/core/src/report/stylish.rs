@@ -397,8 +397,8 @@ fn paint(text: &str, style: Paint, colour: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
     use crate::report::tests::sample;
+    use std::collections::BTreeMap;
 
     #[test]
     fn a_finding_prints_its_position_message_rule_advice_and_source() {

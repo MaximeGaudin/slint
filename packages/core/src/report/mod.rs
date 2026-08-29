@@ -82,8 +82,8 @@ fn compact(report: &Report) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
     use crate::diagnostics::{Location, Message, Reference, Severity, SkillReport, Source};
+    use std::collections::BTreeMap;
 
     pub fn sample() -> Report {
         Report {

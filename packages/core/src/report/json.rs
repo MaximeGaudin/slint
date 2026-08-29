@@ -61,8 +61,8 @@ pub fn render(report: &Report, max_warnings: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
     use crate::report::tests::sample;
+    use std::collections::BTreeMap;
 
     /// Regression for https://github.com/MaximeGaudin/slint/issues/125 —
     /// a consumer can only parse a moving format safely if the envelope says

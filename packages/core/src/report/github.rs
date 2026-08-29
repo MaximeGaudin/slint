@@ -53,8 +53,8 @@ pub fn render(report: &Report) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
     use crate::report::tests::sample;
+    use std::collections::BTreeMap;
 
     #[test]
     fn each_finding_becomes_one_annotation_at_its_position() {
