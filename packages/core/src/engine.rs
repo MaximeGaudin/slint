@@ -780,6 +780,181 @@ mod tests {
         );
     }
 
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/273 —
+    /// a namespace wildcard disables every rule under it, the way eslint
+    /// users disable a whole area instead of one rule at a time.
+    #[test]
+    fn a_wildcard_disables_every_rule_in_a_namespace() {
+        let suppressions = Suppressions::read("<!-- slint-disable body/* -->\n");
+        let mut paths = message_with("body/posix-paths", 9);
+        let mut max = message_with("body/max-lines", 4);
+        let mut generic = message_with("name/not-generic", 2);
+
+        assert!(!suppressions.allows("skills/demo/SKILL.md", &paths));
+        assert!(!suppressions.allows("skills/demo/SKILL.md", &max));
+        assert!(
+            suppressions.allows("skills/demo/SKILL.md", &generic),
+            "the wildcard covers body/ rules only, got {suppressions:?}"
+        );
+    }
+
+    #[test]
+    fn a_wildcard_disable_suppresses_a_violation_in_a_real_run() {
+        let temporary = tempfile::tempdir().unwrap();
+        write_skill(
+            temporary.path(),
+            "demo-wildcard-ignore",
+            "---\nname: demo-wildcard-ignore\ndescription: Culls a photo shoot in Lightroom by flagging the keepers and rejecting the rest. Use when triaging RAW files after a session.\n---\n\n<!-- slint-disable body/* -->\n\n## Workflow\n\nRead scripts\\notes.md.\n",
+        );
+
+        let report = run(
+            &[temporary.path().to_path_buf()],
+            &Config::default(),
+            &[],
+            Passes {
+                plugins: false,
+                model: false,
+            },
+        )
+        .unwrap();
+
+        assert!(
+            !report.skills[0]
+                .messages
+                .iter()
+                .any(|one| one.rule.starts_with("body/")),
+            "expected the wildcard to silence every body/ rule, got {:?}",
+            report.skills[0].messages
+        );
+    }
+
+    #[test]
+    fn a_block_directive_silences_rules_between_start_and_end() {
+        let suppressions = Suppressions::read(
+            "one\n<!-- slint-disable-start body/posix-paths -->\ntwo\nthree\n<!-- slint-disable-end -->\nfour\n",
+        );
+        let line = |number| {
+            let mut one = message_with("body/posix-paths", number);
+            one.file = "skills/demo/SKILL.md".into();
+            one
+        };
+
+        assert!(
+            suppressions.allows("skills/demo/SKILL.md", &line(2)),
+            "the line with the opening comment is not covered"
+        );
+        assert!(!suppressions.allows("skills/demo/SKILL.md", &line(3)));
+        assert!(!suppressions.allows("skills/demo/SKILL.md", &line(4)));
+        assert!(
+            suppressions.allows("skills/demo/SKILL.md", &line(6)),
+            "the line after the closing comment is live again, got {suppressions:?}"
+        );
+    }
+
+    #[test]
+    fn a_block_directive_suppresses_only_its_range_in_a_real_run() {
+        let temporary = tempfile::tempdir().unwrap();
+        write_skill(
+            temporary.path(),
+            "demo-block-ignore",
+            "---\nname: demo-block-ignore\ndescription: Culls a photo shoot in Lightroom by flagging the keepers and rejecting the rest. Use when triaging RAW files after a session.\n---\n\n## Workflow\n\nRead scripts\\notes.md.\n\n<!-- slint-disable-start body/posix-paths -->\n\nRead scripts\\other.md.\n\n<!-- slint-disable-end -->\n\nRead scripts\\more.md.\n",
+        );
+
+        let report = run(
+            &[temporary.path().to_path_buf()],
+            &Config::default(),
+            &[],
+            Passes {
+                plugins: false,
+                model: false,
+            },
+        )
+        .unwrap();
+
+        let paths = report.skills[0]
+            .messages
+            .iter()
+            .filter(|one| one.rule == "body/posix-paths")
+            .count();
+
+        assert_eq!(
+            paths, 2,
+            "only the violation between the two comments is silenced, got {:?}",
+            report.skills[0].messages
+        );
+    }
+
+    #[test]
+    fn an_unclosed_block_directive_runs_to_the_end_of_the_document() {
+        let suppressions =
+            Suppressions::read("one\n<!-- slint-disable-start body/posix-paths -->\ntwo\n");
+        let mut last = message_with("body/posix-paths", 3);
+
+        assert!(
+            !suppressions.allows("skills/demo/SKILL.md", &last),
+            "a range with no closing comment covers the rest of the document, got {suppressions:?}"
+        );
+        last.location.line = 1;
+        assert!(
+            suppressions.allows("skills/demo/SKILL.md", &last),
+            "the range starts at the opening comment, not the top of the document"
+        );
+    }
+
+    #[test]
+    fn an_enable_comment_reactivates_a_disabled_rule() {
+        let suppressions = Suppressions::read(
+            "<!-- slint-disable body/posix-paths -->\ntwo\n<!-- slint-enable body/posix-paths -->\nfour\n",
+        );
+        let line = |number| {
+            let mut one = message_with("body/posix-paths", number);
+            one.file = "skills/demo/SKILL.md".into();
+            one
+        };
+
+        assert!(
+            !suppressions.allows("skills/demo/SKILL.md", &line(2)),
+            "the disable still covers the lines before the enable"
+        );
+        assert!(
+            suppressions.allows("skills/demo/SKILL.md", &line(4)),
+            "the rule is live again after the enable, got {suppressions:?}"
+        );
+    }
+
+    #[test]
+    fn an_enable_comment_reactivates_a_rule_in_a_real_run() {
+        let temporary = tempfile::tempdir().unwrap();
+        write_skill(
+            temporary.path(),
+            "demo-enable-ignore",
+            "---\nname: demo-enable-ignore\ndescription: Culls a photo shoot in Lightroom by flagging the keepers and rejecting the rest. Use when triaging RAW files after a session.\n---\n\n<!-- slint-disable body/posix-paths -->\n\nRead scripts\\notes.md.\n\n<!-- slint-enable body/posix-paths -->\n\nRead scripts\\other.md.\n",
+        );
+
+        let report = run(
+            &[temporary.path().to_path_buf()],
+            &Config::default(),
+            &[],
+            Passes {
+                plugins: false,
+                model: false,
+            },
+        )
+        .unwrap();
+
+        let paths = report.skills[0]
+            .messages
+            .iter()
+            .filter(|one| one.rule == "body/posix-paths")
+            .count();
+
+        assert_eq!(
+            paths, 1,
+            "the disable covers the lines before the enable only, got {:?}",
+            report.skills[0].messages
+        );
+    }
+
     #[test]
     fn several_rules_can_be_named_in_one_comment() {
         let suppressions =
