@@ -1,0 +1,231 @@
+{
+  "$defs": {
+    "BundledFile": {
+      "description": "A file shipped beside the instructions.",
+      "properties": {
+        "bytes": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "executable": {
+          "type": "boolean"
+        },
+        "path": {
+          "description": "Relative to the skill directory, with forward slashes on every platform.",
+          "type": "string"
+        },
+        "text": {
+          "description": "`None` for anything that is not UTF-8 text, or above [`MAX_TEXT_FILE_BYTES`]: an image\nis a file to count, not to read.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path",
+        "bytes",
+        "executable"
+      ],
+      "type": "object"
+    },
+    "PluginInput": {
+      "description": "What a plugin is sent, and what it answers with.",
+      "properties": {
+        "skill": {
+          "$ref": "#/$defs/Skill"
+        },
+        "version": {
+          "description": "The wire format's version, so a plugin can refuse a shape it does not know.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "version",
+        "skill"
+      ],
+      "title": "PluginInput",
+      "type": "object"
+    },
+    "PluginMessage": {
+      "properties": {
+        "advice": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "file": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "line": {
+          "default": null,
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "reference": {
+          "$ref": "#/$defs/Reference"
+        },
+        "rule": {
+          "type": "string"
+        },
+        "severity": {
+          "default": "warning",
+          "type": "string"
+        }
+      },
+      "required": [
+        "rule",
+        "message",
+        "reference"
+      ],
+      "type": "object"
+    },
+    "PluginOutput": {
+      "properties": {
+        "messages": {
+          "items": {
+            "$ref": "#/$defs/PluginMessage"
+          },
+          "type": "array"
+        }
+      },
+      "title": "PluginOutput",
+      "type": "object"
+    },
+    "Reference": {
+      "description": "Where a rule's claim comes from.\n\nNot optional, and that is the point: every rule here asserts something about someone else's\nwriting, and an assertion with no source has to be taken on trust. A rule without a citation\ndoes not get into the registry.",
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "url"
+      ],
+      "type": "object"
+    },
+    "Skill": {
+      "description": "One skill, read.",
+      "properties": {
+        "body": {
+          "description": "The instructions, without the frontmatter.",
+          "type": "string"
+        },
+        "body_offset": {
+          "description": "Byte offset of the body inside `source`.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "description": {
+          "type": "string"
+        },
+        "directory": {
+          "description": "The directory, as it was given on the command line.",
+          "type": "string"
+        },
+        "document": {
+          "description": "`SKILL.md`, relative to the run, for reporting.",
+          "type": "string"
+        },
+        "files": {
+          "items": {
+            "$ref": "#/$defs/BundledFile"
+          },
+          "type": "array"
+        },
+        "frontmatter_lines": {
+          "description": "Everything before the body, so a line in the body can be turned into a line in the file.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "has_frontmatter": {
+          "description": "Whether a frontmatter block was found at all.",
+          "type": "boolean"
+        },
+        "metadata": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Frontmatter keys other than name and description, in the order they were written.",
+          "type": "object"
+        },
+        "name": {
+          "type": "string"
+        },
+        "name_declared": {
+          "description": "Whether the frontmatter declared `name:` at all. The directory-name fallback in\n[`read`] is display text for messages, not a declaration, and the name rules must not\nmistake one for the other.",
+          "type": "boolean"
+        },
+        "notes": {
+          "description": "What could not be read, said out loud rather than dropped.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "scalar_types": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "The YAML type each top-level frontmatter key parsed as, so a rule can tell a\n`description: true` was not written as a string.",
+          "type": "object"
+        },
+        "source": {
+          "description": "The whole file, frontmatter included. Fixes are byte offsets into this.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "directory",
+        "document",
+        "source",
+        "frontmatter_lines",
+        "has_frontmatter",
+        "name_declared",
+        "name",
+        "description",
+        "body",
+        "body_offset",
+        "metadata",
+        "scalar_types",
+        "files",
+        "notes"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://slint.dev/schemas/plugin-abi.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The wire contract between slint and a WebAssembly plugin: one JSON document in (PluginInput), one JSON document out (PluginOutput), one exported `lint` function. See https://slint.dev/plugin-abi for what each field means and what a failure costs.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/PluginInput"
+    },
+    {
+      "$ref": "#/$defs/PluginOutput"
+    }
+  ],
+  "title": "slint plugin ABI"
+}

@@ -139,5 +139,17 @@ moves only when a plugin written against this page would misread the new input
 or slint would misread the new output: a field removed or reinterpreted. Adding
 a field does not move it.
 
+| Version | What changed |
+| --- | --- |
+| `1` | The first published contract: one `skill` in, `messages` out, a namespaced rule name and a citation required on every message. |
+
+A plugin author does not have to take this page's word for the shape either: a
+JSON Schema describing both directions is published at
+[`https://slint.dev/schemas/plugin-abi.json`](https://slint.dev/schemas/plugin-abi.json),
+and `slint schema plugin-abi` prints the same document — generated from the
+structs that write the input and read the output, so it cannot describe a wire
+format slint does not speak. Validate what a plugin answers against the
+`PluginOutput` definition, and what slint sends against `PluginInput`.
+
 A plugin should read `version` and fail the call on a value it does not know —
 slint turns that into a note, and the author updates at their own pace.

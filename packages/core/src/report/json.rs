@@ -14,7 +14,7 @@ use crate::diagnostics::Report;
 /// removes or reinterprets one; adding a field does not.
 pub const SCHEMA_VERSION: u32 = 1;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct Envelope<'a> {
     /// The version of this shape. Pinned in `SCHEMA_VERSION`.
     #[serde(rename = "schemaVersion")]
@@ -27,7 +27,7 @@ pub struct Envelope<'a> {
     pub data: &'a Report,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct Summary {
     pub skills: usize,
     pub errors: usize,
@@ -56,6 +56,41 @@ pub fn envelope(report: &Report, max_warnings: i64) -> Envelope<'_> {
 pub fn render(report: &Report, max_warnings: i64) -> String {
     serde_json::to_string_pretty(&envelope(report, max_warnings))
         .unwrap_or_else(|failure| format!("{{\"ok\":false,\"error\":\"{failure}\"}}"))
+}
+
+/// Where the published copy of the report schema lives, and the `$id` the generated schema carries.
+pub const REPORT_SCHEMA_URL: &str = "https://slint.dev/schemas/report.json";
+
+/// The `--format json` envelope, as JSON Schema, for the consumers that parse it.
+///
+/// Generated from [`Envelope`], so the schema and the printer are the same code — the same move the
+/// config schema makes. The published copy lives at [`REPORT_SCHEMA_URL`]; regenerate it with
+/// `slint schema report` after changing the envelope.
+pub fn report_json_schema() -> serde_json::Value {
+    let mut schema = serde_json::to_value(schemars::schema_for!(Envelope<'static>))
+        .expect("the report envelope has a representable schema");
+
+    if let Some(object) = schema.as_object_mut() {
+        object.insert(
+            "$id".into(),
+            serde_json::Value::String(REPORT_SCHEMA_URL.into()),
+        );
+        object.insert(
+            "title".into(),
+            serde_json::Value::String("slint report".into()),
+        );
+        object.insert(
+            "description".into(),
+            serde_json::Value::String(
+                "What `slint --format json` prints: an envelope whose `schemaVersion` says which \
+                 shape follows, so a consumer can refuse one it was not written for. Data is on \
+                 stdout and everything else on stderr, so piping is safe."
+                    .into(),
+            ),
+        );
+    }
+
+    schema
 }
 
 #[cfg(test)]

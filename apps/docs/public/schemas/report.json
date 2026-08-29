@@ -1,0 +1,321 @@
+{
+  "$defs": {
+    "Fix": {
+      "description": "A replacement for a byte range of the file the finding is in.\n\nByte offsets rather than lines, because a fix is applied to text and re-linted afterwards; a\nline-based patch has to be re-resolved after the fix above it lands, and that is where an\nautofixer starts corrupting files.",
+      "properties": {
+        "description": {
+          "description": "One sentence, in the author's terms, on what changed.",
+          "type": "string"
+        },
+        "end": {
+          "description": "Byte offset into the file's text, exclusive.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "replacement": {
+          "type": "string"
+        },
+        "start": {
+          "description": "Byte offset into the file's text, inclusive.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "start",
+        "end",
+        "replacement",
+        "description"
+      ],
+      "type": "object"
+    },
+    "Location": {
+      "description": "Where a finding is, in the file a reader would open.\n\nLines and columns are 1-based, as every editor and every compiler reports them. `end` is\nexclusive and optional: a rule that knows only the line says only the line rather than\ninventing a span that would underline the wrong words.",
+      "properties": {
+        "column": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "end_column": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "end_line": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "line": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "line",
+        "column"
+      ],
+      "type": "object"
+    },
+    "Message": {
+      "description": "One finding.",
+      "properties": {
+        "advice": {
+          "description": "What to do about it. Static text per rule, so it costs nothing to produce.",
+          "type": "string"
+        },
+        "confidence": {
+          "description": "The model's own estimate, for a finding a model wrote. Always 1.0 for anything computed.",
+          "format": "float",
+          "type": "number"
+        },
+        "file": {
+          "description": "The document this is about, relative to where slint was run.",
+          "type": "string"
+        },
+        "fix": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fix"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "location": {
+          "$ref": "#/$defs/Location"
+        },
+        "message": {
+          "description": "One line, in the imperative or the indicative — never a scolding.",
+          "type": "string"
+        },
+        "reference": {
+          "$ref": "#/$defs/Reference"
+        },
+        "rule": {
+          "description": "The rule that fired, as it is written in a config file.",
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "source": {
+          "$ref": "#/$defs/Source"
+        }
+      },
+      "required": [
+        "rule",
+        "severity",
+        "message",
+        "advice",
+        "location",
+        "source",
+        "file",
+        "reference",
+        "confidence"
+      ],
+      "type": "object"
+    },
+    "Reference": {
+      "description": "Where a rule's claim comes from.\n\nNot optional, and that is the point: every rule here asserts something about someone else's\nwriting, and an assertion with no source has to be taken on trust. A rule without a citation\ndoes not get into the registry.",
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "url"
+      ],
+      "type": "object"
+    },
+    "Report": {
+      "description": "Every skill looked at in one run.",
+      "properties": {
+        "fixed": {
+          "description": "Fixes written to disk during this run, when `--fix` was given.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "notes": {
+          "default": [],
+          "description": "About the run as a whole rather than one skill: arguments that were skipped, a discovery\nthat came up empty. Said out loud rather than inferred from an empty result.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "skills": {
+          "items": {
+            "$ref": "#/$defs/SkillReport"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "skills",
+        "fixed"
+      ],
+      "type": "object"
+    },
+    "Severity": {
+      "description": "How much a finding matters. Ordered worst-first, so a sort is a sort.",
+      "oneOf": [
+        {
+          "const": "error",
+          "description": "The skill is broken, or the specification would refuse it.",
+          "type": "string"
+        },
+        {
+          "const": "warning",
+          "description": "It will work and behave worse than it should.",
+          "type": "string"
+        },
+        {
+          "const": "info",
+          "description": "A judgement call worth seeing once.",
+          "type": "string"
+        }
+      ]
+    },
+    "SkillReport": {
+      "description": "Everything found in one skill, plus what could not be looked at.",
+      "properties": {
+        "messages": {
+          "items": {
+            "$ref": "#/$defs/Message"
+          },
+          "type": "array"
+        },
+        "name": {
+          "type": "string"
+        },
+        "notes": {
+          "description": "Said out loud rather than inferred from an empty result — a pass that did not run, a file\nthat could not be read.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "path": {
+          "description": "The skill's directory, relative to the run.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "name",
+        "messages",
+        "notes"
+      ],
+      "type": "object"
+    },
+    "Source": {
+      "description": "What produced a finding, which is also how much it can be trusted.",
+      "oneOf": [
+        {
+          "const": "static",
+          "description": "Read from the text. Exact, free, and always available.",
+          "type": "string"
+        },
+        {
+          "const": "model",
+          "description": "Written by a language model. A reading, not a measurement.",
+          "type": "string"
+        },
+        {
+          "const": "plugin",
+          "description": "Produced by a plugin, which may be either.",
+          "type": "string"
+        }
+      ]
+    },
+    "Summary": {
+      "properties": {
+        "errors": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "fixable": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "fixed": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "infos": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "skills": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "warnings": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "skills",
+        "errors",
+        "warnings",
+        "infos",
+        "fixable",
+        "fixed"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://slint.dev/schemas/report.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "What `slint --format json` prints: an envelope whose `schemaVersion` says which shape follows, so a consumer can refuse one it was not written for. Data is on stdout and everything else on stderr, so piping is safe.",
+  "properties": {
+    "data": {
+      "$ref": "#/$defs/Report"
+    },
+    "ok": {
+      "description": "False when the run failed: anything at error severity was found, or `--max-warnings` was\nexceeded. Warnings alone do not flip it — they are the linter's opinion, and a caller that\nwants them fatal says so with --max-warnings, which this flag honours.",
+      "type": "boolean"
+    },
+    "schemaVersion": {
+      "description": "The version of this shape. Pinned in `SCHEMA_VERSION`.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "summary": {
+      "$ref": "#/$defs/Summary"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "ok",
+    "summary",
+    "data"
+  ],
+  "title": "slint report",
+  "type": "object"
+}

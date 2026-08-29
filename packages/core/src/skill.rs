@@ -21,7 +21,7 @@ pub const SKILL_FILE: &str = "SKILL.md";
 pub const MAX_TEXT_FILE_BYTES: usize = 1024 * 1024;
 
 /// A file shipped beside the instructions.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct BundledFile {
     /// Relative to the skill directory, with forward slashes on every platform.
     pub path: String,
@@ -33,7 +33,7 @@ pub struct BundledFile {
 }
 
 /// One skill, read.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct Skill {
     /// The directory, as it was given on the command line.
     pub directory: PathBuf,
