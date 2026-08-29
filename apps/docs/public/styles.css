@@ -103,6 +103,29 @@ body > * {
   z-index: 1;
 }
 
+/* Skip link — first tab stop, revealed only on keyboard focus (WCAG 2.4.1) */
+.skip-link {
+  position: absolute;
+  top: -64px;
+  left: 16px;
+  z-index: 100;
+  padding: 10px 16px;
+  background: var(--ink);
+  color: var(--paper-raised);
+  font-family: var(--mono);
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  text-decoration: none;
+  border-radius: var(--radius);
+  transition: top 0.12s ease;
+}
+
+.skip-link:focus {
+  top: 12px;
+  outline: 2px solid var(--signal-bright);
+  outline-offset: 2px;
+}
+
 /* Header — ink glass, continuous with the agent console hero */
 
 .top {
