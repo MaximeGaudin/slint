@@ -5,10 +5,38 @@
 
 use serde_json::{Value, json};
 
-use crate::diagnostics::{Location, Report, Severity};
+use crate::diagnostics::{Location, Message, Report, Severity};
 
 /// The whole report, as one SARIF log.
 pub fn render(report: &Report) -> String {
+    // Rules are declared before the results that cite them: a rule from the catalogue keeps the
+    // summary it ships with, and a rule the catalogue has never heard of (a plugin's) is declared
+    // from the finding that carries it, so no result ever points at a rule the log forgot.
+    let mut rules: Vec<Value> = crate::rules::all_meta()
+        .iter()
+        .map(|meta| {
+            json!({
+                "id": meta.name,
+                "shortDescription": { "text": meta.summary },
+                "helpUri": meta.reference_url,
+            })
+        })
+        .collect();
+
+    for message in report.skills.iter().flat_map(|skill| &skill.messages) {
+        let declared = rules
+            .iter()
+            .any(|rule| rule["id"] == message.rule.as_str());
+
+        if !declared {
+            rules.push(json!({
+                "id": message.rule,
+                "shortDescription": { "text": message.reference.title },
+                "helpUri": message.reference.url,
+            }));
+        }
+    }
+
     let results: Vec<Value> = report
         .skills
         .iter()
@@ -16,6 +44,7 @@ pub fn render(report: &Report) -> String {
             skill.messages.iter().map(|message| {
                 json!({
                     "ruleId": message.rule,
+                    "ruleIndex": rule_index(&rules, &message.rule),
                     "level": level(message.severity),
                     "message": { "text": message.message },
                     "locations": [{
@@ -43,6 +72,7 @@ pub fn render(report: &Report) -> String {
                     "name": "slint",
                     "informationUri": "https://slint.dev",
                     "version": env!("CARGO_PKG_VERSION"),
+                    "rules": rules,
                 },
             },
             "results": results,
@@ -50,6 +80,13 @@ pub fn render(report: &Report) -> String {
     });
 
     serde_json::to_string_pretty(&log).expect("the SARIF log is representable")
+}
+
+fn rule_index(rules: &[Value], name: &str) -> usize {
+    rules
+        .iter()
+        .position(|rule| rule["id"] == name)
+        .unwrap_or(0)
 }
 
 fn level(severity: Severity) -> &'static str {
