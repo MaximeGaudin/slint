@@ -514,7 +514,7 @@ impl Rule for UndeclaredTool {
         }
 
         for tool in HOST_SPECIFIC_TOOLS {
-            if !body.contains(tool) {
+            if tool_start(body, tool).is_none() {
                 continue;
             }
 
@@ -526,9 +526,9 @@ impl Rule for UndeclaredTool {
             }
 
             for (index, line) in body.lines().enumerate() {
-                if !line.contains(tool) {
+                let Some(start) = tool_start(line, tool) else {
                     continue;
-                }
+                };
 
                 let lower = line.to_ascii_lowercase();
                 if lower.contains("do not use")
@@ -540,17 +540,33 @@ impl Rule for UndeclaredTool {
                 }
 
                 let document_line = context.skill.document_line(index + 1);
-                let column = line.find(tool).map(|offset| offset + 1).unwrap_or(1);
                 context.report(
                     format!(
                         "Instructions require tool \"{tool}\" but it is not listed in allowed-tools"
                     ),
-                    Location::at(document_line, column),
+                    Location::at(document_line, start + 1),
                 );
                 break;
             }
         }
     }
+}
+
+/// Byte offset of the first occurrence of `tool` in `text` as a standalone identifier — one
+/// whose neighbors are not identifier characters, so `AskQuestion` never matches inside
+/// `AskQuestionnaire`.
+fn tool_start(text: &str, tool: &str) -> Option<usize> {
+    text.match_indices(tool)
+        .find(|&(start, _)| {
+            let before = text[..start].chars().next_back();
+            let after = text[start + tool.len()..].chars().next();
+            before.is_none_or(is_identifier_boundary) && after.is_none_or(is_identifier_boundary)
+        })
+        .map(|(start, _)| start)
+}
+
+fn is_identifier_boundary(c: char) -> bool {
+    !c.is_ascii_alphanumeric() && c != '_'
 }
 
 impl Rule for HardcodedRepoPath {
@@ -1152,5 +1168,37 @@ You might want to start by looking through the briefs folder.\n\
             check(&UNDECLARED_TOOL_RULE, &skill).is_empty(),
             "expected flow-sequence allowed-tools to declare AskQuestion"
         );
+    }
+
+    #[test]
+    fn a_longer_identifier_containing_the_tool_name_is_not_undeclared() {
+        // Regression for https://github.com/MaximeGaudin/slint/issues/100: "AskQuestionnaire" is an
+        // unrelated noun, not a call to the AskQuestion tool.
+        let skill = skill_with_body(
+            "\n## Steps\n\n1. Send the AskQuestionnaire form to the customer before continuing.\n",
+        );
+
+        assert!(
+            check(&UNDECLARED_TOOL_RULE, &skill).is_empty(),
+            "expected no undeclared-tool finding for a substring identifier"
+        );
+    }
+
+    #[test]
+    fn the_reported_column_points_at_the_standalone_tool_name() {
+        let line = "1. Fill AskQuestionnaire, then use AskQuestion for the rest.\n";
+        let skill = skill_with_body(&format!("\n{line}"));
+
+        // The standalone occurrence is the last one in this line, not the one inside
+        // "AskQuestionnaire".
+        let expected_column = line
+            .match_indices("AskQuestion")
+            .last()
+            .map(|(start, _)| start + 1)
+            .expect("line contains a standalone AskQuestion");
+
+        let messages = check(&UNDECLARED_TOOL_RULE, &skill);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].location.column, expected_column);
     }
 }
