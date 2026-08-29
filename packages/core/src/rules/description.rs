@@ -29,8 +29,57 @@ static TRIGGER: LazyLock<Regex> = LazyLock::new(|| {
     .expect("the trigger pattern compiles")
 });
 
-static MARKUP: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"<[^>]+>").expect("the markup pattern compiles"));
+/// HTML tags, plus Markdown emphasis: bold, italic. Emphasis matches carry their inner text as a
+/// capture group so the fix can strip the delimiters and keep the word.
+static MARKUP: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"<[^>]+>|\*\*([^*\n]+)\*\*|\*([^*\s][^*\n]*)\*")
+        .expect("the markup pattern compiles")
+});
+
+/// Markdown emphasis written with underscores. `_em_` is emphasis, but `my_file_name` is an
+/// identifier, so — like CommonMark — intraword underscore matches are left alone.
+static UNDERSCORE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"_([^_\s]+)_").expect("the underscore emphasis pattern compiles"));
+
+fn is_intraword(description: &str, start: usize, end: usize) -> bool {
+    let before = description[..start].chars().next_back();
+    let after = description[end..].chars().next();
+
+    before.is_some_and(|character| character.is_alphanumeric())
+        || after.is_some_and(|character| character.is_alphanumeric())
+}
+
+fn has_underscore_emphasis(description: &str) -> bool {
+    UNDERSCORE.captures_iter(description).any(|captures| {
+        let whole = captures.get(0).expect("a match always has group 0");
+        !is_intraword(description, whole.start(), whole.end())
+    })
+}
+
+/// The description with every tag and emphasis delimiter gone and the wrapped words kept.
+fn strip_markup(description: &str) -> String {
+    let without_underscores =
+        UNDERSCORE.replace_all(description, |captures: &regex::Captures<'_>| {
+            let whole = captures.get(0).expect("a match always has group 0");
+            if is_intraword(description, whole.start(), whole.end()) {
+                whole.as_str().to_string()
+            } else {
+                captures[1].to_string()
+            }
+        });
+
+    MARKUP
+        .replace_all(&without_underscores, |captures: &regex::Captures<'_>| {
+            captures
+                .iter()
+                .skip(1)
+                .flatten()
+                .next()
+                .map(|found| found.as_str().to_string())
+                .unwrap_or_default()
+        })
+        .to_string()
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(default)]
@@ -85,7 +134,7 @@ static MIN_LENGTH: RuleMeta = RuleMeta {
     name: "description/min-length",
     summary: "The description must be long enough to explain what the skill does and when to use it.",
     rationale: "The agent chooses among all available skills using this text alone. A few words cannot carry both the purpose and the trigger.",
-    advice: "Expand to roughly 150–300 characters: what it does, then when to use it, in the words a request would use.",
+    advice: "Expand to at least 80 characters — what it does, then when to use it, in the words a request would use.",
     default_severity: Severity::Warning,
     fixable: false,
     needs_model: false,
@@ -191,11 +240,11 @@ impl Rule for NoMarkup {
 
     fn check(&self, context: &mut RuleContext<'_>) {
         let description = context.skill.description.clone();
-        if !MARKUP.is_match(&description) {
+        if !MARKUP.is_match(&description) && !has_underscore_emphasis(&description) {
             return;
         }
 
-        let cleaned = MARKUP.replace_all(&description, "").to_string();
+        let cleaned = strip_markup(&description);
         let cleaned = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
 
         let location = at(context);
@@ -435,6 +484,47 @@ mod tests {
         assert!(!patched.contains("<b>"));
     }
 
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/80 —
+    /// the rule's own advice cites **bold** as markup, so Markdown emphasis must be detected
+    /// the same way an HTML tag is, and removed while keeping the word it wrapped.
+    #[test]
+    fn markdown_bold_is_reported_and_fixed_like_html_tags() {
+        let skill = skill_described(
+            "Culls a **photo** shoot in Lightroom by flagging keepers. Use when triaging RAW files after a session.",
+        );
+        let messages = check(&NO_MARKUP_RULE, &skill);
+
+        assert_eq!(messages.len(), 1);
+        let fix = messages[0].fix.as_ref().expect("emphasis is fixable");
+        assert_eq!(
+            fix.replacement,
+            "Culls a photo shoot in Lightroom by flagging keepers. Use when triaging RAW files after a session."
+        );
+    }
+
+    #[test]
+    fn italic_and_underscore_emphasis_are_reported() {
+        for description in [
+            "Culls a *photo* shoot in Lightroom by flagging keepers. Use when triaging RAW files.",
+            "Culls a _photo_ shoot in Lightroom by flagging keepers. Use when triaging RAW files.",
+        ] {
+            assert_eq!(
+                check(&NO_MARKUP_RULE, &skill_described(description)).len(),
+                1,
+                "for {description}"
+            );
+        }
+    }
+
+    #[test]
+    fn snake_case_identifiers_are_not_markup() {
+        let skill = skill_described(
+            "Reads each my_file_name dump in the folder. Use when parsing raw editor exports.",
+        );
+
+        assert!(check(&NO_MARKUP_RULE, &skill).is_empty());
+    }
+
     #[test]
     fn a_thin_description_is_reported_against_the_configured_minimum() {
         let skill = skill_described("Culls photos. Use when triaging.");
@@ -447,6 +537,23 @@ mod tests {
         );
 
         assert!(check_with(&MIN_LENGTH_RULE, &skill, &config).is_empty());
+    }
+
+    /// https://github.com/MaximeGaudin/slint/issues/79 — the advice used to say
+    /// "roughly 150–300 characters" while the rule only fires below 80, and no
+    /// source states 150–300. The advice must match the shipped default.
+    #[test]
+    fn the_min_length_advice_matches_the_configured_default() {
+        assert!(
+            MIN_LENGTH.advice.contains("80"),
+            "advice must name the shipped default of 80: {}",
+            MIN_LENGTH.advice
+        );
+        assert!(
+            !MIN_LENGTH.advice.contains("150"),
+            "advice must not advertise a range no source states: {}",
+            MIN_LENGTH.advice
+        );
     }
 
     #[test]
