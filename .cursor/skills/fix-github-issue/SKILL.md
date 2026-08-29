@@ -130,7 +130,7 @@ This commit must leave the suite red on that new test. Do not include production
 Before running checks, compare CI to local entrypoints:
 
 1. Read `.github/workflows/*` (and similar) for every required job/step (fmt, lint, tests, deny, typecheck, …)
-2. Read the project’s local gate: `scripts/check.sh`, `Makefile`, `package.json` scripts (`lint`, `test`, `check`), `turbo` tasks, etc.
+2. Read the project’s local gate: `./scripts/check.sh`, `Makefile`, `package.json` scripts (`lint`, `test`, `check`), `turbo` tasks, etc.
 3. If CI runs something local does **not** (e.g. `cargo deny check`, a package lint, a format check):
    - **Update the local scripts** so the usual developer/pre-push command runs that check too
    - Document the dependency if a tool must be installed (clear error if missing)
