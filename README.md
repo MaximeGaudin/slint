@@ -188,7 +188,7 @@ Both are held to the same standard as the built-in catalogue: a namespaced rule 
 
 ## Editors
 
-`[apps/vscode](apps/vscode)` is a VS Code extension that runs slint on save (and optionally the model pass), merges static and model diagnostics, and shows citations on hover. It targets VS Code 1.90+; forks such as Cursor are expected to work (the extension sticks to long-stable APIs) but are not CI-verified.
+[`apps/vscode`](apps/vscode) is a VS Code extension that runs slint on save (and optionally the model pass), merges static and model diagnostics, and shows citations on hover. It targets VS Code 1.90+; forks such as Cursor are expected to work (the extension sticks to long-stable APIs) but are not CI-verified.
 
 ```bash
 pnpm install
@@ -201,12 +201,12 @@ pnpm build:vscode
 ## Monorepo layout
 
 
-| Path                             | What it is                                                       |
-| -------------------------------- | ---------------------------------------------------------------- |
-| `[apps/cli](apps/cli)`           | `slint` binary (Rust)                                            |
-| `[apps/vscode](apps/vscode)`     | VS Code extension                                                |
-| `[apps/docs](apps/docs)`         | Astro documentation site (rule catalogue synced from the binary) |
-| `[packages/core](packages/core)` | Shared Rust library (`slint`) used by the CLI                    |
+| Path                                 | What it is                                                       |
+| ------------------------------------ | ---------------------------------------------------------------- |
+| [`apps/cli`](apps/cli)               | `slint` binary (Rust)                                            |
+| [`apps/vscode`](apps/vscode)         | VS Code extension                                                |
+| [`apps/docs`](apps/docs)             | Astro documentation site (rule catalogue synced from the binary) |
+| [`packages/core`](packages/core)     | Shared Rust library (`slint`) used by the CLI                    |
 
 
 JS/TS apps use **pnpm workspaces** + **Turborepo**. Rust stays on a **Cargo workspace**.
@@ -238,11 +238,11 @@ pnpm sync:docs            # refresh apps/docs/src/data/rules.json from the CLI
 pnpm dev:docs             # Astro docs at http://localhost:4321
 ```
 
-Coverage needs `[cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov)` and the `llvm-tools-preview` rustup component (`rustup component add llvm-tools-preview && cargo install cargo-llvm-cov --locked`).
+Coverage needs [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) and the `llvm-tools-preview` rustup component (`rustup component add llvm-tools-preview && cargo install cargo-llvm-cov --locked`).
 
 `slint rules` prints the catalogue. `slint rules --json` feeds the docs site, and CI fails when `apps/docs/src/data/rules.json` no longer matches the binary's catalogue, so the site and the binary never disagree about what a rule does.
 
-More detail: `[apps/docs/README.md](apps/docs/README.md)`.
+More detail: [`apps/docs/README.md`](apps/docs/README.md).
 
 ## License
 
