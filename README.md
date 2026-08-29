@@ -30,7 +30,7 @@ pnpm install:cli
 slint --help
 ```
 
-Release binaries (after the first GitHub release):
+Release binaries (latest release: [v0.2.0](https://github.com/MaximeGaudin/slint/releases/tag/0.2.0); macOS (Apple Silicon, Intel), Linux (x86_64, arm64), and Windows (`slint-windows-amd64.zip`) assets are published for each release):
 
 ```bash
 # macOS (Apple Silicon)
