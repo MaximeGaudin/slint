@@ -566,6 +566,39 @@ mod tests {
         assert!(lint_skill(&good_skill(), &Config::default()).is_empty());
     }
 
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/236 — the required `name`
+    /// field was never validated, because read() backfilled it from the directory name before
+    /// any rule ran, so a SKILL.md omitting `name:` produced zero findings about it.
+    #[test]
+    fn a_missing_name_field_is_an_error_even_though_the_directory_names_it() {
+        let temporary = tempfile::tempdir().unwrap();
+        write_skill(
+            temporary.path(),
+            "raw-export-helper",
+            "---\ndescription: Culls a photo shoot in Lightroom by flagging the keepers and rejecting the rest. Use when triaging RAW files after a session.\n---\n\n## Culling\n\n1. Import the RAW files.\n",
+        );
+
+        let report = run(
+            &[temporary.path().to_path_buf()],
+            &Config::default(),
+            &[],
+            Passes {
+                plugins: false,
+                model: false,
+            },
+        )
+        .unwrap();
+
+        assert!(
+            report.skills[0]
+                .messages
+                .iter()
+                .any(|one| one.rule == "name/format" && one.message.contains("no name")),
+            "a missing required name field must be an error, got {:?}",
+            report.skills[0].messages
+        );
+    }
+
     #[test]
     fn default_passes_do_not_opt_into_the_model_pass() {
         assert!(
