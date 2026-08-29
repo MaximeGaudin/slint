@@ -115,6 +115,7 @@ fn region(location: Location) -> Value {
 mod tests {
     use super::*;
     use crate::diagnostics::{Message, Reference, SkillReport, Source};
+    use std::collections::BTreeMap;
 
     fn report() -> Report {
         Report {
@@ -145,6 +146,7 @@ mod tests {
             }],
             fixed: 0,
             notes: Vec::new(),
+            fingerprints: BTreeMap::new(),
         }
     }
 

@@ -82,6 +82,7 @@ mod tests {
     use super::*;
     use crate::diagnostics::Location;
     use crate::report::tests::sample;
+    use std::collections::BTreeMap;
 
     #[test]
     fn each_finding_becomes_one_annotation_at_its_position() {
@@ -200,6 +201,7 @@ mod tests {
             skills: vec![],
             fixed: 0,
             notes: Vec::new(),
+            fingerprints: BTreeMap::new(),
         };
         assert!(render(&empty).is_empty());
     }

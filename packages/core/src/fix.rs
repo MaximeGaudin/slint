@@ -6,13 +6,13 @@
 //! the next pass rather than applied against a moved target. Files are replaced by rename rather
 //! than rewritten in place, so a crash mid-fix never leaves half of each.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
 
-use crate::diagnostics::{Fix, Report};
+use crate::diagnostics::{Fingerprint, Fix, Report};
 
 /// What `--fix` did.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -21,10 +21,26 @@ pub struct Applied {
     pub fixes: usize,
     /// Fixes that overlapped one already applied, and are left for the next pass.
     pub deferred: usize,
+    /// Files whose fixes were not applied, with why. A run that could not finish a file still
+    /// reports everything else it did, so the reader is never left guessing which files changed.
+    pub failed: Vec<FileFailure>,
+}
+
+/// One file `--fix` could not finish, and what stopped it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileFailure {
+    /// The path the fixes name, as the report spells it.
+    pub file: String,
+    /// The error, as a sentence a reader can act on.
+    pub reason: String,
 }
 
 /// Applies every fix in a report, file by file.
-pub fn apply(report: &Report) -> Result<Applied> {
+///
+/// A file that cannot be fixed is recorded and left behind rather than aborting the run: the files
+/// fixed before it are already on disk, so an early return would trade one known outcome for a
+/// mystery about the rest.
+pub fn apply(report: &Report) -> Applied {
     let mut by_file: BTreeMap<&str, Vec<&Fix>> = BTreeMap::new();
 
     for skill in &report.skills {
@@ -38,21 +54,32 @@ pub fn apply(report: &Report) -> Result<Applied> {
     let mut applied = Applied::default();
 
     for (file, fixes) in by_file {
-        let outcome =
-            apply_to_file(Path::new(file), &fixes).with_context(|| format!("fixing {file}"))?;
+        // What the bytes were when these fixes were computed, if the report says. A report built
+        // by hand carries nothing to compare against, and is trusted as it stands.
+        let expected = report.fingerprints.get(file);
 
-        if outcome.fixes > 0 {
-            applied.files += 1;
+        let outcome = apply_to_file(Path::new(file), &fixes, expected);
+
+        match outcome {
+            Ok(outcome) => {
+                if outcome.fixes > 0 {
+                    applied.files += 1;
+                }
+
+                applied.fixes += outcome.fixes;
+                applied.deferred += outcome.deferred;
+            }
+            Err(failure) => applied.failed.push(FileFailure {
+                file: file.to_string(),
+                reason: format!("{failure:#}"),
+            }),
         }
-
-        applied.fixes += outcome.fixes;
-        applied.deferred += outcome.deferred;
     }
 
-    Ok(applied)
+    applied
 }
 
-fn apply_to_file(path: &Path, fixes: &[&Fix]) -> Result<Applied> {
+fn apply_to_file(path: &Path, fixes: &[&Fix], expected: Option<&Fingerprint>) -> Result<Applied> {
     let permission_changes = fixes
         .iter()
         .filter(|fix| fix.start == 0 && fix.end == 0 && fix.replacement.is_empty())
@@ -76,6 +103,19 @@ fn apply_to_file(path: &Path, fixes: &[&Fix]) -> Result<Applied> {
 
     let original =
         fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+
+    // The fixes are byte offsets into text measured earlier. A file that has changed since — even
+    // by the same length, which the bounds checks alone would wave straight through — is not that
+    // text, and splicing into it writes a fix on top of bytes nobody measured.
+    if let Some(expected) = expected
+        && !expected.matches(&original)
+    {
+        bail!(
+            "{} changed since it was linted, so its fixes were skipped: they were computed against the earlier bytes",
+            path.display()
+        );
+    }
+
     let (patched, count, deferred) = patch(&original, &edits);
 
     if count > 0 {
@@ -302,16 +342,18 @@ mod tests {
             }],
             fixed: 0,
             notes: Vec::new(),
+            fingerprints: BTreeMap::new(),
         };
 
-        let applied = apply(&report).unwrap();
+        let applied = apply(&report);
 
         assert_eq!(
             applied,
             Applied {
                 files: 1,
                 fixes: 1,
-                deferred: 0
+                deferred: 0,
+                failed: Vec::new(),
             }
         );
         assert_eq!(
@@ -331,7 +373,132 @@ mod tests {
             }],
             fixed: 0,
             notes: Vec::new(),
+            fingerprints: BTreeMap::new(),
         }
+    }
+
+    /// Reproduces https://github.com/MaximeGaudin/slint/issues/234 and #247 — fixes are byte
+    /// offsets into the text they were computed against. When the file changed between the lint
+    /// pass and the fix pass, same length and all, the offsets still landed in bounds and the
+    /// fix was spliced into bytes it was never measured against.
+    #[test]
+    fn a_fix_computed_against_text_that_has_since_changed_is_not_applied() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("SKILL.md");
+        fs::write(&path, "hello world\n").unwrap();
+
+        let mut report = report_fixing(&path, fix(6, 11, "there"));
+        // The report records what the bytes were when the fix was computed, which is how apply()
+        // can tell the file it is about to patch from the file it measured.
+        report.fingerprints.insert(
+            path.to_str().unwrap().to_string(),
+            Fingerprint::of("hello world\n"),
+        );
+
+        // Another writer got there first: same length, different bytes.
+        fs::write(&path, "yellow tent\n").unwrap();
+
+        let applied = apply(&report);
+
+        assert_eq!(applied.fixes, 0, "stale fixes are not applied");
+        assert_eq!(applied.failed.len(), 1, "{:?}", applied.failed);
+        assert!(
+            applied.failed[0]
+                .reason
+                .contains("changed since it was linted"),
+            "{:?}",
+            applied.failed[0].reason
+        );
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "yellow tent\n",
+            "the file is exactly as the other writer left it"
+        );
+    }
+
+    #[test]
+    fn a_fix_whose_bytes_still_match_the_report_is_applied_normally() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("SKILL.md");
+        fs::write(&path, "hello world\n").unwrap();
+
+        let mut report = report_fixing(&path, fix(6, 11, "there"));
+        report.fingerprints.insert(
+            path.to_str().unwrap().to_string(),
+            Fingerprint::of("hello world\n"),
+        );
+
+        let applied = apply(&report);
+
+        assert_eq!(applied.fixes, 1);
+        assert!(applied.failed.is_empty(), "{:?}", applied.failed);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "hello there\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_that_cannot_be_written_is_reported_and_the_others_still_get_fixed() {
+        // Reproduces https://github.com/MaximeGaudin/slint/issues/227: one write failure used to
+        // abort the whole run, leaving the files fixed before it with nothing in the report.
+        use std::os::unix::fs::PermissionsExt;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let open = temporary.path().join("open.md");
+        fs::write(&open, "Read scripts\\notes.md.\n").unwrap();
+
+        let locked_directory = temporary.path().join("locked");
+        fs::create_dir(&locked_directory).unwrap();
+        let locked = locked_directory.join("locked.md");
+        fs::write(&locked, "Read scripts\\notes.md.\n").unwrap();
+        // Replacing a file needs a new file beside it, so a directory that refuses one is what
+        // makes the write fail; the file's own mode would not.
+        fs::set_permissions(&locked_directory, fs::Permissions::from_mode(0o555)).unwrap();
+
+        let report = Report {
+            skills: vec![
+                SkillReport {
+                    path: temporary.path().display().to_string(),
+                    name: "locked".into(),
+                    messages: vec![message(
+                        locked.to_str().unwrap(),
+                        Some(fix(0, 22, "Read scripts/notes.md.")),
+                    )],
+                    notes: vec![],
+                },
+                SkillReport {
+                    path: temporary.path().display().to_string(),
+                    name: "open".into(),
+                    messages: vec![message(
+                        open.to_str().unwrap(),
+                        Some(fix(0, 22, "Read scripts/notes.md.")),
+                    )],
+                    notes: vec![],
+                },
+            ],
+            fixed: 0,
+            notes: Vec::new(),
+            fingerprints: BTreeMap::new(),
+        };
+
+        let applied = apply(&report);
+        fs::set_permissions(&locked_directory, fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert_eq!(applied.fixes, 1, "the writable file was fixed anyway");
+        assert_eq!(
+            fs::read_to_string(&open).unwrap(),
+            "Read scripts/notes.md.\n"
+        );
+        assert_eq!(applied.failed.len(), 1, "{:?}", applied.failed);
+        assert!(applied.failed[0].file.ends_with("locked.md"));
+        assert!(
+            applied.failed[0].reason.contains("Permission denied"),
+            "{:?}",
+            applied.failed[0].reason
+        );
+        assert!(
+            fs::read_to_string(&locked).unwrap().contains('\\'),
+            "the file that could not be written is exactly as it was"
+        );
     }
 
     #[cfg(unix)]
@@ -347,7 +514,7 @@ mod tests {
         fs::write(&path, "Read scripts\\notes.md.\n").unwrap();
         let before = fs::metadata(&path).unwrap().ino();
 
-        apply(&report_fixing(&path, fix(0, 22, "Read scripts/notes.md."))).unwrap();
+        apply(&report_fixing(&path, fix(0, 22, "Read scripts/notes.md.")));
 
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
@@ -370,7 +537,7 @@ mod tests {
         fs::write(&path, "Read scripts\\notes.md.\n").unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
 
-        apply(&report_fixing(&path, fix(0, 22, "Read scripts/notes.md."))).unwrap();
+        apply(&report_fixing(&path, fix(0, 22, "Read scripts/notes.md.")));
 
         let mode = fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o644, "the replacement keeps the file's mode");
@@ -382,7 +549,7 @@ mod tests {
         let path = temporary.path().join("SKILL.md");
         fs::write(&path, "Read scripts\\notes.md.\n").unwrap();
 
-        apply(&report_fixing(&path, fix(0, 22, "Read scripts/notes.md."))).unwrap();
+        apply(&report_fixing(&path, fix(0, 22, "Read scripts/notes.md.")));
 
         let entries = fs::read_dir(temporary.path()).unwrap().count();
         assert_eq!(entries, 1, "only the skill file remains");
@@ -407,9 +574,10 @@ mod tests {
             }],
             fixed: 0,
             notes: Vec::new(),
+            fingerprints: BTreeMap::new(),
         };
 
-        assert_eq!(apply(&report).unwrap(), Applied::default());
+        assert_eq!(apply(&report), Applied::default());
         assert!(!has_fixes(&report));
         assert_eq!(fs::read_to_string(&path).unwrap(), "unchanged\n");
     }
@@ -433,9 +601,10 @@ mod tests {
             }],
             fixed: 0,
             notes: Vec::new(),
+            fingerprints: BTreeMap::new(),
         };
 
-        apply(&report).unwrap();
+        apply(&report);
 
         let mode = fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o111, 0o111, "readable by all, now runnable by all");

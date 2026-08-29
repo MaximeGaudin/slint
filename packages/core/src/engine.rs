@@ -8,12 +8,14 @@
 use anyhow::Result;
 use rayon::prelude::*;
 use regex::Regex;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use crate::config::Config;
-use crate::diagnostics::{Location, Message, Reference, Report, Severity, SkillReport, Source};
+use crate::diagnostics::{
+    Fingerprint, Location, Message, Reference, Report, Severity, SkillReport, Source,
+};
 use crate::llm;
 use crate::plugin::Plugin;
 use crate::rules::{self, RuleContext};
@@ -784,10 +786,36 @@ pub fn run_with_reviewer(
         });
     }
 
+    // What --fix will later stand on: a fix is a byte range into the text it was measured
+    // against, so the report records what those bytes were, keyed by the path each fix names.
+    // apply() re-reads the file and refuses to splice into text that no longer matches — a file
+    // that changed between this pass and the write gets a note, not a corrupted byte stream.
+    let mut fingerprints = BTreeMap::new();
+
+    for (report, one) in per_skill.iter().zip(skills.iter()) {
+        for message in report.messages.iter().filter(|one| one.fix.is_some()) {
+            let text = if message.file == one.document {
+                Some(&one.source)
+            } else {
+                one.files
+                    .iter()
+                    .find(|file| {
+                        message.file == format!("{}/{}", one.directory.display(), file.path)
+                    })
+                    .and_then(|file| file.text.as_ref())
+            };
+
+            if let Some(text) = text {
+                fingerprints.insert(message.file.clone(), Fingerprint::of(text));
+            }
+        }
+    }
+
     Ok(Report {
         skills: per_skill,
         fixed: 0,
         notes: discovery.skipped,
+        fingerprints,
     }
     .sorted())
 }

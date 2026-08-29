@@ -110,6 +110,7 @@ fn severity_word(severity: Severity) -> &'static str {
 mod tests {
     use super::*;
     use crate::diagnostics::{Location, Message, Reference, Severity, SkillReport, Source};
+    use std::collections::BTreeMap;
 
     pub fn sample() -> Report {
         Report {
@@ -154,6 +155,7 @@ mod tests {
             }],
             fixed: 0,
             notes: Vec::new(),
+            fingerprints: BTreeMap::new(),
         }
     }
 

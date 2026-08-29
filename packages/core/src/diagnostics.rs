@@ -5,7 +5,9 @@
 //! rule from needing a new code path anywhere else.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 
 /// Strips terminal control characters from text written outside this tool.
 ///
@@ -166,6 +168,36 @@ impl Message {
     }
 }
 
+/// What a file's bytes were when its fixes were computed.
+///
+/// A fix is a byte range, so it is only as valid as the text it was measured against. The length
+/// plus a cheap hash is enough to catch the file that changed between the lint pass and the fix
+/// pass — including the same-length rewrite the bounds checks alone would wave straight through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Fingerprint {
+    /// The length of the text, in bytes.
+    pub length: usize,
+    /// A hash of the text, from the standard library's own hasher.
+    pub hash: u64,
+}
+
+impl Fingerprint {
+    pub fn of(text: &str) -> Self {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        text.hash(&mut hasher);
+
+        Fingerprint {
+            length: text.len(),
+            hash: hasher.finish(),
+        }
+    }
+
+    /// Whether `text` is still the bytes this was taken from.
+    pub fn matches(&self, text: &str) -> bool {
+        self.length == text.len() && Fingerprint::of(text).hash == self.hash
+    }
+}
+
 /// Everything found in one skill, plus what could not be looked at.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SkillReport {
@@ -197,6 +229,11 @@ pub struct Report {
     /// that came up empty. Said out loud rather than inferred from an empty result.
     #[serde(default)]
     pub notes: Vec<String>,
+    /// What the bytes of each fixable file were when its fixes were computed, keyed by the path
+    /// the fixes name. Only meaningful inside the process that computed them — `--fix` reads the
+    /// file again before applying — so it never reaches the JSON envelope.
+    #[serde(skip)]
+    pub fingerprints: BTreeMap<String, Fingerprint>,
 }
 
 impl Report {
@@ -328,6 +365,7 @@ mod tests {
             }],
             fixed: 0,
             notes: Vec::new(),
+            fingerprints: BTreeMap::new(),
         };
 
         assert_eq!(report.errors(), 1);
@@ -351,6 +389,7 @@ mod tests {
             }],
             fixed: 0,
             notes: Vec::new(),
+            fingerprints: BTreeMap::new(),
         }
         .sorted();
 
@@ -381,6 +420,7 @@ mod tests {
             }],
             fixed: 0,
             notes: Vec::new(),
+            fingerprints: BTreeMap::new(),
         };
 
         assert_eq!(report.fixable(), 1);

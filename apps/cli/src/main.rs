@@ -6,7 +6,7 @@
 
 use anyhow::{Context, Result, bail};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -308,8 +308,10 @@ fn run(cli: &Cli) -> Result<u8> {
 
     let mut report = engine::run(&cli.paths, &config, &plugins, passes)?;
 
+    let mut fix_failures = Vec::new();
+
     if cli.fix {
-        report = fix_until_converged(report, slint::fix::apply, |_report| {
+        (report, fix_failures) = fix_until_converged(report, slint::fix::apply, |_report| {
             // Lint again so the report describes the files as they are now rather than as they
             // were: half of what --fix does is proving the fix worked.
             engine::run(&cli.paths, &config, &plugins, passes)
@@ -318,7 +320,14 @@ fn run(cli: &Cli) -> Result<u8> {
 
     // The exit code reflects what the run found, not what --quiet chooses to hide: a
     // warnings-only run stays a warnings-only run on the way out, with or without --quiet.
-    let code = exit_code(&report);
+    let mut code = exit_code(&report);
+
+    // A fix that could not be written is slint failing at its one write job, whatever the report
+    // went on to find: the run says so with the "slint failed" code, and the report's notes say
+    // which files.
+    if !fix_failures.is_empty() {
+        code = code::FAILED;
+    }
 
     if cli.quiet {
         keep_only_errors(&mut report);
@@ -402,6 +411,7 @@ fn run_stdin(cli: &Cli, config: &Config) -> Result<u8> {
         }],
         fixed: 0,
         notes: Vec::new(),
+        fingerprints: BTreeMap::new(),
     }
     .sorted();
 
@@ -564,20 +574,30 @@ const MAX_FIX_ROUNDS: usize = 8;
 /// them is deferred rather than applied against a moved target. Re-linting recomputes the
 /// remaining fixes against the file as it is now, so a single `--fix` invocation still converges
 /// instead of sending the user off to run it a second time.
+///
+/// Files that could not be fixed are reported, not fatal: the fixes that did land are already on
+/// disk, so the run owes the reader a list of what changed and what did not. Each failure becomes
+/// a note on the report — the same channel a skipped pass speaks through — and the list is
+/// returned so the exit code can say the run fell short.
 fn fix_until_converged(
     report: Report,
-    mut apply: impl FnMut(&Report) -> Result<slint::fix::Applied>,
+    mut apply: impl FnMut(&Report) -> slint::fix::Applied,
     mut relint: impl FnMut(Report) -> Result<Report>,
-) -> Result<Report> {
+) -> Result<(Report, Vec<slint::fix::FileFailure>)> {
     let mut report = report;
     let mut rounds = 0;
     let mut total = 0;
+    let mut failed: BTreeMap<String, String> = BTreeMap::new();
 
     loop {
-        let applied = apply(&report)?;
+        let applied = apply(&report);
+
+        for failure in &applied.failed {
+            failed.insert(failure.file.clone(), failure.reason.clone());
+        }
 
         if applied.fixes == 0 {
-            return Ok(report);
+            break;
         }
 
         total += applied.fixes;
@@ -586,9 +606,20 @@ fn fix_until_converged(
 
         rounds += 1;
         if rounds == MAX_FIX_ROUNDS {
-            return Ok(report);
+            break;
         }
     }
+
+    let failures: Vec<slint::fix::FileFailure> = failed
+        .into_iter()
+        .map(|(file, reason)| {
+            report.notes.push(format!("Fixing {file} failed: {reason}"));
+
+            slint::fix::FileFailure { file, reason }
+        })
+        .collect();
+
+    Ok((report, failures))
 }
 
 fn resolve_config(cli: &Cli) -> Result<Config> {
@@ -876,6 +907,7 @@ mod tests {
             }],
             fixed: 0,
             notes: Vec::new(),
+            fingerprints: BTreeMap::new(),
         }
     }
 
@@ -913,21 +945,23 @@ mod tests {
         // the first pass deferred must run in the same invocation, not wait for another --fix.
         let mut calls = 0;
 
-        let report = fix_until_converged(
+        let (report, failures) = fix_until_converged(
             report_with(1, 0),
             |_| {
                 calls += 1;
                 let fixes = usize::from(calls <= 2);
-                Ok(slint::fix::Applied {
+                slint::fix::Applied {
                     files: usize::from(fixes > 0),
                     fixes,
                     deferred: 0,
-                })
+                    failed: Vec::new(),
+                }
             },
             |_| Ok(report_with(0, 0)),
         )
         .unwrap();
 
+        assert!(failures.is_empty());
         assert_eq!(
             calls, 3,
             "two rounds, then one to see there is nothing left"
@@ -939,22 +973,58 @@ mod tests {
     fn fixing_gives_up_after_a_bound_instead_of_looping_forever() {
         let mut calls = 0;
 
-        let report = fix_until_converged(
+        let (report, failures) = fix_until_converged(
             report_with(1, 0),
             |_| {
                 calls += 1;
-                Ok(slint::fix::Applied {
+                slint::fix::Applied {
                     files: 1,
                     fixes: 1,
                     deferred: 0,
-                })
+                    failed: Vec::new(),
+                }
             },
             |_| Ok(report_with(0, 0)),
         )
         .unwrap();
 
+        assert!(failures.is_empty());
         assert_eq!(calls, MAX_FIX_ROUNDS);
         assert_eq!(report.fixed, MAX_FIX_ROUNDS);
+    }
+
+    #[test]
+    fn a_file_that_could_not_be_fixed_is_reported_as_a_note_and_a_failure() {
+        // https://github.com/MaximeGaudin/slint/issues/227: the fixes that landed before a file
+        // that could not be written stay on disk, so the run reports both rather than dying.
+        let (report, failures) = fix_until_converged(
+            report_with(1, 0),
+            |_| slint::fix::Applied {
+                files: 0,
+                fixes: 0,
+                deferred: 0,
+                failed: vec![slint::fix::FileFailure {
+                    file: "skills/locked/SKILL.md".into(),
+                    reason: "Permission denied (os error 13)".into(),
+                }],
+            },
+            |_| Ok(report_with(0, 0)),
+        )
+        .unwrap();
+
+        assert_eq!(
+            failures,
+            vec![slint::fix::FileFailure {
+                file: "skills/locked/SKILL.md".into(),
+                reason: "Permission denied (os error 13)".into(),
+            }]
+        );
+        assert_eq!(
+            report.notes,
+            vec![
+                "Fixing skills/locked/SKILL.md failed: Permission denied (os error 13)".to_string()
+            ]
+        );
     }
 
     #[test]
@@ -964,6 +1034,7 @@ mod tests {
             skills: vec![],
             fixed: 0,
             notes: Vec::new(),
+            fingerprints: BTreeMap::new(),
         };
 
         assert_eq!(exit_code(&report), code::NOTHING_LINTED);

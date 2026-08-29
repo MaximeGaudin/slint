@@ -97,6 +97,7 @@ pub fn report_json_schema() -> serde_json::Value {
 mod tests {
     use super::*;
     use crate::report::tests::sample;
+    use std::collections::BTreeMap;
 
     /// Regression for https://github.com/MaximeGaudin/slint/issues/125 —
     /// a consumer can only parse a moving format safely if the envelope says
@@ -178,6 +179,7 @@ mod tests {
             skills: vec![],
             fixed: 0,
             notes: Vec::new(),
+            fingerprints: BTreeMap::new(),
         };
         let parsed: serde_json::Value = serde_json::from_str(&render(&empty, -1)).unwrap();
 
