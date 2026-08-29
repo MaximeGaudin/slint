@@ -721,6 +721,63 @@ mod tests {
         );
     }
 
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/286 —
+    /// the directive keyword is matched case-insensitively, the way HTML
+    /// comment directives conventionally are. An author who shouts is still
+    /// understood, and a shout that matches nothing is still a directive one
+    /// can be warned about.
+    #[test]
+    fn an_uppercase_directive_keyword_is_still_recognized() {
+        let suppressions = Suppressions::read(
+            "<!-- SLINT-DISABLE body/posix-paths -->\n<!-- Slint-Disable-Next-Line name/not-generic -->\ntwo\n",
+        );
+
+        assert!(
+            suppressions.file.contains("body/posix-paths"),
+            "expected the uppercase disable to register, got {suppressions:?}"
+        );
+        assert!(
+            suppressions
+                .lines
+                .iter()
+                .any(|(line, rule)| *line == 3 && rule == "name/not-generic"),
+            "expected the mixed-case disable-next-line to cover line 3, got {suppressions:?}"
+        );
+    }
+
+    #[test]
+    fn an_uppercase_directive_suppresses_a_violation_in_a_real_run() {
+        let temporary = tempfile::tempdir().unwrap();
+        write_skill(
+            temporary.path(),
+            "demo-uppercase-ignore",
+            "---\nname: demo-uppercase-ignore\ndescription: Culls a photo shoot in Lightroom by flagging the keepers and rejecting the rest. Use when triaging RAW files after a session.\n---\n\n<!-- SLINT-DISABLE body/posix-paths -->\n\n## Workflow\n\nRead scripts\\notes.md.\n",
+        );
+
+        let report = run(
+            &[temporary.path().to_path_buf()],
+            &Config::default(),
+            &[],
+            Passes {
+                plugins: false,
+                model: false,
+            },
+        )
+        .unwrap();
+
+        let found = report.skills[0]
+            .messages
+            .iter()
+            .filter(|one| one.rule == "body/posix-paths" || one.rule == "suppression/unused")
+            .count();
+
+        assert_eq!(
+            found, 0,
+            "the uppercase directive either silences the rule or is itself diagnosed, got {:?}",
+            report.skills[0].messages
+        );
+    }
+
     #[test]
     fn several_rules_can_be_named_in_one_comment() {
         let suppressions =
