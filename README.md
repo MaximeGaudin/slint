@@ -246,6 +246,6 @@ More detail: [`apps/docs/README.md`](apps/docs/README.md).
 
 ## License
 
-Copyright (C) 2026 Maxime Gaudin
+Copyright (c) 2026 Maxime Gaudin
 
 MIT — see [LICENSE](LICENSE).
