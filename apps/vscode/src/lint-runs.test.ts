@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { LintRunCoordinator } from './lint-runs.js'
+import { LintQueue, LintRunCoordinator } from './lint-runs.js'
 
 describe('LintRunCoordinator (#20)', () => {
   it('aborts the previous signal when a newer lint begins for the same target', () => {
@@ -68,5 +68,68 @@ describe('LintRunCoordinator (#20)', () => {
       text: '$(sync~spin) slint',
       detail: '1 lint run(s) still in progress',
     })
+  })
+})
+
+describe('LintQueue (#32)', () => {
+  it('runs overlapping targets one at a time so publishes cannot race', async () => {
+    const queue = new LintQueue()
+    const events: string[] = []
+    let releaseFirst: (() => void) | undefined
+
+    const first = queue.run(async () => {
+      events.push('workspace:start')
+      await new Promise<void>((resolve) => {
+        releaseFirst = resolve
+      })
+      events.push('workspace:end')
+      return 'workspace'
+    })
+
+    // The workspace lint is mid-flight when a per-file lint for a different target arrives.
+    await Promise.resolve()
+    assert.deepEqual(events, ['workspace:start'], 'second job must wait for the first to finish')
+
+    const second = queue.run(async () => {
+      events.push('file:start')
+      events.push('file:end')
+      return 'file'
+    })
+
+    releaseFirst?.()
+    assert.equal(await first, 'workspace')
+    assert.equal(await second, 'file')
+    assert.deepEqual(events, ['workspace:start', 'workspace:end', 'file:start', 'file:end'])
+  })
+
+  it('starts jobs in arrival order', async () => {
+    const queue = new LintQueue()
+    const order: string[] = []
+
+    const jobs = ['a', 'b', 'c'].map((target) =>
+      queue.run(async () => {
+        order.push(target)
+      }),
+    )
+
+    await Promise.all(jobs)
+    assert.deepEqual(order, ['a', 'b', 'c'])
+  })
+
+  it('a failing job does not jam the queue', async () => {
+    const queue = new LintQueue()
+
+    await assert.rejects(
+      queue.run(async () => {
+        throw new Error('slint could not run')
+      }),
+      /slint could not run/,
+    )
+
+    let ran = false
+    await queue.run(async () => {
+      ran = true
+    })
+    assert.equal(ran, true, 'the next lint must still run after a failed one')
   })
 })
