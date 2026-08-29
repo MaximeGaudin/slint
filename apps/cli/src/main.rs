@@ -532,9 +532,11 @@ fn resolve_config(cli: &Cli) -> Result<Config> {
         config.rules.insert(name, setting);
     }
 
-    apply_llm_overrides(&mut config, cli)?;
-
-    if !cli.model_pass() {
+    if cli.model_pass() {
+        apply_llm_overrides(&mut config, cli)?;
+    } else {
+        // With no model pass the LLM flags have no reader, so a leftover typo in a shared
+        // script must not be able to fail the static run either.
         for meta in slint::llm::rules::all() {
             config.rules.insert(meta.name.to_string(), RuleSetting::Off);
         }

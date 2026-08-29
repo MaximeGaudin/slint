@@ -107,7 +107,7 @@ Exit codes: `0` clean, `1` errors, `2` warnings only, `3` slint itself failed, `
 | `--no-ignore`           | Lint everything, even what the config ignores.                     |
 | `--rule name=level`     | Override one rule (`off`, `info`, `warn`, `error`).                |
 | `--max-warnings N`      | Fail when there are more warnings than this.                       |
-| `--llm`                 | Run the rules that need a model. Off by default.                   |
+| `--llm`                 | Run the rules that need a model. Off by default. The `--llm-*` overrides are only used, and only checked, when it is on. |
 | `--llm-provider NAME`   | Override `[llm].provider` from the config.                         |
 | `--llm-model ID`        | Override `[llm].model` from the config.                            |
 | `--llm-base-url URL`    | Override `[llm].base_url` from the config.                         |

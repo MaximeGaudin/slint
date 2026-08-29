@@ -100,6 +100,41 @@ fn a_clean_base_exits_zero_and_says_so() {
     assert!(stdout(&output).contains("Nothing to report"));
 }
 
+/// Regression for https://github.com/MaximeGaudin/slint/issues/53 —
+/// a typo in an LLM flag used to hard-fail a static run in which the value is never read,
+/// the way a leftover flag from a shared script does.
+#[test]
+fn llm_flags_are_not_validated_when_the_model_pass_is_off() {
+    let temporary = tempfile::tempdir().unwrap();
+    write(temporary.path(), "photo-culling", GOOD);
+
+    let output = slint(&[
+        temporary.path().to_str().unwrap(),
+        "--no-llm",
+        "--llm-provider",
+        "bogus",
+    ]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a flag the run never reads must not fail it: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // With the model pass on, the same typo still fails loudly at the provider list.
+    let output = slint(&[
+        temporary.path().to_str().unwrap(),
+        "--llm",
+        "--llm-provider",
+        "bogus",
+    ]);
+
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(stderr.contains("bogus is not a provider"), "{stderr}");
+}
+
 /// Regression for https://github.com/MaximeGaudin/slint/issues/41 —
 /// there was no way to run slint without the ambient config, so a one-off run or a CI job
 /// pinning exact behaviour had to move the project's real config file out of the way.
