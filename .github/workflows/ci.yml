@@ -76,6 +76,8 @@ jobs:
         run: pnpm exec turbo run lint --filter=slint-docs --filter=slint-vscode
       - name: Test vscode
         run: pnpm exec turbo run test --filter=slint-vscode
+      - name: Package vscode (validate the manifest)
+        run: pnpm package:vscode
 
   msrv:
     name: MSRV
