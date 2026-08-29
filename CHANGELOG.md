@@ -37,3 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Docs** — Astro + MDX site with a routing-signal design; rule pages generated from `slint rules --json`.
 - **Editors** — VS Code / Cursor extension that runs the CLI on save and surfaces citations on diagnostics.
 - **Tooling** — pnpm + Turborepo monorepo scripts (`pnpm build`, `pnpm lint`, `pnpm install:cli`, coverage via `cargo-llvm-cov`), Clippy/rustfmt, Biome for docs/vscode, comment checks that reject `TODO` / `FIXME` / stub macros, GitHub Actions CI, and a cross-platform release workflow.
+
+[Unreleased]: https://github.com/MaximeGaudin/slint/compare/0.2.0...HEAD
+[0.2.0]: https://github.com/MaximeGaudin/slint/compare/0.1.0...0.2.0
+[0.1.0]: https://github.com/MaximeGaudin/slint/releases/tag/0.1.0
