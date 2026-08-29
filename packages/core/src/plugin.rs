@@ -16,7 +16,7 @@
 use anyhow::{Context, Result, bail};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use crate::config::{Config, PluginRef};
 use crate::diagnostics::{Location, Message, Reference, Severity, Source, strip_control};
@@ -120,8 +120,51 @@ pub fn load_all(config: &Config) -> Result<Vec<Plugin>> {
         .collect()
 }
 
+/// Joins a plugin path to the config's directory and refuses anything that leaves it.
+///
+/// `Path::join` replaces the base entirely when given an absolute path and never rejects `..`,
+/// so without this a config in a cloned repository could point at any other file on the machine.
+/// A plugin declaration is scoped to the project that declares it.
+fn confine_to_config_dir(base: &Path, reference: &str) -> Result<PathBuf> {
+    let collapse = |path: &Path| -> PathBuf {
+        path.components()
+            .filter(|component| !matches!(component, Component::CurDir))
+            .map(|component| PathBuf::from(component.as_os_str()))
+            .collect()
+    };
+
+    let confined_base = collapse(base);
+
+    let mut parts = Vec::new();
+    for component in base.join(reference).components() {
+        match component {
+            Component::ParentDir => {
+                if parts.pop().is_none() {
+                    bail!(
+                        "plugin path {reference} escapes the directory containing the config ({})",
+                        confined_base.display()
+                    );
+                }
+            }
+            Component::CurDir => {}
+            other => parts.push(PathBuf::from(other.as_os_str())),
+        }
+    }
+
+    let path = parts.iter().collect::<PathBuf>();
+
+    if !path.starts_with(&confined_base) {
+        bail!(
+            "plugin path {reference} escapes the directory containing the config ({})",
+            confined_base.display()
+        );
+    }
+
+    Ok(path)
+}
+
 pub fn load(reference: &PluginRef, base: &Path) -> Result<Plugin> {
-    let path = base.join(&reference.path);
+    let path = confine_to_config_dir(base, &reference.path)?;
 
     // The extension decides which kind it is, so a config never has to say twice.
     if path.extension().and_then(|one| one.to_str()) == Some("wasm") {
@@ -838,6 +881,67 @@ reference = { title = "House style", url = "https://example.com/style" }
         assert!(messages.is_empty());
         assert_eq!(notes.len(), 1);
         assert!(notes[0].contains("did not run"));
+    }
+
+    const OUTSIDE_PACK: &str = r#"
+[[rules]]
+name = "evil/marker"
+severity = "warning"
+summary = "A rule that lives outside the config's directory."
+rationale = "It must not load."
+advice = "Move it in."
+pattern = "Overlap"
+reference = { title = "PoC", url = "https://example.com/poc" }
+"#;
+
+    #[test]
+    fn a_plugin_path_that_walks_out_of_the_config_directory_is_refused() {
+        let inside = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("evil.toml"), OUTSIDE_PACK).unwrap();
+
+        // Find a sibling of the inside dir that is not an ancestor of the outside dir, so the
+        // escape is the `..` and not the tempfile layout.
+        let sibling = inside
+            .path()
+            .parent()
+            .unwrap()
+            .join("slint-issue-86-sibling");
+        let _ = fs::remove_dir_all(&sibling);
+        fs::create_dir_all(&sibling).unwrap();
+
+        let failure = load(
+            &PluginRef {
+                path: format!(
+                    "../{}/evil.toml",
+                    outside.path().file_name().unwrap().to_string_lossy()
+                ),
+            },
+            &sibling,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(failure.contains("escapes"), "{failure}");
+    }
+
+    #[test]
+    fn an_absolute_plugin_path_is_refused() {
+        let inside = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let evil = outside.path().join("evil.toml");
+        fs::write(&evil, OUTSIDE_PACK).unwrap();
+
+        let failure = load(
+            &PluginRef {
+                path: evil.to_string_lossy().into_owned(),
+            },
+            inside.path(),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(failure.contains("escapes"), "{failure}");
     }
 
     #[test]
