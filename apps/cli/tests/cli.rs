@@ -496,6 +496,53 @@ fn init_writes_a_config_and_leaves_an_existing_one_alone() {
     );
 }
 
+/// Regression for https://github.com/MaximeGaudin/slint/issues/40 —
+/// init in a subdirectory used to write a shadowing config without saying that a config
+/// already governs the directory.
+#[test]
+fn init_in_a_subdirectory_names_the_parent_config_it_will_shadow() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+
+    fs::write(
+        root.join("slint.toml"),
+        "[rules]\n\"name/not-generic\" = \"off\"\n",
+    )
+    .unwrap();
+    let sub = root.join("sub");
+    fs::create_dir_all(&sub).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_slint"))
+        .arg("init")
+        .current_dir(&sub)
+        .output()
+        .expect("running slint");
+
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        stderr.contains("slint.toml"),
+        "the parent config must be named: {stderr}"
+    );
+    assert!(
+        stderr.contains("shadow"),
+        "what writing here will do must be said: {stderr}"
+    );
+    // The file is still written — init's job is to write, the warning is the news.
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(sub.join("slint.toml").is_file());
+
+    // Without a config anywhere up the tree, there is nothing to warn about.
+    let empty = tempfile::tempdir().unwrap();
+    let quiet = Command::new(env!("CARGO_BIN_EXE_slint"))
+        .arg("init")
+        .current_dir(empty.path())
+        .output()
+        .expect("running slint");
+
+    let stderr = String::from_utf8_lossy(&quiet.stderr).to_string();
+    assert!(!stderr.contains("shadow"), "{stderr}");
+}
+
 #[test]
 fn the_rule_catalogue_can_be_printed_as_json_for_the_documentation() {
     let output = slint(&["rules", "--json"]);

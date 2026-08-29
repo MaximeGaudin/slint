@@ -588,6 +588,19 @@ fn init() -> Result<u8> {
         return Ok(code::CLEAN);
     }
 
+    // A config higher up the tree already governs this directory, and the file being written
+    // now takes its place for everything linted below. That is a decision worth seeing. The
+    // directory is canonicalized first, because the walk-up stops at a relative anchor's parent
+    // of ".", which is the empty path.
+    let here = std::fs::canonicalize(".").with_context(|| "resolving the current directory")?;
+    if let Some(inherited) = config::find(&here) {
+        eprintln!(
+            "slint: {} already governs this directory; writing {} will shadow it for everything linted below",
+            inherited.display(),
+            path.display()
+        );
+    }
+
     std::fs::write(&path, config::STARTER_CONFIG)
         .with_context(|| format!("writing {}", path.display()))?;
 
