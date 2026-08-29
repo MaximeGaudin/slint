@@ -70,6 +70,17 @@ jobs:
           $Archive = "${{ matrix.artifact }}.zip"
           Compress-Archive -Path $Binary -DestinationPath $Archive -Force
 
+      - name: Checksum (Unix)
+        if: runner.os != 'Windows'
+        run: sha256sum ${{ matrix.artifact }}.tar.gz > ${{ matrix.artifact }}.tar.gz.sha256
+
+      - name: Checksum (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash -Algorithm SHA256 "${{ matrix.artifact }}.zip").Hash.ToLower()
+          Set-Content -Path "${{ matrix.artifact }}.zip.sha256" -Value "$hash  ${{ matrix.artifact }}.zip"
+
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
@@ -98,6 +109,9 @@ jobs:
           echo "--- Release notes ---"
           cat /tmp/release-notes.md
 
+      - name: Add third-party notices
+        run: cp THIRD-PARTY-NOTICES.md artifacts/
+
       - name: List artifacts
         run: ls -lhR artifacts/
 
@@ -108,11 +122,54 @@ jobs:
           TAG="${{ inputs.tag }}"
 
           if gh release view "$TAG" &>/dev/null; then
-            gh release edit "$TAG" --title "v${TAG}" --notes-file /tmp/release-notes.md
+            gh release edit "$TAG" --draft --title "v${TAG}" --notes-file /tmp/release-notes.md
             gh release upload "$TAG" artifacts/* --clobber
           else
-            gh release create "$TAG" artifacts/* --title "v${TAG}" --notes-file /tmp/release-notes.md
+            gh release create "$TAG" artifacts/* --draft --title "v${TAG}" --notes-file /tmp/release-notes.md
           fi
+
+  vscode:
+    name: Publish VS Code extension
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.21.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build extension
+        run: pnpm exec turbo run build --filter=slint-vscode
+
+      - name: Publish to the VS Code Marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          if [ -z "${VSCE_PAT:-}" ]; then
+            echo "::warning::VSCE_PAT not set — skipping VS Code Marketplace publish."
+            exit 0
+          fi
+          pnpm --filter slint-vscode publish:marketplace
+
+      - name: Publish to Open VSX
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: |
+          if [ -z "${OVSX_PAT:-}" ]; then
+            echo "::warning::OVSX_PAT not set — skipping Open VSX publish."
+            exit 0
+          fi
+          pnpm --filter slint-vscode publish:openvsx
 
   homebrew:
     name: Update Homebrew tap
@@ -143,6 +200,8 @@ jobs:
           VERSION="${TAG#v}"
           ARM_SHA=$(sha256sum artifacts/slint-darwin-arm64.tar.gz | cut -d' ' -f1)
           AMD_SHA=$(sha256sum artifacts/slint-darwin-amd64.tar.gz | cut -d' ' -f1)
+          LINUX_ARM_SHA=$(sha256sum artifacts/slint-linux-arm64.tar.gz | cut -d' ' -f1)
+          LINUX_AMD_SHA=$(sha256sum artifacts/slint-linux-amd64.tar.gz | cut -d' ' -f1)
 
           git clone --depth 1 git@github.com:MaximeGaudin/homebrew-tap.git tap
           mkdir -p tap/Formula
@@ -165,6 +224,17 @@ jobs:
               on_intel do
                 url "https://github.com/MaximeGaudin/slint/releases/download/${TAG}/slint-darwin-amd64.tar.gz"
                 sha256 "${AMD_SHA}"
+              end
+            end
+
+            on_linux do
+              on_arm do
+                url "https://github.com/MaximeGaudin/slint/releases/download/${TAG}/slint-linux-arm64.tar.gz"
+                sha256 "${LINUX_ARM_SHA}"
+              end
+              on_intel do
+                url "https://github.com/MaximeGaudin/slint/releases/download/${TAG}/slint-linux-amd64.tar.gz"
+                sha256 "${LINUX_AMD_SHA}"
               end
             end
 
