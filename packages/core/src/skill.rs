@@ -768,7 +768,11 @@ mod tests {
         fs::create_dir_all(&visible).unwrap();
         fs::write(visible.join(SKILL_FILE), DOCUMENT).unwrap();
 
-        for hidden in [".mystuff/nested-skill", ".cache/kept-skill", ".worktrees/wt"] {
+        for hidden in [
+            ".mystuff/nested-skill",
+            ".cache/kept-skill",
+            ".worktrees/wt",
+        ] {
             let directory = root.join(hidden);
             fs::create_dir_all(&directory).unwrap();
             fs::write(directory.join(SKILL_FILE), DOCUMENT).unwrap();
@@ -923,22 +927,22 @@ mod tests {
                 walked.directories
             );
 
-            let taken = discover(&[path.clone()], &GlobSet::empty()).unwrap();
+            let taken = discover(std::slice::from_ref(&path), &GlobSet::empty()).unwrap();
             assert_eq!(taken.directories, vec![path.clone()], "for {file}");
 
-        // The file is read and parsed whatever the case. The spelling inside `document` follows
-        // what the platform's filesystem reports: case-sensitive ones keep the author's case,
-        // case-insensitive ones may report the canonical name for both.
-        let skill = read(&path).unwrap();
-        assert_eq!(skill.name, "photo-culling", "for {file}");
-        assert!(
-            skill
-                .document
-                .to_ascii_lowercase()
-                .ends_with(&file.to_ascii_lowercase()),
-            "for {file}: {}",
-            skill.document
-        );
+            // The file is read and parsed whatever the case. The spelling inside `document` follows
+            // what the platform's filesystem reports: case-sensitive ones keep the author's case,
+            // case-insensitive ones may report the canonical name for both.
+            let skill = read(&path).unwrap();
+            assert_eq!(skill.name, "photo-culling", "for {file}");
+            assert!(
+                skill
+                    .document
+                    .to_ascii_lowercase()
+                    .ends_with(&file.to_ascii_lowercase()),
+                "for {file}: {}",
+                skill.document
+            );
         }
     }
 
@@ -956,7 +960,10 @@ mod tests {
         let skill = read(&outer).unwrap();
 
         assert!(
-            skill.files.iter().all(|file| !file.path.ends_with(SKILL_FILE)),
+            skill
+                .files
+                .iter()
+                .all(|file| !file.path.ends_with(SKILL_FILE)),
             "no manifest belongs to the outer bundle: {:?}",
             skill.files
         );
