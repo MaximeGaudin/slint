@@ -358,6 +358,31 @@ mod tests {
         }
     }
 
+    /// Reproduces https://github.com/MaximeGaudin/slint/issues/234 and #247 — fixes are byte
+    /// offsets into the text they were computed against. When the file changed between the lint
+    /// pass and the fix pass, same length and all, the offsets still landed in bounds and the
+    /// fix was spliced into bytes it was never measured against.
+    #[test]
+    fn a_fix_computed_against_text_that_has_since_changed_is_not_applied() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("SKILL.md");
+        fs::write(&path, "hello world\n").unwrap();
+
+        let report = report_fixing(&path, fix(6, 11, "there"));
+
+        // Another writer got there first: same length, different bytes.
+        fs::write(&path, "yellow tent\n").unwrap();
+
+        let applied = apply(&report);
+
+        assert_eq!(applied.fixes, 0, "stale fixes are not applied");
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "yellow tent\n",
+            "the file is exactly as the other writer left it"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_file_that_cannot_be_written_is_reported_and_the_others_still_get_fixed() {
