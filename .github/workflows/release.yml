@@ -19,9 +19,30 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  verify-tag:
+    name: Verify tag matches workspace version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Compare tag with workspace version
+        run: |
+          TAG="${{ inputs.tag }}"
+          VERSION="${TAG#v}"
+          WORKSPACE_VERSION=$(awk -F'"' '/^version = /{print $2; exit}' Cargo.toml)
+          if [ "$VERSION" != "$WORKSPACE_VERSION" ]; then
+            echo "::error::Tag ${TAG} (version ${VERSION}) does not match workspace version ${WORKSPACE_VERSION} in Cargo.toml"
+            exit 1
+          fi
+          echo "Tag ${TAG} matches workspace version ${WORKSPACE_VERSION}"
+
   build:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    needs: verify-tag
     permissions:
       contents: read
       actions: write
