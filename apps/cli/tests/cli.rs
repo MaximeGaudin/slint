@@ -133,6 +133,113 @@ fn a_negated_pattern_takes_a_path_back_from_the_ignore_list() {
     );
 }
 
+/// Regression for https://github.com/MaximeGaudin/slint/issues/25 —
+/// `ignore = ["fixtures/**"]` read like a `.gitignore` entry but matched like text typed on the
+/// command line, so the pattern matched nothing unless it was spelled `**/fixtures/**`. Patterns
+/// are anchored to the config file's directory.
+#[test]
+fn an_ignore_pattern_is_anchored_to_the_config_file_not_the_invocation() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+
+    write(root.join("fixtures").as_path(), "helper", BROKEN);
+    write(root.join("kept").as_path(), "photo-culling", GOOD);
+    fs::write(root.join("slint.toml"), "ignore = [\"fixtures/**\"]\n").unwrap();
+
+    let output = slint(&[root.to_str().unwrap(), "--no-llm"]);
+
+    let stdout = stdout(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "only the kept skill is linted: {stdout}"
+    );
+    assert!(
+        !stdout.contains("helper"),
+        "the pattern read next to the config file must ignore its folder: {stdout}"
+    );
+}
+
+/// A config in a subdirectory of the scanned tree — named with `--config` — anchors its patterns
+/// to its own directory: it says nothing about the tree above it.
+#[test]
+fn a_subdirectory_config_ignores_only_what_sits_beneath_it() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+
+    fs::create_dir_all(root.join("sub")).unwrap();
+    fs::write(
+        root.join("sub").join("slint.toml"),
+        "ignore = [\"**/fixtures/**\"]\n",
+    )
+    .unwrap();
+    write(
+        root.join("fixtures").as_path(),
+        "above",
+        &BROKEN.replace("name: helper", "name: above-fixture"),
+    );
+    write(
+        root.join("sub").join("fixtures").as_path(),
+        "below",
+        &BROKEN.replace("name: helper", "name: below-fixture"),
+    );
+    write(root.join("kept").as_path(), "photo-culling", GOOD);
+
+    let output = slint_in(
+        root,
+        &["--no-llm", "--config", "sub/slint.toml", "."],
+    );
+
+    let stdout = stdout(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "the fixtures folder above the config is still linted: {stdout}"
+    );
+    assert!(
+        stdout.contains("above-fixture"),
+        "the tree above the config file must be linted: {stdout}"
+    );
+    assert!(
+        !stdout.contains("below-fixture"),
+        "the config's own fixtures folder must be ignored: {stdout}"
+    );
+}
+
+/// `--ignore-path` reads a file beside the config, so its patterns are anchored to that file's
+/// own directory, the same way the config's are.
+#[test]
+fn an_ignore_path_file_ignores_relative_to_itself() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+
+    write(root, "helper", &BROKEN.replace("name: helper", "name: top-helper"));
+    write(
+        root.join("tools").as_path(),
+        "helper",
+        &BROKEN.replace("name: helper", "name: tool-helper"),
+    );
+    write(root, "photo-culling", GOOD);
+    fs::write(root.join("tools").join("my-ignores"), "helper\n").unwrap();
+
+    let output = slint_in(root, &["--no-llm", "--ignore-path", "tools/my-ignores"]);
+
+    let stdout = stdout(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "the helper above the ignore file is still linted: {stdout}"
+    );
+    assert!(
+        stdout.contains("top-helper"),
+        "a pattern in the ignore file says nothing about the tree above it: {stdout}"
+    );
+    assert!(
+        !stdout.contains("tool-helper"),
+        "the bare name ignores the helper beside the ignore file: {stdout}"
+    );
+}
+
 /// Regression for https://github.com/MaximeGaudin/slint/issues/29 —
 /// the first path's config governed every path, so a later path's own config was read by
 /// nobody and said nothing.
