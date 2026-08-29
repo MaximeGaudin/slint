@@ -2895,6 +2895,7 @@ dependencies = [
  "owo-colors",
  "rayon",
  "regex",
+ "reqwest",
  "serde",
  "serde_json",
  "tempfile",

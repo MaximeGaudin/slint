@@ -405,6 +405,58 @@ mod tests {
     }
 
     #[test]
+    fn the_model_pass_runs_one_bounded_request_per_skill() {
+        use crate::llm::mock::MockServer;
+        use std::sync::atomic::Ordering;
+
+        let server = MockServer::start(MockServer::ollama_reply(), false);
+        let temporary = tempfile::tempdir().unwrap();
+        for index in 0..6 {
+            write_skill(
+                temporary.path(),
+                &format!("skill-{index}"),
+                &GOOD.replace("photo-culling", &format!("skill-{index}")),
+            );
+        }
+
+        let mut config = Config::default();
+        config.llm.provider = crate::config::Provider::Ollama;
+        config.llm.model = "llama3.2".into();
+        config.llm.base_url = Some(format!("http://{}/v1", server.address));
+        config.llm.max_concurrent_requests = 2;
+
+        let report = run(
+            &[temporary.path().to_path_buf()],
+            &config,
+            &[],
+            Passes {
+                plugins: false,
+                model: true,
+            },
+        )
+        .expect("every skill reviews clean against the mock provider");
+
+        assert_eq!(server.requests.load(Ordering::SeqCst), 6);
+        let observed = server.max_in_flight.load(Ordering::SeqCst);
+        assert!(
+            observed <= 2,
+            "the model pass must hold requests back, not let {observed} run at once"
+        );
+        assert!(
+            report
+                .skills
+                .iter()
+                .all(|one| !one.notes.iter().any(|note| note.contains("asking"))),
+            "no skill may carry a provider failure note: {:?}",
+            report
+                .skills
+                .iter()
+                .flat_map(|one| &one.notes)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
     fn a_disable_next_line_comment_silences_only_the_line_below_it() {
         let suppressions = Suppressions::read(
             "one\n<!-- slint-disable-next-line body/posix-paths -->\ntwo\nthree\n",

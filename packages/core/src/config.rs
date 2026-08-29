@@ -110,6 +110,17 @@ pub struct LlmConfig {
     /// Seconds before a request is abandoned.
     #[serde(default = "default_timeout")]
     pub timeout_seconds: u64,
+    /// Cap on the tokens the model may spend on its reply. None leaves the cap to the provider.
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
+    /// Transport-level failures (rate limits, 5xx, connection errors) are retried this many times
+    /// with backoff before the failure becomes what the run does about it.
+    #[serde(default = "default_max_retries")]
+    pub max_retries: u32,
+    /// How many model requests may be in flight at once. One per skill is how a large repository
+    /// meets a provider's rate limit in the first second.
+    #[serde(default = "default_max_concurrent_requests")]
+    pub max_concurrent_requests: usize,
     /// Bodies longer than this are truncated before they are sent, and the report says so.
     #[serde(default = "default_max_input")]
     pub max_input_bytes: usize,
@@ -117,6 +128,14 @@ pub struct LlmConfig {
 
 fn default_timeout() -> u64 {
     90
+}
+
+fn default_max_retries() -> u32 {
+    2
+}
+
+fn default_max_concurrent_requests() -> usize {
+    4
 }
 
 fn default_max_input() -> usize {
@@ -131,6 +150,9 @@ impl Default for LlmConfig {
             api_key_env: None,
             base_url: None,
             timeout_seconds: default_timeout(),
+            max_tokens: None,
+            max_retries: default_max_retries(),
+            max_concurrent_requests: default_max_concurrent_requests(),
             max_input_bytes: default_max_input(),
         }
     }
@@ -485,6 +507,32 @@ mod tests {
 
         llm.model = "gpt-5-mini".into();
         assert!(llm.is_configured());
+    }
+
+    #[test]
+    fn token_concurrency_and_retry_defaults_are_conservative() {
+        let llm = LlmConfig::default();
+
+        assert_eq!(llm.max_tokens, None, "no reply cap invented silently");
+        assert_eq!(llm.max_retries, 2);
+        assert_eq!(llm.max_concurrent_requests, 4);
+    }
+
+    #[test]
+    fn the_llm_knobs_are_settable_from_the_config_file() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("slint.toml");
+        fs::write(
+            &path,
+            "[llm]\nprovider = \"openai\"\nmodel = \"gpt-5-mini\"\nmax_tokens = 512\nmax_retries = 1\nmax_concurrent_requests = 8\n",
+        )
+        .unwrap();
+
+        let config = load(&path).unwrap();
+
+        assert_eq!(config.llm.max_tokens, Some(512));
+        assert_eq!(config.llm.max_retries, 1);
+        assert_eq!(config.llm.max_concurrent_requests, 8);
     }
 
     #[test]

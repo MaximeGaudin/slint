@@ -211,6 +211,25 @@ fn base_request(prompt: &Prompt) -> ChatRequest {
         .append_message(genai::chat::ChatMessage::user(prompt.user.clone()))
 }
 
+/// The options one findings request carries: temperature zero, the format's shape, and — when the
+/// config asks for one — a cap on what the model may spend on its reply.
+fn chat_options(format: FindingsFormat, _max_tokens: Option<u32>) -> ChatOptions {
+    match format {
+        FindingsFormat::JsonSchema => ChatOptions::default()
+            .with_temperature(0.0)
+            .with_response_format(ChatResponseFormat::JsonSpec(JsonSpec::new(
+                "skill_findings",
+                findings_json_schema(),
+            ))),
+        FindingsFormat::Tool => ChatOptions::default()
+            .with_temperature(0.0)
+            .with_tool_choice(ToolChoice::tool(REPORT_FINDINGS_TOOL)),
+        FindingsFormat::JsonMode => ChatOptions::default()
+            .with_temperature(0.0)
+            .with_response_format(ChatResponseFormat::JsonMode),
+    }
+}
+
 fn extract_findings_body(response: genai::chat::ChatResponse) -> Result<String> {
     // Forced tool path: arguments are already the findings object.
     if let Some(call) = response.tool_calls().into_iter().next() {
@@ -233,37 +252,18 @@ impl Chat for GenAiChat {
         // Temperature zero: a linter that reports different findings on the same text twice is a
         // linter nobody can put in CI.
         let (request, options) = match format {
-            FindingsFormat::JsonSchema => {
-                let request = base_request(prompt);
-                let options = ChatOptions::default()
-                    .with_temperature(0.0)
-                    .with_response_format(ChatResponseFormat::JsonSpec(JsonSpec::new(
-                        "skill_findings",
-                        findings_json_schema(),
-                    )));
-                (request, options)
-            }
-            FindingsFormat::Tool => {
-                let tool = Tool::new(REPORT_FINDINGS_TOOL)
+            FindingsFormat::JsonSchema => (base_request(prompt), chat_options(format, None)),
+            FindingsFormat::Tool => (
+                base_request(prompt).with_tools(vec![Tool::new(REPORT_FINDINGS_TOOL)
                     .with_description(
                         "Report skill review findings. Call exactly once with the findings array \
                          (empty when the skill is clean).",
                     )
                     .with_schema(findings_json_schema())
-                    .with_strict(true);
-                let request = base_request(prompt).with_tools(vec![tool]);
-                let options = ChatOptions::default()
-                    .with_temperature(0.0)
-                    .with_tool_choice(ToolChoice::tool(REPORT_FINDINGS_TOOL));
-                (request, options)
-            }
-            FindingsFormat::JsonMode => {
-                let request = base_request(prompt);
-                let options = ChatOptions::default()
-                    .with_temperature(0.0)
-                    .with_response_format(ChatResponseFormat::JsonMode);
-                (request, options)
-            }
+                    .with_strict(true)]),
+                chat_options(format, None),
+            ),
+            FindingsFormat::JsonMode => (base_request(prompt), chat_options(format, None)),
         };
 
         let response = self
@@ -282,6 +282,7 @@ impl Chat for GenAiChat {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     fn config(provider: Provider, model: &str) -> LlmConfig {
         LlmConfig {
@@ -290,8 +291,163 @@ mod tests {
             api_key_env: Some("SLINT_TEST_KEY".into()),
             base_url: None,
             timeout_seconds: 5,
+            max_tokens: None,
+            max_retries: 0,
+            max_concurrent_requests: 4,
             max_input_bytes: 1024,
         }
+    }
+
+    use crate::llm::mock::MockServer;
+
+    /// A provider at a local mock server, needing no credential and no network.
+    fn local_client(server: &MockServer, adjust: impl FnOnce(&mut LlmConfig)) -> GenAiChat {
+        let mut llm = config(Provider::Ollama, "llama3.2");
+        llm.api_key_env = None;
+        llm.base_url = Some(format!("http://{}/v1", server.address));
+        adjust(&mut llm);
+        GenAiChat::new(&llm).expect("the mock provider needs no credential")
+    }
+
+    fn prompt() -> Prompt {
+        Prompt {
+            system: "system".into(),
+            user: "user".into(),
+        }
+    }
+
+    #[test]
+    fn a_hanging_provider_is_abandoned_at_the_configured_timeout_instead_of_never() {
+        let server = MockServer::start(String::new(), true);
+        let client = local_client(&server, |llm| llm.timeout_seconds = 1);
+
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            sender.send(client.complete_findings(&prompt(), FindingsFormat::JsonMode))
+        });
+
+        let outcome = receiver
+            .recv_timeout(Duration::from_secs(15))
+            .expect("the request must end at the configured timeout instead of hanging forever");
+
+        assert!(
+            outcome.is_err(),
+            "a provider that never answers must be abandoned: {outcome:?}"
+        );
+    }
+
+    #[test]
+    fn model_requests_are_bounded_by_max_concurrent_requests() {
+        use std::sync::atomic::Ordering;
+        use std::sync::Arc;
+
+        let server = MockServer::start(MockServer::ollama_reply(), false);
+        let client = Arc::new(local_client(&server, |llm| {
+            llm.max_concurrent_requests = 2;
+        }));
+
+        let handles: Vec<_> = (0..6)
+            .map(|_| {
+                let client = Arc::clone(&client);
+                std::thread::spawn(move || {
+                    client.complete_findings(&prompt(), FindingsFormat::JsonMode)
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle
+                .join()
+                .unwrap()
+                .expect("every request succeeds against the mock");
+        }
+
+        assert_eq!(server.requests.load(Ordering::SeqCst), 6);
+        let observed = server.max_in_flight.load(Ordering::SeqCst);
+        assert!(
+            observed <= 2,
+            "the limiter must hold requests back, not let {observed} run at once"
+        );
+    }
+
+    #[test]
+    fn a_rate_limited_request_is_retried_honouring_retry_after() {
+        use std::sync::atomic::Ordering;
+
+        let server = MockServer::start(MockServer::status(429, "Too Many Requests", Some(0)), false);
+        let client = local_client(&server, |llm| llm.max_retries = 2);
+
+        let started = std::time::Instant::now();
+        let outcome = client.complete_findings(&prompt(), FindingsFormat::JsonMode);
+
+        assert!(outcome.is_err(), "once the retries are spent the failure stands");
+        assert_eq!(
+            server.requests.load(Ordering::SeqCst),
+            3,
+            "one attempt plus max_retries"
+        );
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(3),
+            "retry-after: 0 must replace the default backoff, not add to it (took {elapsed:?})"
+        );
+    }
+
+    #[test]
+    fn a_server_error_is_retried_before_the_failure_stands() {
+        use std::sync::atomic::Ordering;
+
+        let server = MockServer::start(MockServer::status(502, "Bad Gateway", None), false);
+        let client = local_client(&server, |llm| llm.max_retries = 2);
+
+        let outcome = client.complete_findings(&prompt(), FindingsFormat::JsonMode);
+
+        assert!(outcome.is_err());
+        assert_eq!(
+            server.requests.load(Ordering::SeqCst),
+            3,
+            "one attempt plus max_retries"
+        );
+    }
+
+    #[test]
+    fn a_client_error_is_not_worth_retrying() {
+        use std::sync::atomic::Ordering;
+
+        let server = MockServer::start(MockServer::status(400, "Bad Request", None), false);
+        let client = local_client(&server, |llm| llm.max_retries = 2);
+
+        let outcome = client.complete_findings(&prompt(), FindingsFormat::JsonMode);
+
+        assert!(outcome.is_err());
+        assert_eq!(
+            server.requests.load(Ordering::SeqCst),
+            1,
+            "a 400 is a fact about the config, not a transient failure"
+        );
+    }
+
+    #[test]
+    fn a_max_tokens_cap_is_applied_to_the_reply_options() {
+        let options = chat_options(FindingsFormat::JsonMode, Some(512));
+        assert_eq!(options.max_tokens, Some(512));
+        assert_eq!(options.temperature, Some(0.0));
+
+        let options = chat_options(FindingsFormat::JsonMode, None);
+        assert_eq!(options.max_tokens, None, "no cap is invented silently");
+
+        let schema = chat_options(FindingsFormat::JsonSchema, Some(128));
+        assert_eq!(schema.max_tokens, Some(128));
+        assert!(
+            schema.response_format.is_some(),
+            "the findings schema must survive the cap"
+        );
+
+        let tool = chat_options(FindingsFormat::Tool, Some(128));
+        assert_eq!(tool.max_tokens, Some(128));
+        assert!(
+            tool.tool_choice.is_some(),
+            "the forced tool must survive the cap"
+        );
     }
 
     #[test]
