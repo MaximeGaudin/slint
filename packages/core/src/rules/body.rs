@@ -15,10 +15,36 @@ static WINDOWS_PATH_RUN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"[\w.-]+(?:\\[\w.-]+)+").expect("the windows path run pattern compiles")
 });
 
+/// Any absolute path of two segments or more is machine-specific — one segment alone is as
+/// often prose (`/pricing`, a route) as a path — and the OS-provided roots in PORTABLE_ROOTS
+/// are the exception, since they exist on every machine of their OS.
 static ABSOLUTE_PATH: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?:^|[\s`(\x22'])((?:/(?:Users|home|var|opt|tmp)/|~/)[\w./-]+)")
+    Regex::new(r"(?:^|[\s`(\x22'])((?:/[\w.-]+){2,}|~/[\w./-]+)")
         .expect("the absolute path pattern compiles")
 });
+
+/// Top-level directories the OS itself provides on every machine.
+const PORTABLE_ROOTS: [&str; 11] = [
+    "usr", "bin", "sbin", "lib", "lib32", "lib64", "dev", "proc", "sys", "run", "System",
+];
+
+fn is_portable_root(path: &str) -> bool {
+    path.strip_prefix('/')
+        .and_then(|rest| rest.split('/').next())
+        .is_some_and(|root| PORTABLE_ROOTS.contains(&root))
+}
+
+/// Route-style mentions such as `/v1/messages` name an API, not a path on this machine: a
+/// leading segment that is nothing but an API version marks the whole match as prose.
+fn is_versioned_api_route(path: &str) -> bool {
+    path.strip_prefix('/')
+        .and_then(|rest| rest.split('/').next())
+        .is_some_and(|root| {
+            root.strip_prefix('v').is_some_and(|digits| {
+                !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
+            })
+        })
+}
 
 static TIME_SENSITIVE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
@@ -422,7 +448,15 @@ impl Rule for RelativePaths {
 
     fn check(&self, context: &mut RuleContext<'_>) {
         for (index, line) in context.skill.body.lines().enumerate() {
-            let Some(found) = ABSOLUTE_PATH.captures(line).and_then(|caps| caps.get(1)) else {
+            let mut found = None;
+            for caps in ABSOLUTE_PATH.captures_iter(line) {
+                let path = caps.get(1).expect("the path group always matches");
+                if !is_portable_root(path.as_str()) && !is_versioned_api_route(path.as_str()) {
+                    found = Some(path);
+                    break;
+                }
+            }
+            let Some(found) = found else {
                 continue;
             };
 
@@ -1013,6 +1047,55 @@ mod tests {
     fn a_relative_path_is_left_alone() {
         let skill = skill_with_body("\n## Culling\n\nRead scripts/notes.md first.\n");
         assert!(check(&RELATIVE_RULE, &skill).is_empty());
+    }
+
+    #[test]
+    fn sandbox_and_home_absolute_paths_outside_the_old_whitelist_are_reported() {
+        // Regression for https://github.com/MaximeGaudin/slint/issues/74: /mnt, /etc and /root are
+        // machine-specific even though the old root whitelist did not name them.
+        for line in ["/mnt/data/input.csv", "/etc/hosts", "/root/.bashrc"] {
+            let skill = skill_with_body(&format!("\n## Steps\n\nRead {line} first.\n"));
+            let messages = check(&RELATIVE_RULE, &skill);
+
+            assert_eq!(messages.len(), 1, "for {line}");
+            assert!(messages[0].message.contains(line), "for {line}");
+        }
+    }
+
+    #[test]
+    fn portable_system_paths_are_left_alone() {
+        for line in [
+            "/usr/bin/python3",
+            "/bin/sh",
+            "/dev/null",
+            "/lib64/libc.so.6",
+            "/proc/self/status",
+        ] {
+            let skill = skill_with_body(&format!("\n## Steps\n\nUse {line} for this step.\n"));
+
+            assert!(check(&RELATIVE_RULE, &skill).is_empty(), "for {line}");
+        }
+    }
+
+    #[test]
+    fn single_segment_and_route_style_slashes_are_prose_not_paths() {
+        // Regression for the review of #74: `/pricing` (one segment) and `/v1/messages` (an API
+        // version route) are prose, not a path on one machine; `/etc/hosts` still is.
+        for line in [
+            "Read /pricing for the plans.",
+            "See [the page](/pricing) for details.",
+            "POST /v1/messages with the payload.",
+        ] {
+            let skill = skill_with_body(&format!("\n## Steps\n\n{line}\n"));
+
+            assert!(check(&RELATIVE_RULE, &skill).is_empty(), "for {line}");
+        }
+
+        let skill = skill_with_body("\n## Steps\n\nRead /etc/hosts first.\n");
+        let messages = check(&RELATIVE_RULE, &skill);
+
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].message.contains("/etc/hosts"));
     }
 
     #[test]
