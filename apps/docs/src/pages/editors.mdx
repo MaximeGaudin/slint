@@ -21,10 +21,11 @@ section: editors
 
 ```bash
 cd apps/vscode
-pnpm install && pnpm build
-# package a .vsix, then:
-cursor --install-extension slint-vscode-0.1.0.vsix
-# or: code --install-extension slint-vscode-0.1.0.vsix
+pnpm install && pnpm build && pnpm package
+# emits slint-vscode-0.2.0.vsix (the version in apps/vscode/package.json —
+# run `pnpm package` again after a release bump rather than trusting this line)
+code --install-extension slint-vscode-0.2.0.vsix
+# or: cursor --install-extension slint-vscode-0.2.0.vsix
 ```
 
 It runs the binary the project already has rather than reimplementing anything: a linter with two
@@ -64,6 +65,16 @@ finding in the shape a compiler emits, which most editors already know how to re
 ```text
 skills/helper/SKILL.md:10:1: error [bundle/no-dangling-path] The instructions name scripts/cull.py, which is not in the bundle
 ```
+
+For an editor that does not want to keep an unsaved document in a temporary file, the document can
+come in on stdin instead, and `--stdin-filename` gives it a name (and its config an anchor):
+
+```bash
+slint --stdin --stdin-filename skills/helper/SKILL.md --no-llm --format compact
+```
+
+Stdin linting runs the static rules — the bundle beside an unsaved document does not exist, and the
+report says the model pass was skipped rather than leaving it implied.
 
 And `--format json` is the whole report, envelope first, for anything building a richer integration:
 
