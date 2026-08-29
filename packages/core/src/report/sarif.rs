@@ -5,7 +5,7 @@
 
 use serde_json::{Value, json};
 
-use crate::diagnostics::{Location, Message, Report, Severity};
+use crate::diagnostics::{Location, Report, Severity};
 
 /// The whole report, as one SARIF log.
 pub fn render(report: &Report) -> String {
@@ -24,9 +24,7 @@ pub fn render(report: &Report) -> String {
         .collect();
 
     for message in report.skills.iter().flat_map(|skill| &skill.messages) {
-        let declared = rules
-            .iter()
-            .any(|rule| rule["id"] == message.rule.as_str());
+        let declared = rules.iter().any(|rule| rule["id"] == message.rule.as_str());
 
         if !declared {
             rules.push(json!({
@@ -116,7 +114,7 @@ fn region(location: Location) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::diagnostics::{Reference, SkillReport, Source};
+    use crate::diagnostics::{Message, Reference, SkillReport, Source};
 
     fn report() -> Report {
         Report {
@@ -217,7 +215,10 @@ mod tests {
             "each rule says what it checks: {declared}"
         );
         assert!(
-            declared["helpUri"].as_str().unwrap().starts_with("https://"),
+            declared["helpUri"]
+                .as_str()
+                .unwrap()
+                .starts_with("https://"),
             "the citation is the rule's helpUri: {declared}"
         );
 
@@ -242,7 +243,10 @@ mod tests {
             .expect("a plugin's rule is declared too");
 
         assert!(
-            declared["helpUri"].as_str().unwrap().starts_with("https://"),
+            declared["helpUri"]
+                .as_str()
+                .unwrap()
+                .starts_with("https://"),
             "the finding's citation becomes the helpUri: {declared}"
         );
 

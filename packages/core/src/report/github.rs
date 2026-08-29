@@ -219,7 +219,9 @@ mod tests {
             "the run's notes print as notices: {text}"
         );
         assert!(
-            text.contains("::notice title=slint note::8 rules need a model and none is configured."),
+            text.contains(
+                "::notice title=slint note::8 rules need a model and none is configured."
+            ),
             "the skill's notes print as notices too: {text}"
         );
         assert!(

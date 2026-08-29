@@ -231,7 +231,7 @@ mod tests {
         assert!(render(&report, Format::Github, false, -1).starts_with("::"));
         assert!(render(&report, Format::Sarif, false, -1).starts_with('{'));
         assert!(render(&report, Format::Junit, false, -1).starts_with("<?xml"));
-        assert!(render(&report, Format::Compact, false, -1).contains("SKILL.md:2:1"));
+        assert!(render(&report, Format::Compact, false, -1).contains("SKILL.md: line 2, col 1"));
         assert!(render(&report, Format::Stylish, false, -1).contains("helper"));
     }
 }

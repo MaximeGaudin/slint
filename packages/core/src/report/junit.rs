@@ -50,7 +50,11 @@ pub fn render(report: &Report) -> String {
 
         // A suite with no testcase reads as skipped rather than passed, so a clean skill gets
         // one to carry its green.
-        let suite_tests = if skill.messages.is_empty() { 1 } else { skill.messages.len() };
+        let suite_tests = if skill.messages.is_empty() {
+            1
+        } else {
+            skill.messages.len()
+        };
 
         if skill.messages.is_empty() {
             cases.push_str(&format!(
@@ -88,8 +92,7 @@ pub fn render(report: &Report) -> String {
     if report.skills.is_empty() {
         tests += 1;
         suites.push_str("  <testsuite name=\"slint\" tests=\"1\" failures=\"0\" errors=\"0\">\n");
-        suites
-            .push_str("    <testcase classname=\"slint\" name=\"no skills were linted\"/>\n");
+        suites.push_str("    <testcase classname=\"slint\" name=\"no skills were linted\"/>\n");
         suites.push_str("  </testsuite>\n");
     }
 
@@ -133,20 +136,25 @@ fn escape_text(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::diagnostics::{Location, Message, Reference, Severity, SkillReport, Source};
+    use crate::diagnostics::Severity;
     use crate::report::tests::sample;
 
     #[test]
     fn the_log_declares_itself_and_counts_every_finding() {
         let text = render(&sample());
 
-        assert!(text.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"), "{text}");
+        assert!(
+            text.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"),
+            "{text}"
+        );
         assert!(
             text.contains("<testsuites name=\"slint\" tests=\"2\" failures=\"1\" errors=\"1\">"),
             "one warning and one error across the run: {text}"
         );
         assert!(
-            text.contains("<testsuite name=\"skills/helper\" tests=\"2\" failures=\"1\" errors=\"1\">"),
+            text.contains(
+                "<testsuite name=\"skills/helper\" tests=\"2\" failures=\"1\" errors=\"1\">"
+            ),
             "{text}"
         );
     }
@@ -190,7 +198,10 @@ mod tests {
 
         let text = render(&report);
 
-        assert!(text.contains("&quot;helper&quot; &lt;script&gt; &amp; &apos;quotes&apos;"), "{text}");
+        assert!(
+            text.contains("&quot;helper&quot; &lt;script&gt; &amp; &apos;quotes&apos;"),
+            "{text}"
+        );
         assert!(!text.contains("<script>"), "{text}");
     }
 
@@ -202,7 +213,10 @@ mod tests {
         let text = render(&report);
 
         assert!(text.contains("type=\"info\""), "{text}");
-        assert!(text.contains("<testsuites name=\"slint\" tests=\"2\" failures=\"1\" errors=\"1\">"), "{text}");
+        assert!(
+            text.contains("<testsuites name=\"slint\" tests=\"2\" failures=\"1\" errors=\"1\">"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -212,8 +226,14 @@ mod tests {
 
         let text = render(&report);
 
-        assert!(text.contains("tests=\"1\" failures=\"0\" errors=\"0\""), "{text}");
-        assert!(text.contains("<testcase classname=\"skills/helper\" name=\"no findings\"/>"), "{text}");
+        assert!(
+            text.contains("tests=\"1\" failures=\"0\" errors=\"0\""),
+            "{text}"
+        );
+        assert!(
+            text.contains("<testcase classname=\"skills/helper\" name=\"no findings\"/>"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -226,8 +246,14 @@ mod tests {
 
         let text = render(&empty);
 
-        assert!(text.contains("<testsuite name=\"slint\" tests=\"1\" failures=\"0\" errors=\"0\">"), "{text}");
-        assert!(text.contains("<testcase classname=\"slint\" name=\"no skills were linted\"/>"), "{text}");
+        assert!(
+            text.contains("<testsuite name=\"slint\" tests=\"1\" failures=\"0\" errors=\"0\">"),
+            "{text}"
+        );
+        assert!(
+            text.contains("<testcase classname=\"slint\" name=\"no skills were linted\"/>"),
+            "{text}"
+        );
     }
 
     #[test]

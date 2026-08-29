@@ -1301,7 +1301,10 @@ fn the_junit_format_is_xml_a_ci_can_ingest() {
 
     let text = stdout(&output);
 
-    assert!(text.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"), "{text}");
+    assert!(
+        text.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"),
+        "{text}"
+    );
     assert!(text.contains("<testsuites name=\"slint\""), "{text}");
     assert!(text.contains("<testsuite name="), "{text}");
     assert!(
@@ -1326,7 +1329,10 @@ fn the_junit_format_reports_a_clean_run_as_a_passing_testcase() {
     let text = stdout(&output);
 
     assert!(text.contains("failures=\"0\" errors=\"0\""), "{text}");
-    assert!(text.contains("<testcase"), "at least one testcase exists: {text}");
+    assert!(
+        text.contains("<testcase"),
+        "at least one testcase exists: {text}"
+    );
 }
 
 // Colour is decided by more than the `--no-color` flag: the standard environment conventions
