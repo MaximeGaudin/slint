@@ -11,9 +11,12 @@ use crate::diagnostics::{Fix, Location, Reference, Severity};
 use crate::rules::{Rule, RuleContext, RuleMeta, sources};
 
 /// A relative path that looks like it means a bundled file.
+///
+/// `*` is in the leading set so the Markdown-bold bullet style (`**scripts/cull.py**: …`) —
+/// the convention Anthropic's own best-practices documentation shows — counts as a reference.
 static BUNDLED_REFERENCE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"(?:^|[\s`(\x22'\[])((?:scripts|references|reference|assets|templates|data)/[\w./-]+)",
+        r"(?:^|[\s`(\x22'\[*])((?:scripts|references|reference|assets|templates|data)/[\w./-]+)",
     )
     .expect("the bundled reference pattern compiles")
 });
@@ -655,6 +658,21 @@ mod tests {
         assert!(messages[0].message.contains("Nothing refers to"));
         // Never fixable: deleting a file in a batch is how a fixed path loses the file it points at.
         assert!(messages[0].fix.is_none());
+    }
+
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/78 —
+    /// `**scripts/cull.py**: description` is the exact bullet-list style shown in Anthropic's
+    /// own best-practices documentation, so a bold reference must count as a reference.
+    #[test]
+    fn a_file_referenced_in_markdown_bold_counts_as_used() {
+        let mut skill = skill_with_body(
+            "\n## Utility scripts\n\n**scripts/cull.py**: Culls the shoot and writes the selects to disk.\n",
+        );
+        skill
+            .files
+            .push(file("scripts/cull.py", "print(\"cull\")\n", false));
+
+        assert!(check(&UNUSED_RULE, &skill).is_empty());
     }
 
     /// Regression for https://github.com/MaximeGaudin/slint/issues/1 —
