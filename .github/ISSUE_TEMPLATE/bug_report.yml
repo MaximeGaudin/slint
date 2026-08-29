@@ -1,0 +1,52 @@
+name: Bug report
+description: slint produced a wrong finding, crashed, or otherwise did not do what it says it does.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For security issues, use [private vulnerability reporting](https://github.com/MaximeGaudin/slint/security/advisories/new) instead.
+        Wrong or unhelpful *content* from a rule is also a bug — include the smallest skill that triggers it.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened, and what did you expect instead?
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `slint --version`, and the OS.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: The smallest SKILL.md (and config, if any) that triggers it, plus the exact command.
+      placeholder: |
+        1. `slint .`
+        2. Skill content: …
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual output
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected output
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Anything else — workarounds found, whether --fix made it worse, editor extension involvement.

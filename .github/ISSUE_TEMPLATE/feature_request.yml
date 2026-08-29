@@ -1,0 +1,37 @@
+name: Feature request
+description: A rule, reporter, or behaviour that would make slint more useful.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to catch or do, and what stands in the way? The use case matters more than the proposed solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: What should happen? For a rule: what does it check, and what does the advice say?
+    validations:
+      required: true
+  - type: checkboxes
+    id: builtin
+    attributes:
+      label: Could a plugin do this?
+      description: A regex-only check belongs in a [rule pack or Wasm plugin](https://slint.dev/plugins/), not the built-in catalogue. Say why it has to be built in — that argument is usually the citation.
+      options:
+        - label: This cannot be done as a plugin, and I explained why
+    validations:
+      required: true
+  - type: textarea
+    id: example
+    attributes:
+      label: Example
+      description: A skill snippet the feature would flag or fix, and the output you would expect.
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Prior art, related issues, links to the standard or best-practice document this comes from.
