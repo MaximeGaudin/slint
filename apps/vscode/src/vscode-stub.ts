@@ -1,0 +1,245 @@
+import Module from 'node:module'
+
+/**
+ * Minimal stand-in for the `vscode` module so extension.ts can be exercised
+ * under plain `node --test` (no @vscode/test-electron). Importing this module
+ * patches the CJS loader, so `require('vscode')` inside extension.js resolves
+ * to the fakes below. Import it before dynamically importing extension.js.
+ */
+
+export class Uri {
+  readonly fsPath: string
+  constructor(fsPath: string) {
+    this.fsPath = fsPath
+  }
+  static file(fsPath: string): Uri {
+    return new Uri(fsPath)
+  }
+  static parse(value: string): Uri {
+    return new Uri(value)
+  }
+  toString(): string {
+    return this.fsPath
+  }
+}
+
+export class Position {
+  readonly line: number
+  readonly character: number
+  constructor(line: number, character: number) {
+    this.line = line
+    this.character = character
+  }
+}
+
+export class Range {
+  readonly start: Position
+  readonly end: Position
+  constructor(startLine: number, startCharacter: number, endLine: number, endCharacter: number) {
+    this.start = new Position(startLine, startCharacter)
+    this.end = new Position(endLine, endCharacter)
+  }
+}
+
+export class Diagnostic {
+  source = ''
+  code: string | number | { value: string | number } | undefined
+  tags: unknown[] | undefined
+  constructor(
+    readonly range: Range,
+    readonly message: string,
+    readonly severity: number,
+  ) {}
+}
+
+export const DiagnosticSeverity = { Error: 0, Warning: 1, Information: 2, Hint: 3 } as const
+
+export class WorkspaceEdit {
+  readonly inserts: { uri: Uri; line: number; character: number; text: string }[] = []
+  insert(uri: Uri, position: Position, text: string): void {
+    this.inserts.push({ uri, line: position.line, character: position.character, text })
+  }
+}
+
+export class CodeActionKind {
+  static readonly QuickFix = new CodeActionKind('QuickFix')
+  constructor(readonly value: string) {}
+}
+
+export class CodeAction {
+  diagnostics: Diagnostic[] | undefined
+  isPreferred: boolean | undefined
+  edit: WorkspaceEdit | undefined
+  constructor(
+    readonly title: string,
+    readonly kind: CodeActionKind,
+  ) {}
+}
+
+export class OutputChannel {
+  readonly lines: string[] = []
+  append(line: string): void {
+    this.lines.push(line)
+  }
+  appendLine(line: string): void {
+    this.lines.push(line)
+  }
+  show(): void {}
+  hide(): void {}
+  dispose(): void {}
+}
+
+export class StatusBarItem {
+  text = ''
+  tooltip: string | undefined
+  command: string | undefined
+  show(): void {}
+  hide(): void {}
+  dispose(): void {}
+}
+
+export class DiagnosticCollection {
+  dispose(): void {}
+  set(uri: Uri, items: Diagnostic[]): void {
+    state.diagnostics.set(uri.fsPath, items.slice())
+  }
+  delete(uri: Uri): void {
+    state.diagnostics.delete(uri.fsPath)
+  }
+  clear(): void {
+    state.diagnostics.clear()
+  }
+  get(uri: Uri): Diagnostic[] | undefined {
+    return state.diagnostics.get(uri.fsPath)
+  }
+  forEach(callback: (uri: Uri, items: Diagnostic[]) => void): void {
+    for (const [fsPath, items] of state.diagnostics) {
+      callback(Uri.file(fsPath), items)
+    }
+  }
+}
+
+export type FakeTextDocument = {
+  uri: Uri
+  fileName: string
+  isDirty: boolean
+  getText: () => string
+  save: () => Promise<boolean>
+}
+
+export type FakeWorkspaceFolder = { uri: Uri }
+
+export const state = {
+  settings: {} as Record<string, unknown>,
+  diagnostics: new Map<string, Diagnostic[]>(),
+  outputChannels: [] as OutputChannel[],
+  statusItems: [] as StatusBarItem[],
+  commands: new Map<string, () => unknown>(),
+  codeActionProviders: [] as unknown[],
+  executeCommands: [] as string[],
+  messages: [] as string[],
+  activeTextEditor: undefined as { document: FakeTextDocument } | undefined,
+  workspaceFolders: [] as FakeWorkspaceFolder[],
+  textDocuments: [] as FakeTextDocument[],
+  saveHandlers: [] as ((document: FakeTextDocument) => void)[],
+  changeHandlers: [] as ((event: unknown) => void)[],
+}
+
+export function resetForTest(): void {
+  state.settings = {}
+  state.diagnostics.clear()
+  state.outputChannels.length = 0
+  state.statusItems.length = 0
+  state.commands.clear()
+  state.codeActionProviders.length = 0
+  state.executeCommands.length = 0
+  state.messages.length = 0
+  state.activeTextEditor = undefined
+  state.workspaceFolders.length = 0
+  state.textDocuments.length = 0
+  state.saveHandlers.length = 0
+  state.changeHandlers.length = 0
+}
+
+const fakeVscode = {
+  Diagnostic,
+  DiagnosticSeverity,
+  Position,
+  Range,
+  Uri,
+  CodeAction,
+  CodeActionKind,
+  WorkspaceEdit,
+  StatusBarAlignment: { Left: 1, Right: 2 } as const,
+  languages: {
+    createDiagnosticCollection: (_name: string) => new DiagnosticCollection(),
+    registerCodeActionsProvider: (_selector: unknown, provider: unknown) => {
+      state.codeActionProviders.push(provider)
+      return { dispose() {} }
+    },
+  },
+  window: {
+    get activeTextEditor() {
+      return state.activeTextEditor
+    },
+    createOutputChannel: (_name: string) => {
+      const channel = new OutputChannel()
+      state.outputChannels.push(channel)
+      return channel
+    },
+    createStatusBarItem: (_alignment?: number, _priority?: number) => {
+      const item = new StatusBarItem()
+      state.statusItems.push(item)
+      return item
+    },
+    showInformationMessage: (message: string) => {
+      state.messages.push(message)
+      return Promise.resolve(undefined)
+    },
+    showErrorMessage: (message: string) => {
+      state.messages.push(message)
+      return Promise.resolve(undefined)
+    },
+  },
+  workspace: {
+    getConfiguration: (_section: string) => ({
+      get: (key: string) => state.settings[key],
+    }),
+    onDidSaveTextDocument: (handler: (document: FakeTextDocument) => void) => {
+      state.saveHandlers.push(handler)
+      return { dispose() {} }
+    },
+    onDidChangeTextDocument: (handler: (event: unknown) => void) => {
+      state.changeHandlers.push(handler)
+      return { dispose() {} }
+    },
+    get textDocuments() {
+      return state.textDocuments
+    },
+    get workspaceFolders() {
+      return state.workspaceFolders
+    },
+  },
+  commands: {
+    registerCommand: (id: string, handler: () => unknown) => {
+      state.commands.set(id, handler)
+      return { dispose() {} }
+    },
+    executeCommand: (id: string) => {
+      state.executeCommands.push(id)
+      return Promise.resolve()
+    },
+  },
+}
+
+type LoadableModule = typeof Module & {
+  _load: (request: string, parent: Module | undefined, isMain: boolean) => unknown
+}
+
+const loadableModule = Module as LoadableModule
+const originalLoad = loadableModule._load
+
+loadableModule._load = function load(request: string, parent: Module | undefined, isMain: boolean) {
+  if (request === 'vscode') return fakeVscode
+  return originalLoad.call(loadableModule, request, parent, isMain)
+}
