@@ -1155,6 +1155,39 @@ mod tests {
         assert!(check(&CONTENTS_RULE, &skill).is_empty());
     }
 
+    /// Reproduces https://github.com/MaximeGaudin/slint/issues/230 — a byte-order mark rides on
+    /// the file's first line, ahead of its title, and used to hide the title from the scan, so
+    /// the contents list was spliced in above the mark and the title it protects.
+    #[test]
+    fn a_byte_order_mark_does_not_put_the_contents_list_above_the_title() {
+        let mut text = String::from("\u{feff}# Formats\n\n");
+        for index in 0..40 {
+            text.push_str(&format!("## Section {index}\n\nWords about it.\n\n"));
+        }
+
+        let mut skill = skill_with_body("\n## Culling\n\nRead references/formats.md.\n");
+        skill
+            .files
+            .push(file("references/formats.md", &text, false));
+
+        let messages = check(&CONTENTS_RULE, &skill);
+        assert_eq!(messages.len(), 1);
+
+        let fixed = &messages[0].fix.as_ref().unwrap().replacement;
+
+        // The mark is the file's own bytes: it stays at the very top, with the title and then the
+        // contents list behind it, in the order a reader meets them.
+        assert!(
+            fixed.starts_with("\u{feff}# Formats"),
+            "the mark and the title stay first:\n{fixed}"
+        );
+        assert!(
+            fixed.find("## Contents").unwrap() > fixed.find("# Formats").unwrap(),
+            "the contents list comes after the title:\n{}",
+            &fixed[..fixed.find("## Contents").unwrap() + 12]
+        );
+    }
+
     #[test]
     fn a_crlf_file_gets_its_contents_list_written_in_crlf() {
         // Reproduces https://github.com/MaximeGaudin/slint/issues/72: the fix used to join with
