@@ -1,6 +1,7 @@
 {
   "$defs": {
     "LlmConfig": {
+      "additionalProperties": false,
       "properties": {
         "api_key_env": {
           "default": null,
