@@ -41,7 +41,7 @@ misreading one.
 | Field | Type | What it is |
 | --- | --- | --- |
 | `schemaVersion` | number | The version of this shape. `1` today. Bumped when a field is removed or reinterpreted; a new field does not bump it. |
-| `ok` | boolean | False when anything at `error` severity was found. Warnings do not flip it — a caller that wants them fatal passes `--max-warnings`. |
+| `ok` | boolean | False when the run failed: anything at `error` severity was found, or a `--max-warnings` budget was exceeded. Warnings alone do not flip it — they are the linter's opinion, and a caller that wants them fatal says so with `--max-warnings`. |
 | `summary` | object | Counts for the whole run: `skills`, `errors`, `warnings`, `infos`, `fixable`, `fixed`. |
 | `data` | object | `{"skills": SkillReport[]}` — one entry per skill looked at, below. |
 

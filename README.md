@@ -15,7 +15,7 @@ It is built for terminals, CI, and editors:
 - **Optional LLM pass** — eight rules that need a reader run only when you pass `--llm`, as their own pass
 - **Honest about skips** — rules that need a model say so; a provider that fails says what it said
 - **Plugins** — TOML rule packs or sandboxed Wasm (Extism); same citation standard as built-ins
-- **Editor integration** — VS Code / Cursor extension turns findings into diagnostics on save
+- **Editor integration** — VS Code extension turns findings into diagnostics on save
 
 **Start here:** [Install](#install) · [Quick start](#quick-start) · [Configuration](#configure) · [Model pass](#the-model-half) · [Plugins](#plugins) · [Monorepo layout](#monorepo-layout) · [Docs site](apps/docs)
 
@@ -51,8 +51,10 @@ slint --fix                   # apply computed fixes, then lint again
 slint --format json | jq      # data on stdout, everything else on stderr
 slint rules                   # the catalogue: what each rule checks and why
 slint --llm                   # also run model rules (once [llm] is configured)
+slint --print-config          # the resolved config, file and flags together
+slint --explain body/max-lines  # one rule, not the whole catalogue
+slint completions zsh         # shell completions (bash, zsh, fish, powershell)
 ```
-
 ```
 $ slint skills
 
@@ -71,18 +73,24 @@ skills/helper  1 error, 2 warnings
 1 of them are computed fixes: run again with --fix.
 ```
 
-Exit codes match the convention other skill linters settled on, so a CI script written for one works here: `0` clean, `1` errors, `2` warnings only, `3` slint itself failed. The `--format json` envelope is a versioned, documented contract: [slint.dev/json](https://slint.dev/json/).
+Exit codes match the convention other skill linters settled on, so a CI script written for one works here: `0` clean, `1` errors, `2` warnings only, `3` slint itself failed, `4` nothing was linted (no `SKILL.md` was found under the given path — check the path before trusting a green run). Running `slint init` when a config already exists is an idempotent no-op and exits `0`; nothing is overwritten. The `--format json` envelope is a versioned, documented contract: [slint.dev/json](https://slint.dev/json/).
 
 
 | Flag                | What it does                                        |
 | ------------------- | --------------------------------------------------- |
 | `--fix`             | Apply every computed fix, then lint again.          |
-| `--format`          | `stylish` (default), `json`, `github`, `compact`.   |
+| `--format`          | `stylish` (default), `json`, `github`, `sarif`, `compact`. |
+| `--stdin`           | Lint the document on stdin (`--stdin-filename` names it). |
+| `--print-config`    | Print the resolved config as JSON and stop.         |
+| `--explain RULE`    | Print one rule's catalogue entry and stop.          |
+| `--ignore-path F`   | Extra ignore patterns, one glob per line.           |
+| `--no-ignore`       | Lint everything, even what the config ignores.      |
 | `--rule name=level` | Override one rule (`off`, `info`, `warn`, `error`). |
 | `--max-warnings N`  | Fail when there are more warnings than this.        |
 | `--llm`             | Run the rules that need a model. Off by default.    |
 | `--no-plugins`      | Skip plugins, whatever the config says.             |
 | `--quiet`           | Errors only.                                        |
+| `-v` / `--verbose`  | Say which config and how many plugins, on stderr.   |
 
 
 
@@ -118,7 +126,16 @@ api_key_env = "OPENAI_API_KEY"   # the variable holding the key, never the key i
 path = "./slint-house-rules.toml"
 ```
 
-`slint.config.json` and `.slintrc.json` work too. The file is found by walking up from whatever you asked slint to lint.
+`slint.config.json` and `.slintrc.json` work too. The file is found by walking up from whatever you asked slint to lint. When no project config exists anywhere up the tree, a user-global one is used: `$XDG_CONFIG_HOME/slint/config.toml`, or `~/.config/slint/config.toml` — the place for a personal provider or a severity you always disagree with. A project config always wins.
+
+For editor autocomplete over the JSON shapes, point `$schema` at the published schema:
+
+```json
+{
+  "$schema": "https://slint.dev/schemas/slint-config.json",
+  "rules": { "description/says-when": "error" }
+}
+```
 
 A document can also opt out of a rule for itself:
 
@@ -133,7 +150,7 @@ A document can also opt out of a rule for itself:
 
 The rules a regular expression cannot answer — ambiguity, terminology drift, whether a plausible request would actually route here — need a reader. slint uses [genai](https://github.com/jeremychone/rust-genai) for that, so OpenAI, Anthropic, Gemini, Ollama, OpenRouter and Groq are supported natively, and `base_url` points any of those wire formats at a gateway or a self-hosted server.
 
-One request per skill covers all eight rules at once, and **only when you ask for it**: the model pass is off unless `--llm` is given. File contents are never sent — only names and sizes.
+One request per skill covers all eight rules at once, and **only when you ask for it**: the model pass is off unless `--llm` is given. Bundled file contents are never sent — only their names and sizes. The SKILL.md body itself is sent (truncated to `max_input_bytes`, 64 KB by default), since it is the text the model rules review, and it is framed to the model as untrusted data to review rather than instructions to follow.
 
 ## Plugins
 
@@ -160,12 +177,12 @@ Both are held to the same standard as the built-in catalogue: a namespaced rule 
 
 ## Editors
 
-`[apps/vscode](apps/vscode)` is a VS Code / Cursor extension that runs slint on save (and optionally the model pass), merges static and model diagnostics, and shows citations on hover.
+`[apps/vscode](apps/vscode)` is a VS Code extension that runs slint on save (and optionally the model pass), merges static and model diagnostics, and shows citations on hover. It targets VS Code 1.90+; forks such as Cursor are expected to work (the extension sticks to long-stable APIs) but are not CI-verified.
 
 ```bash
 pnpm install
 pnpm build:vscode
-# package + install the .vsix into Cursor / VS Code
+# package + install the .vsix into VS Code
 ```
 
 
@@ -176,7 +193,7 @@ pnpm build:vscode
 | Path                             | What it is                                                       |
 | -------------------------------- | ---------------------------------------------------------------- |
 | `[apps/cli](apps/cli)`           | `slint` binary (Rust)                                            |
-| `[apps/vscode](apps/vscode)`     | VS Code / Cursor extension                                       |
+| `[apps/vscode](apps/vscode)`     | VS Code extension                                                |
 | `[apps/docs](apps/docs)`         | Astro documentation site (rule catalogue synced from the binary) |
 | `[packages/core](packages/core)` | Shared Rust library (`slint`) used by the CLI                    |
 

@@ -104,8 +104,11 @@ parsing — is treated as reporting nothing. Each message:
 Every reported message is re-checked before it becomes a finding, by the same
 two rules the built-in catalogue is held to:
 
-1. **A namespaced rule name.** `needs-review` is refused; `team/needs-review` is not.
+1. **A namespaced rule name that is not one of the built-ins.** `needs-review` is refused; `team/needs-review` is not. Reporting under a rule id the built-in catalogue already owns (say `body/posix-paths`) is refused too — one config switch would then control two unrelated rules.
 2. **A citation.** No `reference.url`, no finding.
+
+Before any of that, every string a plugin reports is stripped of control
+characters, the same way pack authors' strings are.
 
 A plugin's rules are then ordinary rules: a config can silence or raise them by
 name (`"team/needs-review" = "off"`), and a document can opt out with a
