@@ -1,6 +1,6 @@
 # slint
 
-slint banner
+![slint - the linter for Agent Skills](docs/assets/readme-banner.svg)
 
 [License: MIT](LICENSE)
 [Rust](Cargo.toml)
