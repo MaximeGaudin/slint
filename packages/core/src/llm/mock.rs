@@ -11,7 +11,6 @@ pub(crate) struct MockServer {
     pub requests: Arc<AtomicUsize>,
     /// How many requests were being served at once, at the busiest moment.
     pub max_in_flight: Arc<AtomicUsize>,
-    in_flight: Arc<AtomicUsize>,
 }
 
 impl MockServer {
@@ -63,7 +62,6 @@ impl MockServer {
             address,
             requests,
             max_in_flight,
-            in_flight,
         }
     }
 
@@ -81,7 +79,9 @@ impl MockServer {
         let header = retry_after
             .map(|seconds| format!("retry-after: {seconds}\r\n"))
             .unwrap_or_default();
-        format!("HTTP/1.1 {status} {reason}\r\n{header}content-length: 2\r\nconnection: close\r\n\r\n{{}}")
+        format!(
+            "HTTP/1.1 {status} {reason}\r\n{header}content-length: 2\r\nconnection: close\r\n\r\n{{}}"
+        )
     }
 }
 

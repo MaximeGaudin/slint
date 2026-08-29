@@ -10,6 +10,7 @@ use serde::Deserialize;
 
 use crate::config::{Config, LlmConfig};
 use crate::diagnostics::{Location, Message, Source};
+use crate::llm::cache::Cached;
 use crate::llm::provider::{Chat, FindingsFormat, GenAiChat, Prompt, findings_format_for};
 use crate::llm::rules;
 use crate::skill::Skill;
@@ -324,9 +325,24 @@ fn parse_response_inner(
 }
 
 /// Reviews one skill with whatever the config points at.
+///
+/// The same request — provider, model, prompt, reply cap — is answered from the cache when it was
+/// asked before, so an unchanged skill under an editor's save hook is not re-billed every save.
 pub fn review(skill: &Skill, config: &Config) -> Result<(Vec<Message>, Vec<String>)> {
     let client = GenAiChat::new(&config.llm)?;
-    review_with(&client, skill, config, &config.llm)
+    let cached = Cached::new(&client, &config.llm);
+    review_with(&cached, skill, config, &config.llm)
+}
+
+/// Reviews one skill against a client the caller owns, so a run builds the client (and its
+/// runtime) once instead of once per skill.
+pub fn review_shared(
+    client: &GenAiChat,
+    skill: &Skill,
+    config: &Config,
+) -> Result<(Vec<Message>, Vec<String>)> {
+    let cached = Cached::new(client, &config.llm);
+    review_with(&cached, skill, config, &config.llm)
 }
 
 /// The same, against any client — which is how this is tested without a network.

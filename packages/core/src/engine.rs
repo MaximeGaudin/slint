@@ -269,16 +269,23 @@ pub fn run(
             Hard(anyhow::Error),
         }
 
+        // One client, one runtime, one limiter for the whole pass: a client per skill pays a fresh
+        // TLS handshake per request and answers to no one about how many of them run at once.
+        let shared = llm::GenAiChat::new(&config.llm);
+
         let outcomes: Vec<ModelOutcome> = skills
             .par_iter()
-            .map(|one| match llm::review(one, config) {
-                Ok((messages, notes)) => ModelOutcome::Ok(messages, notes),
-                Err(failure) if llm::is_unparseable_findings(&failure) => {
-                    ModelOutcome::Hard(failure)
-                }
-                // The whole chain, and what to do about it. "asking openrouter::…" on its own
-                // tells the reader that something failed and nothing about which part.
-                Err(failure) => ModelOutcome::Soft(model_failure(&config.llm, &failure)),
+            .map(|one| match &shared {
+                Ok(client) => match llm::review_shared(client, one, config) {
+                    Ok((messages, notes)) => ModelOutcome::Ok(messages, notes),
+                    Err(failure) if llm::is_unparseable_findings(&failure) => {
+                        ModelOutcome::Hard(failure)
+                    }
+                    // The whole chain, and what to do about it. "asking openrouter::…" on its own
+                    // tells the reader that something failed and nothing about which part.
+                    Err(failure) => ModelOutcome::Soft(model_failure(&config.llm, &failure)),
+                },
+                Err(failure) => ModelOutcome::Soft(model_failure(&config.llm, failure)),
             })
             .collect();
 
@@ -408,15 +415,24 @@ mod tests {
     fn the_model_pass_runs_one_bounded_request_per_skill() {
         use crate::llm::mock::MockServer;
         use std::sync::atomic::Ordering;
+        use std::time::{SystemTime, UNIX_EPOCH};
 
         let server = MockServer::start(MockServer::ollama_reply(), false);
         let temporary = tempfile::tempdir().unwrap();
+        // A salt keeps this run's prompts out of the reply cache earlier runs may have warmed:
+        // every request here must really reach the mock, not an entry on disk.
+        let salt = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         for index in 0..6 {
-            write_skill(
-                temporary.path(),
-                &format!("skill-{index}"),
-                &GOOD.replace("photo-culling", &format!("skill-{index}")),
-            );
+            let body = GOOD
+                .replace("photo-culling", &format!("skill-{index}"))
+                .replace(
+                    "Import the RAW files.",
+                    &format!("Import shoot {salt}-{index}."),
+                );
+            write_skill(temporary.path(), &format!("skill-{index}"), &body);
         }
 
         let mut config = Config::default();

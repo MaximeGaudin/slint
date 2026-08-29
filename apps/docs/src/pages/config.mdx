@@ -66,6 +66,9 @@ model = "gpt-5-mini"
 api_key_env = "OPENAI_API_KEY"   # the variable holding the key, never the key itself
 timeout_seconds = 90
 max_input_bytes = 65536
+max_tokens = 1024
+max_retries = 2
+max_concurrent_requests = 4
 ```
 
 **Configuring a provider is not enough to spend anything.** The model pass is off unless `--llm` is
@@ -101,6 +104,13 @@ ever sent anywhere and the report names the rules that did not run.
 | `base_url` | — | Sends the same wire format somewhere else. |
 | `timeout_seconds` | `90` | Before a request is abandoned. |
 | `max_input_bytes` | `65536` | Bodies over this are cut at a heading, and the report says so. |
+| `max_tokens` | unset | Cap on the tokens a model may spend on its reply. |
+| `max_retries` | `2` | Rate limits, 5xx and connection errors are retried with backoff before they become a note; `Retry-After` is honoured. |
+| `max_concurrent_requests` | `4` | How many model requests may be in flight at once. |
+
+Replies are cached under the system's temporary directory, keyed by provider, model, prompt and
+reply cap — so a save that does not change a skill does not re-issue a billed request. Set
+`SLINT_NO_LLM_CACHE=1` to turn that off, or `SLINT_CACHE_DIR` to move it.
 
 ## In CI
 

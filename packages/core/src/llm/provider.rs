@@ -7,14 +7,19 @@
 //! What is ours is the seam: [`Chat`] is one method, which is what lets the review pass be tested
 //! against a fake and lets a future provider arrive without touching a rule.
 
+use std::sync::Arc;
+use std::time::Duration;
+
 use anyhow::{Context, Result, bail};
 use genai::chat::{ChatOptions, ChatRequest, ChatResponseFormat, JsonSpec, Tool, ToolChoice};
 use genai::resolver::{AuthData, AuthResolver, Endpoint, ServiceTargetResolver};
-use genai::{Client, ModelIden, ServiceTarget};
+use genai::{Client, ModelIden, ServiceTarget, WebConfig};
 use serde::Serialize;
 use serde_json::json;
+use tokio::sync::Semaphore;
 
 use crate::config::{LlmConfig, Provider};
+use crate::llm::retry;
 
 /// What is asked of a model.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -123,11 +128,18 @@ pub fn model_spec(config: &LlmConfig) -> Result<String> {
 }
 
 /// A model reached through genai.
+///
+/// One instance holds one HTTP client and one runtime, and is safe to share across the threads
+/// that review skills in parallel: build it once, hand out references, and let [`Self::new`]'s
+/// limiter decide how many requests may be in flight at once.
 pub struct GenAiChat {
     client: Client,
     model: String,
     provider: Provider,
     runtime: tokio::runtime::Runtime,
+    concurrency: Arc<Semaphore>,
+    max_tokens: Option<u32>,
+    max_retries: u32,
 }
 
 impl GenAiChat {
@@ -152,7 +164,9 @@ impl GenAiChat {
 
         let client = build_client(config)?;
 
-        let runtime = tokio::runtime::Builder::new_current_thread()
+        // Multi-threaded, because the skill review runs on many rayon threads at once and each of
+        // them parks here waiting for its answer.
+        let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
             .context("starting the runtime the provider client needs")?;
@@ -162,6 +176,9 @@ impl GenAiChat {
             model,
             provider: config.provider,
             runtime,
+            concurrency: Arc::new(Semaphore::new(config.max_concurrent_requests.max(1))),
+            max_tokens: config.max_tokens,
+            max_retries: config.max_retries,
         })
     }
 }
@@ -202,6 +219,12 @@ fn build_client(config: &LlmConfig) -> Result<Client> {
         builder = builder.with_service_target_resolver(resolver);
     }
 
+    // genai's own web config leaves every timeout unset, which means a provider that accepts the
+    // connection and then says nothing holds a lint run — and an editor save hook — forever.
+    builder = builder.with_web_config(
+        WebConfig::default().with_timeout(Duration::from_secs(config.timeout_seconds.max(1))),
+    );
+
     Ok(builder.build())
 }
 
@@ -211,10 +234,27 @@ fn base_request(prompt: &Prompt) -> ChatRequest {
         .append_message(genai::chat::ChatMessage::user(prompt.user.clone()))
 }
 
+/// What is sent, per format. Built per attempt: a retry needs a fresh request.
+fn build_request(prompt: &Prompt, format: FindingsFormat) -> ChatRequest {
+    match format {
+        FindingsFormat::Tool => {
+            let tool = Tool::new(REPORT_FINDINGS_TOOL)
+                .with_description(
+                    "Report skill review findings. Call exactly once with the findings array \
+                     (empty when the skill is clean).",
+                )
+                .with_schema(findings_json_schema())
+                .with_strict(true);
+            base_request(prompt).with_tools(vec![tool])
+        }
+        _ => base_request(prompt),
+    }
+}
+
 /// The options one findings request carries: temperature zero, the format's shape, and — when the
 /// config asks for one — a cap on what the model may spend on its reply.
-fn chat_options(format: FindingsFormat, _max_tokens: Option<u32>) -> ChatOptions {
-    match format {
+fn chat_options(format: FindingsFormat, max_tokens: Option<u32>) -> ChatOptions {
+    let options = match format {
         FindingsFormat::JsonSchema => ChatOptions::default()
             .with_temperature(0.0)
             .with_response_format(ChatResponseFormat::JsonSpec(JsonSpec::new(
@@ -227,6 +267,11 @@ fn chat_options(format: FindingsFormat, _max_tokens: Option<u32>) -> ChatOptions
         FindingsFormat::JsonMode => ChatOptions::default()
             .with_temperature(0.0)
             .with_response_format(ChatResponseFormat::JsonMode),
+    };
+
+    match max_tokens {
+        Some(cap) => options.with_max_tokens(cap),
+        None => options,
     }
 }
 
@@ -251,25 +296,41 @@ impl Chat for GenAiChat {
     fn complete_findings(&self, prompt: &Prompt, format: FindingsFormat) -> Result<String> {
         // Temperature zero: a linter that reports different findings on the same text twice is a
         // linter nobody can put in CI.
-        let (request, options) = match format {
-            FindingsFormat::JsonSchema => (base_request(prompt), chat_options(format, None)),
-            FindingsFormat::Tool => (
-                base_request(prompt).with_tools(vec![Tool::new(REPORT_FINDINGS_TOOL)
-                    .with_description(
-                        "Report skill review findings. Call exactly once with the findings array \
-                         (empty when the skill is clean).",
-                    )
-                    .with_schema(findings_json_schema())
-                    .with_strict(true)]),
-                chat_options(format, None),
-            ),
-            FindingsFormat::JsonMode => (base_request(prompt), chat_options(format, None)),
-        };
+        let options = chat_options(format, self.max_tokens);
 
-        let response = self
-            .runtime
-            .block_on(self.client.exec_chat(&self.model, request, Some(&options)))
-            .with_context(|| format!("asking {}", self.model))?;
+        let mut attempt = 0;
+        let response = loop {
+            let request = build_request(prompt, format);
+            let semaphore = Arc::clone(&self.concurrency);
+            let options = options.clone();
+
+            match self.runtime.block_on(async move {
+                let _permit = semaphore
+                    .acquire_owned()
+                    .await
+                    .expect("the request limiter is never closed");
+                self.client
+                    .exec_chat(&self.model, request, Some(&options))
+                    .await
+            }) {
+                Ok(response) => break response,
+                Err(failure) => {
+                    // Transport-level failures — a rate limit, a 5xx, a connection that never
+                    // came up — say nothing about the skill and are worth asking again. A 400 or
+                    // a bad reply is a fact about the config, and retrying only hides it.
+                    let Some(retry_after) = retry::transport_retry_after(&failure) else {
+                        return Err(failure).with_context(|| format!("asking {}", self.model));
+                    };
+
+                    if attempt >= self.max_retries {
+                        return Err(failure).with_context(|| format!("asking {}", self.model));
+                    }
+
+                    std::thread::sleep(retry::retry_delay(retry_after, attempt));
+                    attempt += 1;
+                }
+            }
+        };
 
         extract_findings_body(response)
     }
@@ -338,8 +399,8 @@ mod tests {
 
     #[test]
     fn model_requests_are_bounded_by_max_concurrent_requests() {
-        use std::sync::atomic::Ordering;
         use std::sync::Arc;
+        use std::sync::atomic::Ordering;
 
         let server = MockServer::start(MockServer::ollama_reply(), false);
         let client = Arc::new(local_client(&server, |llm| {
@@ -373,13 +434,17 @@ mod tests {
     fn a_rate_limited_request_is_retried_honouring_retry_after() {
         use std::sync::atomic::Ordering;
 
-        let server = MockServer::start(MockServer::status(429, "Too Many Requests", Some(0)), false);
+        let server =
+            MockServer::start(MockServer::status(429, "Too Many Requests", Some(0)), false);
         let client = local_client(&server, |llm| llm.max_retries = 2);
 
         let started = std::time::Instant::now();
         let outcome = client.complete_findings(&prompt(), FindingsFormat::JsonMode);
 
-        assert!(outcome.is_err(), "once the retries are spent the failure stands");
+        assert!(
+            outcome.is_err(),
+            "once the retries are spent the failure stands"
+        );
         assert_eq!(
             server.requests.load(Ordering::SeqCst),
             3,

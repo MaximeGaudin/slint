@@ -23,9 +23,12 @@ const BACKOFF_CAP_SECS: u64 = 8;
 /// provider asked for it by name.
 pub fn transport_retry_after(failure: &GenAiError) -> Option<Option<Duration>> {
     match failure {
-        GenAiError::WebModelCall { webc_error, .. } | GenAiError::WebAdapterCall { webc_error, .. } => {
+        GenAiError::WebModelCall { webc_error, .. }
+        | GenAiError::WebAdapterCall { webc_error, .. } => {
             match webc_error {
-                genai::webc::Error::ResponseFailedStatus { status, headers, .. } => {
+                genai::webc::Error::ResponseFailedStatus {
+                    status, headers, ..
+                } => {
                     if !(status.as_u16() == 429 || status.is_server_error()) {
                         return None;
                     }
@@ -80,10 +83,10 @@ pub fn retry_delay(retry_after: Option<Duration>, attempt: u32) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use genai::adapter::AdapterKind;
     use genai::ModelIden;
-    use reqwest::header::{HeaderMap, HeaderValue};
+    use genai::adapter::AdapterKind;
     use reqwest::StatusCode;
+    use reqwest::header::{HeaderMap, HeaderValue};
 
     fn status_error(status: StatusCode, retry_after: Option<&str>) -> GenAiError {
         let mut headers = HeaderMap::new();
@@ -126,7 +129,10 @@ mod tests {
 
     #[test]
     fn a_retry_after_nobody_can_read_falls_back_to_backoff() {
-        let failure = status_error(StatusCode::TOO_MANY_REQUESTS, Some("Thu, 01 Jan 2026 00:00:00 GMT"));
+        let failure = status_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            Some("Thu, 01 Jan 2026 00:00:00 GMT"),
+        );
         assert_eq!(
             transport_retry_after(&failure),
             Some(None),

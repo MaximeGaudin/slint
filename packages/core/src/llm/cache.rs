@@ -121,7 +121,7 @@ impl<'a> Cached<'a> {
     pub fn new(client: &'a dyn Chat, llm: &'a LlmConfig) -> Self {
         Cached {
             client,
-            cache: Cache::disabled(),
+            cache: Cache::from_env(),
             llm,
         }
     }
@@ -175,9 +175,15 @@ mod tests {
             dir: Some(tempfile::tempdir().unwrap().path().to_path_buf()),
         };
 
-        assert_eq!(cache.read(&cache_key(&llm(), FindingsFormat::JsonMode, &prompt("a"))), None);
+        assert_eq!(
+            cache.read(&cache_key(&llm(), FindingsFormat::JsonMode, &prompt("a"))),
+            None
+        );
 
-        cache.write(&cache_key(&llm(), FindingsFormat::JsonMode, &prompt("a")), "[]");
+        cache.write(
+            &cache_key(&llm(), FindingsFormat::JsonMode, &prompt("a")),
+            "[]",
+        );
         assert_eq!(
             cache.read(&cache_key(&llm(), FindingsFormat::JsonMode, &prompt("a"))),
             Some("[]".to_string())
@@ -190,7 +196,10 @@ mod tests {
             dir: Some(tempfile::tempdir().unwrap().path().to_path_buf()),
         };
 
-        cache.write(&cache_key(&llm(), FindingsFormat::JsonMode, &prompt("a")), "[]");
+        cache.write(
+            &cache_key(&llm(), FindingsFormat::JsonMode, &prompt("a")),
+            "[]",
+        );
 
         assert_eq!(
             cache.read("0123456789abcdef"),
@@ -286,17 +295,29 @@ mod tests {
 
         let mut other_model = llm();
         other_model.model = "gpt-5".into();
-        assert_ne!(cache_key(&other_model, FindingsFormat::JsonMode, &prompt("a")), base);
+        assert_ne!(
+            cache_key(&other_model, FindingsFormat::JsonMode, &prompt("a")),
+            base
+        );
 
         let mut other_cap = llm();
         other_cap.max_tokens = Some(64);
-        assert_ne!(cache_key(&other_cap, FindingsFormat::JsonMode, &prompt("a")), base);
+        assert_ne!(
+            cache_key(&other_cap, FindingsFormat::JsonMode, &prompt("a")),
+            base
+        );
 
         let mut other_provider = llm();
         other_provider.provider = Provider::Groq;
-        assert_ne!(cache_key(&other_provider, FindingsFormat::JsonMode, &prompt("a")), base);
+        assert_ne!(
+            cache_key(&other_provider, FindingsFormat::JsonMode, &prompt("a")),
+            base
+        );
 
         assert_ne!(cache_key(&llm(), FindingsFormat::Tool, &prompt("a")), base);
-        assert_ne!(cache_key(&llm(), FindingsFormat::JsonMode, &prompt("b")), base);
+        assert_ne!(
+            cache_key(&llm(), FindingsFormat::JsonMode, &prompt("b")),
+            base
+        );
     }
 }
