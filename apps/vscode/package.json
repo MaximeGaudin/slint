@@ -681,6 +681,6 @@
     "@types/vscode": "^1.90.0",
     "@vscode/vsce": "^3.9.2",
     "ovsx": "^0.10.12",
-    "typescript": "^5.7.2"
+    "typescript": "^7.0.2"
   }
 }
