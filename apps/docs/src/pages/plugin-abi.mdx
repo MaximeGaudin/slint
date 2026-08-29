@@ -68,11 +68,13 @@ Every field of `skill` is present; nothing is omitted:
 | `source` | string | The full file text, frontmatter included — the same string `--fix` patches. |
 | `frontmatter_lines` | number | Lines the frontmatter occupies, for mapping body lines back to document lines. |
 | `has_frontmatter` | boolean | Whether the file had one at all. |
+| `name_declared` | boolean | Whether the frontmatter declared `name:` at all — the directory name is a display fallback, not a declaration. |
 | `name` | string | Frontmatter `name`. |
 | `description` | string | Frontmatter `description`. |
 | `body` | string | The instructions, after the frontmatter. |
 | `body_offset` | number | Byte offset of `body` inside `source`. |
-| `metadata` | object | Frontmatter `metadata`, string to string. |
+| `metadata` | object | Frontmatter keys other than name and description, in the order they were written. |
+| `scalar_types` | object | The YAML type each top-level frontmatter key parsed as, so a rule can tell a `description: true` was not written as a string. |
 | `files` | array | Bundled companion files: `path`, `bytes`, `executable`, and `text` — the file's content, or `null` when it could not be read as text. |
 | `notes` | array | What parsing said out loud, for the same reasons a report does. |
 

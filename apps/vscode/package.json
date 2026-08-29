@@ -39,9 +39,23 @@
     "onCommand:slint.lintWithModel",
     "onCommand:slint.lintWorkspaceWithModel",
     "onCommand:slint.fixDocument",
+    "onCommand:slint.setApiKey",
+    "onCommand:slint.clearApiKey",
     "onCommand:slint.showOutput"
   ],
   "main": "./out/extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "restrictedConfigurations": [
+        "slint.path",
+        "slint.arguments",
+        "slint.llm.provider",
+        "slint.llm.model",
+        "slint.llm.apiKey"
+      ]
+    }
+  },
   "contributes": {
     "configuration": {
       "title": "slint",
@@ -95,11 +109,6 @@
           "default": "",
           "description": "Model id the provider understands (e.g. llama-3.1-8b-instant on Groq). Overrides [llm].model when set."
         },
-        "slint.llm.apiKey": {
-          "type": "string",
-          "default": "",
-          "description": "API key for the provider. Prefer User settings (not workspace) so it is not committed. Passed to slint via a process env var, never as a CLI flag."
-        },
         "slint.arguments": {
           "type": "array",
           "scope": "resource",
@@ -107,7 +116,7 @@
             "type": "string"
           },
           "default": [],
-          "description": "Extra arguments passed to slint, such as --rule name=off."
+          "description": "Extra arguments passed to slint, such as --rule name=off. Model-pass flags (--llm, --llm-provider, --llm-model, --llm-base-url, --llm-api-key-env) are reserved for the extension's own settings and are ignored here."
         },
         "slint.rules": {
           "scope": "resource",
@@ -648,6 +657,14 @@
       {
         "command": "slint.fixDocument",
         "title": "slint: Apply the computed fixes to this skill"
+      },
+      {
+        "command": "slint.setApiKey",
+        "title": "slint: Set the model API key (secure storage)"
+      },
+      {
+        "command": "slint.clearApiKey",
+        "title": "slint: Clear the stored model API key"
       },
       {
         "command": "slint.showOutput",

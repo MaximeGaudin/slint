@@ -20,31 +20,49 @@ use crate::rules::{self, RuleContext};
 use crate::skill::{self, Skill};
 
 /// How much of the catalogue to run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Passes {
+    /// Off unless the caller wants it: the config naming plugins belongs to the project being
+    /// scanned, and a linter does not run code the scanned project ships without being asked.
     pub plugins: bool,
     /// The model pass. Off unless a provider is configured *and* the caller wants it.
     pub model: bool,
 }
 
-impl Default for Passes {
-    fn default() -> Self {
-        Passes {
-            plugins: true,
-            model: false,
-        }
-    }
-}
-
 /// `<!-- slint-disable rule -->` anywhere in the document, and its per-line form.
+///
+/// The payload runs to the end of the comment: an explanation after the rule list is common,
+/// and a `>` inside it — an HTML tag the note mentions — must not defeat the directive.
+/// The keyword is matched case-insensitively — an author who shouts is still
+/// understood, and one who misspells it in caps is still diagnosed as unused.
 static DISABLE_FILE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"<!--\s*slint-disable\s+([^\s>-][^>]*?)\s*-->")
+    Regex::new(r"<!--\s*(?i:slint-disable)\s+([^\s>-].*?)\s*-->")
         .expect("the disable pattern compiles")
 });
 
 static DISABLE_LINE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"<!--\s*slint-disable-next-line\s+([^\s>-][^>]*?)\s*-->")
+    Regex::new(r"<!--\s*(?i:slint-disable-next-line)\s+([^\s>-].*?)\s*-->")
         .expect("the disable-next-line pattern compiles")
+});
+
+/// `<!-- slint-disable-start rule -->` opens a range that a
+/// `<!-- slint-disable-end -->` closes: the rules are silent between the two
+/// comments and live again after it.
+static DISABLE_START: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"<!--\s*(?i:slint-disable-start)\s+([^\s>-].*?)\s*-->")
+        .expect("the disable-start pattern compiles")
+});
+
+static DISABLE_END: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"<!--\s*(?i:slint-disable-end)\s*-->").expect("the disable-end pattern compiles")
+});
+
+/// `<!-- slint-enable [rule] -->` lifts a file-wide disable — or closes an
+/// open range — from that line on, the way `eslint-enable` and
+/// `markdownlint-enable` re-activate rules partway through a document.
+static ENABLE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"<!--\s*(?i:slint-enable)(?:\s+([^\s>-].*?))?\s*-->")
+        .expect("the enable pattern compiles")
 });
 
 /// Why the model pass failed, and what the reader can do about it.
@@ -83,9 +101,10 @@ fn model_failure(llm: &crate::config::LlmConfig, failure: &anyhow::Error) -> Str
 /// What a document says it does not want to hear about.
 #[derive(Debug, Default, Clone)]
 pub struct Suppressions {
-    /// Rules turned off for the whole document the comment is written in.
+    /// Rule patterns turned off for the whole document the comment is written
+    /// in. A pattern ending in `*` covers every rule under that namespace.
     pub file: BTreeSet<String>,
-    /// Rules turned off for one line, keyed by the line they apply to.
+    /// Rule patterns turned off for one line, keyed by the line they apply to.
     pub lines: Vec<(usize, String)>,
     /// Every directive as written, so one that silenced nothing can be named.
     directives: Vec<Directive>,
@@ -94,20 +113,41 @@ pub struct Suppressions {
 /// One directive as the document wrote it.
 #[derive(Debug, Clone)]
 struct Directive {
+    /// The rule pattern the comment named.
     rule: String,
     /// The 1-based line the comment sits on, for a diagnostic that points at it.
     comment_line: usize,
-    /// The 1-based lines the directive covers. Empty means every line of the
-    /// document the comment is written in.
-    covers: Vec<usize>,
+    /// How much of the document the directive covers.
+    scope: Scope,
+    /// The keyword the comment used, for a diagnostic that speaks its language.
+    keyword: &'static str,
 }
 
-impl Directive {
-    /// Whether a finding on `line` is inside this directive's scope.
+/// How much of the document one directive covers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Scope {
+    /// Every line of the document the comment is written in.
+    Document,
+    /// Explicit 1-based lines: the lines a next-line comment covers, a range
+    /// between `slint-disable-start` and `slint-disable-end`, or the part of
+    /// a document a file-wide disable still covers once `slint-enable` has
+    /// lifted it.
+    Lines(Vec<usize>),
+}
+
+impl Scope {
     fn covers(&self, line: usize) -> bool {
-        self.covers.is_empty() || self.covers.contains(&line)
+        match self {
+            Scope::Document => true,
+            Scope::Lines(lines) => lines.contains(&line),
+        }
     }
 }
+
+const KEYWORD_DISABLE: &str = "slint-disable";
+const KEYWORD_DISABLE_NEXT_LINE: &str = "slint-disable-next-line";
+const KEYWORD_DISABLE_START: &str = "slint-disable-start";
+const KEYWORD_ENABLE: &str = "slint-enable";
 
 /// A directive that named a rule nothing ever fired for.
 ///
@@ -120,17 +160,35 @@ pub struct UnusedSuppression {
     pub rule: String,
     /// The 1-based line the comment sits on.
     pub line: usize,
-    /// Whether the comment was `slint-disable-next-line` rather than `slint-disable`.
-    pub next_line: bool,
+    /// The keyword the comment used — `slint-disable`, `slint-disable-next-line`,
+    /// `slint-disable-start` or `slint-enable`.
+    pub keyword: &'static str,
+}
+
+/// Whether a suppression pattern names a rule.
+///
+/// A pattern ending in `*` is a namespace wildcard — `body/*` covers every
+/// `body/…` rule — because silencing a whole area one rule at a time is just
+/// a typo waiting to happen. Anything else must match the rule name exactly.
+fn rule_matches(pattern: &str, rule: &str) -> bool {
+    match pattern.strip_suffix('*') {
+        Some(prefix) => rule.starts_with(prefix),
+        None => pattern == rule,
+    }
 }
 
 impl Suppressions {
     pub fn read(source: &str) -> Self {
         let mut suppressions = Suppressions::default();
         let lines: Vec<&str> = source.lines().collect();
+        let last_line = lines.len();
         let mut inside_fence: Option<&'static str> = None;
+        // Ranges opened by slint-disable-start and not closed yet:
+        // (rule pattern, 1-based line the opening comment sits on).
+        let mut open_ranges: Vec<(String, usize)> = Vec::new();
 
         for (index, line) in lines.iter().enumerate() {
+            let number = index + 1;
             let trimmed = line.trim_start();
 
             // A directive inside a fenced code block is documentation of the
@@ -148,36 +206,94 @@ impl Suppressions {
                 continue;
             }
 
-            if let Some(found) = DISABLE_LINE.captures(line) {
-                let rules = split_rules(&found[1]);
+            // Every directive of a kind on the line takes effect, not just the
+            // first: two comments on one line are as legal as two rules in one
+            // comment. A line that matches a stronger form is still read only
+            // once — the branch order below keeps the old precedence.
+            let mut next_line_rules: Vec<String> = Vec::new();
+            for found in DISABLE_LINE.captures_iter(line) {
+                next_line_rules.extend(rule_list(&found[1]));
+            }
+
+            if !next_line_rules.is_empty() {
                 // Normally the next line only. When that line opens a fenced
                 // code block, cover every line inside the fence too — example
                 // paths live on the lines after ```, not on the fence marker.
                 let covered = lines_covered_by_disable_next(&lines, index);
-                for rule in rules {
+                for rule in next_line_rules {
                     suppressions
                         .lines
                         .extend(covered.iter().map(|line| (*line, rule.clone())));
                     suppressions.directives.push(Directive {
-                        rule: rule.clone(),
-                        comment_line: index + 1,
-                        covers: covered.clone(),
+                        rule,
+                        comment_line: number,
+                        scope: Scope::Lines(covered.clone()),
+                        keyword: KEYWORD_DISABLE_NEXT_LINE,
                     });
                 }
                 continue;
             }
 
-            if let Some(found) = DISABLE_FILE.captures(line) {
-                for rule in split_rules(&found[1]) {
+            for found in DISABLE_START.captures_iter(line) {
+                open_ranges.extend(rule_list(&found[1]).into_iter().map(|rule| (rule, number)));
+            }
+            if DISABLE_START.is_match(line) {
+                continue;
+            }
+
+            if DISABLE_END.is_match(line) {
+                close_ranges(&mut suppressions, &mut open_ranges, number, None);
+                continue;
+            }
+
+            for found in ENABLE.captures_iter(line) {
+                let named = found.get(1).map(|rules| rule_list(rules.as_str()));
+                let lifted = lift_file_disables(&mut suppressions, named.as_deref(), number);
+                let closed = close_ranges(
+                    &mut suppressions,
+                    &mut open_ranges,
+                    number,
+                    named.as_deref(),
+                );
+
+                // An slint-enable that names rules nothing is disabled for
+                // lifts nothing: dead weight the way a typo'd disable is, and
+                // reported the same way. A bare enable is a range terminator
+                // as often as a statement, so it is never called dead.
+                for pattern in named.into_iter().flatten() {
+                    let lifted_something = lifted
+                        .iter()
+                        .chain(closed.iter())
+                        .any(|one| rule_matches(one, &pattern));
+                    if !lifted_something {
+                        suppressions.directives.push(Directive {
+                            rule: pattern,
+                            comment_line: number,
+                            scope: Scope::Lines(Vec::new()),
+                            keyword: KEYWORD_ENABLE,
+                        });
+                    }
+                }
+            }
+            if ENABLE.is_match(line) {
+                continue;
+            }
+
+            for found in DISABLE_FILE.captures_iter(line) {
+                for rule in rule_list(&found[1]) {
                     suppressions.file.insert(rule.clone());
                     suppressions.directives.push(Directive {
                         rule,
-                        comment_line: index + 1,
-                        covers: Vec::new(),
+                        comment_line: number,
+                        scope: Scope::Document,
+                        keyword: KEYWORD_DISABLE,
                     });
                 }
             }
         }
+
+        // A range never closed runs to the end of the document.
+        close_ranges(&mut suppressions, &mut open_ranges, last_line + 1, None);
 
         suppressions
     }
@@ -192,14 +308,17 @@ impl Suppressions {
             return true;
         }
 
-        if self.file.contains(&message.rule) {
+        if self
+            .file
+            .iter()
+            .any(|pattern| rule_matches(pattern, &message.rule))
+        {
             return false;
         }
 
-        !self
-            .lines
-            .iter()
-            .any(|(line, rule)| *line == message.location.line && rule == &message.rule)
+        !self.lines.iter().any(|(line, pattern)| {
+            *line == message.location.line && rule_matches(pattern, &message.rule)
+        })
     }
 
     /// The directives no finding in `messages` ever matched.
@@ -213,25 +332,133 @@ impl Suppressions {
             .filter(|directive| {
                 !messages.iter().any(|message| {
                     message.file == document
-                        && message.rule == directive.rule
-                        && directive.covers(message.location.line)
+                        && rule_matches(&directive.rule, &message.rule)
+                        && directive.scope.covers(message.location.line)
                 })
             })
             .map(|directive| UnusedSuppression {
                 rule: directive.rule.clone(),
                 line: directive.comment_line,
-                next_line: !directive.covers.is_empty(),
+                keyword: directive.keyword,
             })
             .collect()
     }
 }
 
-fn split_rules(text: &str) -> Vec<String> {
-    text.split([',', ' '])
-        .map(|part| part.trim())
-        .filter(|part| !part.is_empty())
-        .map(|part| part.to_string())
-        .collect()
+/// Close open `slint-disable-start` ranges at `end_line` — the line the
+/// closing comment sits on, or one past the last line when the document ends
+/// with the range still open. A bare close ends every open range; a close
+/// naming rules ends only the ranges those patterns match. Returns the rule
+/// patterns of the ranges that were closed.
+fn close_ranges(
+    suppressions: &mut Suppressions,
+    open: &mut Vec<(String, usize)>,
+    end_line: usize,
+    named: Option<&[String]>,
+) -> Vec<String> {
+    let mut closed = Vec::new();
+    let mut remaining = Vec::new();
+
+    for (rule, start) in open.drain(..) {
+        let wanted =
+            named.is_none_or(|patterns| patterns.iter().any(|one| rule_matches(one, &rule)));
+
+        if wanted {
+            let covered: Vec<usize> = (start + 1..end_line).collect();
+            suppressions
+                .lines
+                .extend(covered.iter().map(|line| (*line, rule.clone())));
+            suppressions.directives.push(Directive {
+                rule: rule.clone(),
+                comment_line: start,
+                scope: Scope::Lines(covered),
+                keyword: KEYWORD_DISABLE_START,
+            });
+            closed.push(rule);
+        } else {
+            remaining.push((rule, start));
+        }
+    }
+
+    *open = remaining;
+    closed
+}
+
+/// Lift the file-wide disables an `slint-enable` names: from the enable's line
+/// on the rules are live again, so each disable keeps only the lines before
+/// it. Returns the patterns that were actually lifted.
+fn lift_file_disables(
+    suppressions: &mut Suppressions,
+    named: Option<&[String]>,
+    enable_line: usize,
+) -> Vec<String> {
+    let mut lifted = Vec::new();
+    let directives = std::mem::take(&mut suppressions.directives);
+
+    for mut directive in directives {
+        let wanted = directive.keyword == KEYWORD_DISABLE
+            && directive.scope == Scope::Document
+            && named.is_none_or(|patterns| {
+                patterns
+                    .iter()
+                    .any(|one| rule_matches(one, &directive.rule))
+            });
+
+        if wanted {
+            if suppressions.file.remove(&directive.rule) {
+                suppressions
+                    .lines
+                    .extend((1..enable_line).map(|line| (line, directive.rule.clone())));
+            }
+            directive.scope = Scope::Lines((1..enable_line).collect());
+            lifted.push(directive.rule.clone());
+        }
+
+        suppressions.directives.push(directive);
+    }
+
+    lifted
+}
+
+/// The rules a directive names: the leading run of tokens that are rule names.
+///
+/// A rule name is a namespace and a name, `body/posix-paths`. The first token that is not one —
+/// a word of the explanation appended after the list — ends it, so the note can say anything.
+fn rule_list(payload: &str) -> Vec<String> {
+    let mut rules = Vec::new();
+
+    for token in payload.split([',', ' ']) {
+        let token = token.trim();
+
+        if is_rule_name(token) {
+            rules.push(token.to_string());
+        } else if !token.is_empty() {
+            break;
+        }
+    }
+
+    rules
+}
+
+fn is_rule_name(token: &str) -> bool {
+    // A namespace wildcard (`body/*`) is a payload token in its own right: its
+    // base keeps the trailing separator the wildcard rides on.
+    if let Some(base) = token.strip_suffix('*') {
+        return base.contains('/')
+            && base
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '/')
+            && !base.starts_with('/')
+            && !base.contains("//");
+    }
+
+    token.contains('/')
+        && token
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '/')
+        && !token.starts_with('/')
+        && !token.ends_with('/')
+        && !token.contains("//")
 }
 
 /// The rule name slint reports an unused suppression comment under. Not part of
@@ -244,24 +471,28 @@ fn unused_suppression_message(
     document: &str,
     severity: Severity,
 ) -> Message {
-    let comment = if found.next_line {
-        "slint-disable-next-line"
+    let message = if found.keyword == KEYWORD_ENABLE {
+        format!(
+            "This slint-enable comment names {rule}, but nothing is disabled for it here, so it lifts nothing. Check the rule name, or remove the comment.",
+            rule = found.rule,
+        )
     } else {
-        "slint-disable"
-    };
-    let scope = if found.next_line {
-        " on the lines it covers"
-    } else {
-        ""
+        let scope = match found.keyword {
+            KEYWORD_DISABLE_NEXT_LINE => " on the lines it covers",
+            KEYWORD_DISABLE_START => " between it and its slint-disable-end",
+            _ => "",
+        };
+        format!(
+            "This {keyword} comment names {rule}, but nothing{scope} ever fired for it. Check the rule name for a typo, or remove the comment.",
+            keyword = found.keyword,
+            rule = found.rule,
+        )
     };
 
     Message {
         rule: UNUSED_SUPPRESSION_RULE.to_string(),
         severity,
-        message: format!(
-            "This {comment} comment names {rule}, but nothing{scope} ever fired for it. Check the rule name for a typo, or remove the comment.",
-            rule = found.rule,
-        ),
+        message,
         advice: "Name rules exactly as slint writes them (for example: body/posix-paths), and delete the comment once nothing needs suppressing.".into(),
         location: Location::at(found.line, 1),
         source: Source::Static,
@@ -429,6 +660,18 @@ pub fn run_with_reviewer(
         }
     }
 
+    // The plugins the config names, when running them was not asked for. A skipped pass says so,
+    // the same way the model half does: a review that never ran must not read like one that passed.
+    if !passes.plugins
+        && !config.plugins.is_empty()
+        && let Some(first) = per_skill.first_mut()
+    {
+        first.notes.push(format!(
+            "Skipped {} plugin(s) named by the config (not requested). Pass --plugins to run them.",
+            config.plugins.len()
+        ));
+    }
+
     // The model pass, last and optional. One request per skill, in parallel: the skills do not
     // share state, and waiting on them one after another is how a workspace review feels broken.
     // A provider that is unreachable leaves a note on that skill rather than an error on the run —
@@ -592,13 +835,87 @@ mod tests {
         assert!(lint_skill(&good_skill(), &Config::default()).is_empty());
     }
 
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/122 — dogfooding. The bundled
+    /// fix-github-issue skill names `scripts/check.sh` in its local-gate step: a repository-root
+    /// script, not a bundled file, yet bundle/no-dangling-path read it as one and failed the run.
+    /// The excerpt mirrors the shipped text without depending on `.cursor/` existing.
     #[test]
-    fn default_passes_do_not_opt_into_the_model_pass() {
+    fn the_bundled_local_gate_reference_is_not_a_dangling_bundle_path() {
+        let temporary = tempfile::tempdir().unwrap();
+        write_skill(
+            temporary.path(),
+            "fix-github-issue",
+            "---\nname: fix-github-issue\ndescription: Investigate a GitHub issue using TDD in an isolated git worktree — write a failing regression test first, commit it, implement the fix, align and run local checks that mirror CI before push, open a PR, and wait until CI is green. Use when the user pastes a GitHub issue URL/number, or asks to fix, investigate, or implement an issue.\n---\n\n### 6a. Make local lint/check match CI\n\nBefore running checks, compare CI to local entrypoints:\n\n1. Read `.github/workflows/*` (and similar) for every required job/step (fmt, lint, tests, deny, typecheck, …)\n2. Read the project’s local gate: `./scripts/check.sh`, `Makefile`, `package.json` scripts (`lint`, `test`, `check`), `turbo` tasks, etc.\n",
+        );
+
+        let report = run(
+            &[temporary.path().to_path_buf()],
+            &Config::default(),
+            &[],
+            Passes {
+                plugins: false,
+                model: false,
+            },
+        )
+        .unwrap();
+
+        let dangling: Vec<String> = report
+            .skills
+            .iter()
+            .flat_map(|one| one.messages.iter())
+            .filter(|one| one.rule == "bundle/no-dangling-path")
+            .map(|one| format!("{}: {}", one.rule, one.message))
+            .collect();
+
+        assert!(
+            dangling.is_empty(),
+            "the local gate names the repository's check script, which is not a bundle-relative path: {dangling:#?}"
+        );
+    }
+
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/236 — the required `name`
+    /// field was never validated, because read() backfilled it from the directory name before
+    /// any rule ran, so a SKILL.md omitting `name:` produced zero findings about it.
+    #[test]
+    fn a_missing_name_field_is_an_error_even_though_the_directory_names_it() {
+        let temporary = tempfile::tempdir().unwrap();
+        write_skill(
+            temporary.path(),
+            "raw-export-helper",
+            "---\ndescription: Culls a photo shoot in Lightroom by flagging the keepers and rejecting the rest. Use when triaging RAW files after a session.\n---\n\n## Culling\n\n1. Import the RAW files.\n",
+        );
+
+        let report = run(
+            &[temporary.path().to_path_buf()],
+            &Config::default(),
+            &[],
+            Passes {
+                plugins: false,
+                model: false,
+            },
+        )
+        .unwrap();
+
+        assert!(
+            report.skills[0]
+                .messages
+                .iter()
+                .any(|one| one.rule == "name/format" && one.message.contains("no name")),
+            "a missing required name field must be an error, got {:?}",
+            report.skills[0].messages
+        );
+    }
+
+    #[test]
+    fn default_passes_opt_into_neither_pass() {
         assert!(
             !Passes::default().model,
             "default Passes must keep the paid model pass off"
         );
-        assert!(Passes::default().plugins);
+        assert!(
+            !Passes::default().plugins,
+            "default Passes must keep plugins off: the config naming them belongs to the scanned project"
+        );
     }
 
     #[test]
@@ -747,6 +1064,238 @@ mod tests {
         );
     }
 
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/286 —
+    /// the directive keyword is matched case-insensitively, the way HTML
+    /// comment directives conventionally are. An author who shouts is still
+    /// understood, and a shout that matches nothing is still a directive one
+    /// can be warned about.
+    #[test]
+    fn an_uppercase_directive_keyword_is_still_recognized() {
+        let suppressions = Suppressions::read(
+            "<!-- SLINT-DISABLE body/posix-paths -->\n<!-- Slint-Disable-Next-Line name/not-generic -->\ntwo\n",
+        );
+
+        assert!(
+            suppressions.file.contains("body/posix-paths"),
+            "expected the uppercase disable to register, got {suppressions:?}"
+        );
+        assert!(
+            suppressions
+                .lines
+                .iter()
+                .any(|(line, rule)| *line == 3 && rule == "name/not-generic"),
+            "expected the mixed-case disable-next-line to cover line 3, got {suppressions:?}"
+        );
+    }
+
+    #[test]
+    fn an_uppercase_directive_suppresses_a_violation_in_a_real_run() {
+        let temporary = tempfile::tempdir().unwrap();
+        write_skill(
+            temporary.path(),
+            "demo-uppercase-ignore",
+            "---\nname: demo-uppercase-ignore\ndescription: Culls a photo shoot in Lightroom by flagging the keepers and rejecting the rest. Use when triaging RAW files after a session.\n---\n\n<!-- SLINT-DISABLE body/posix-paths -->\n\n## Workflow\n\nRead scripts\\notes.md.\n",
+        );
+
+        let report = run(
+            &[temporary.path().to_path_buf()],
+            &Config::default(),
+            &[],
+            Passes {
+                plugins: false,
+                model: false,
+            },
+        )
+        .unwrap();
+
+        let found = report.skills[0]
+            .messages
+            .iter()
+            .filter(|one| one.rule == "body/posix-paths" || one.rule == "suppression/unused")
+            .count();
+
+        assert_eq!(
+            found, 0,
+            "the uppercase directive either silences the rule or is itself diagnosed, got {:?}",
+            report.skills[0].messages
+        );
+    }
+
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/273 —
+    /// a namespace wildcard disables every rule under it, the way eslint
+    /// users disable a whole area instead of one rule at a time.
+    #[test]
+    fn a_wildcard_disables_every_rule_in_a_namespace() {
+        let suppressions = Suppressions::read("<!-- slint-disable body/* -->\n");
+        let paths = message_with("body/posix-paths", 9);
+        let max = message_with("body/max-lines", 4);
+        let generic = message_with("name/not-generic", 2);
+
+        assert!(!suppressions.allows("skills/demo/SKILL.md", &paths));
+        assert!(!suppressions.allows("skills/demo/SKILL.md", &max));
+        assert!(
+            suppressions.allows("skills/demo/SKILL.md", &generic),
+            "the wildcard covers body/ rules only, got {suppressions:?}"
+        );
+    }
+
+    #[test]
+    fn a_wildcard_disable_suppresses_a_violation_in_a_real_run() {
+        let temporary = tempfile::tempdir().unwrap();
+        write_skill(
+            temporary.path(),
+            "demo-wildcard-ignore",
+            "---\nname: demo-wildcard-ignore\ndescription: Culls a photo shoot in Lightroom by flagging the keepers and rejecting the rest. Use when triaging RAW files after a session.\n---\n\n<!-- slint-disable body/* -->\n\n## Workflow\n\nRead scripts\\notes.md.\n",
+        );
+
+        let report = run(
+            &[temporary.path().to_path_buf()],
+            &Config::default(),
+            &[],
+            Passes {
+                plugins: false,
+                model: false,
+            },
+        )
+        .unwrap();
+
+        assert!(
+            !report.skills[0]
+                .messages
+                .iter()
+                .any(|one| one.rule.starts_with("body/")),
+            "expected the wildcard to silence every body/ rule, got {:?}",
+            report.skills[0].messages
+        );
+    }
+
+    #[test]
+    fn a_block_directive_silences_rules_between_start_and_end() {
+        let suppressions = Suppressions::read(
+            "one\n<!-- slint-disable-start body/posix-paths -->\ntwo\nthree\n<!-- slint-disable-end -->\nfour\n",
+        );
+        let line = |number| {
+            let mut one = message_with("body/posix-paths", number);
+            one.file = "skills/demo/SKILL.md".into();
+            one
+        };
+
+        assert!(
+            suppressions.allows("skills/demo/SKILL.md", &line(2)),
+            "the line with the opening comment is not covered"
+        );
+        assert!(!suppressions.allows("skills/demo/SKILL.md", &line(3)));
+        assert!(!suppressions.allows("skills/demo/SKILL.md", &line(4)));
+        assert!(
+            suppressions.allows("skills/demo/SKILL.md", &line(6)),
+            "the line after the closing comment is live again, got {suppressions:?}"
+        );
+    }
+
+    #[test]
+    fn a_block_directive_suppresses_only_its_range_in_a_real_run() {
+        let temporary = tempfile::tempdir().unwrap();
+        write_skill(
+            temporary.path(),
+            "demo-block-ignore",
+            "---\nname: demo-block-ignore\ndescription: Culls a photo shoot in Lightroom by flagging the keepers and rejecting the rest. Use when triaging RAW files after a session.\n---\n\n## Workflow\n\nRead scripts\\notes.md.\n\n<!-- slint-disable-start body/posix-paths -->\n\nRead scripts\\other.md.\n\n<!-- slint-disable-end -->\n\nRead scripts\\more.md.\n",
+        );
+
+        let report = run(
+            &[temporary.path().to_path_buf()],
+            &Config::default(),
+            &[],
+            Passes {
+                plugins: false,
+                model: false,
+            },
+        )
+        .unwrap();
+
+        let paths = report.skills[0]
+            .messages
+            .iter()
+            .filter(|one| one.rule == "body/posix-paths")
+            .count();
+
+        assert_eq!(
+            paths, 2,
+            "only the violation between the two comments is silenced, got {:?}",
+            report.skills[0].messages
+        );
+    }
+
+    #[test]
+    fn an_unclosed_block_directive_runs_to_the_end_of_the_document() {
+        let suppressions =
+            Suppressions::read("one\n<!-- slint-disable-start body/posix-paths -->\ntwo\n");
+        let mut last = message_with("body/posix-paths", 3);
+
+        assert!(
+            !suppressions.allows("skills/demo/SKILL.md", &last),
+            "a range with no closing comment covers the rest of the document, got {suppressions:?}"
+        );
+        last.location.line = 1;
+        assert!(
+            suppressions.allows("skills/demo/SKILL.md", &last),
+            "the range starts at the opening comment, not the top of the document"
+        );
+    }
+
+    #[test]
+    fn an_enable_comment_reactivates_a_disabled_rule() {
+        let suppressions = Suppressions::read(
+            "<!-- slint-disable body/posix-paths -->\ntwo\n<!-- slint-enable body/posix-paths -->\nfour\n",
+        );
+        let line = |number| {
+            let mut one = message_with("body/posix-paths", number);
+            one.file = "skills/demo/SKILL.md".into();
+            one
+        };
+
+        assert!(
+            !suppressions.allows("skills/demo/SKILL.md", &line(2)),
+            "the disable still covers the lines before the enable"
+        );
+        assert!(
+            suppressions.allows("skills/demo/SKILL.md", &line(4)),
+            "the rule is live again after the enable, got {suppressions:?}"
+        );
+    }
+
+    #[test]
+    fn an_enable_comment_reactivates_a_rule_in_a_real_run() {
+        let temporary = tempfile::tempdir().unwrap();
+        write_skill(
+            temporary.path(),
+            "demo-enable-ignore",
+            "---\nname: demo-enable-ignore\ndescription: Culls a photo shoot in Lightroom by flagging the keepers and rejecting the rest. Use when triaging RAW files after a session.\n---\n\n<!-- slint-disable body/posix-paths -->\n\nRead scripts\\notes.md.\n\n<!-- slint-enable body/posix-paths -->\n\nRead scripts\\other.md.\n",
+        );
+
+        let report = run(
+            &[temporary.path().to_path_buf()],
+            &Config::default(),
+            &[],
+            Passes {
+                plugins: false,
+                model: false,
+            },
+        )
+        .unwrap();
+
+        let paths = report.skills[0]
+            .messages
+            .iter()
+            .filter(|one| one.rule == "body/posix-paths")
+            .count();
+
+        assert_eq!(
+            paths, 1,
+            "the disable covers the lines before the enable only, got {:?}",
+            report.skills[0].messages
+        );
+    }
+
     #[test]
     fn several_rules_can_be_named_in_one_comment() {
         let suppressions =
@@ -754,6 +1303,88 @@ mod tests {
 
         assert!(suppressions.file.contains("body/posix-paths"));
         assert!(suppressions.file.contains("name/not-generic"));
+    }
+
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/271 —
+    /// a `>` in the explanation after the rule list (an HTML tag, say) used to defeat the
+    /// whole directive, with no diagnostic.
+    #[test]
+    fn a_disable_comment_survives_free_text_that_contains_a_gt() {
+        let suppressions = Suppressions::read(
+            "<!-- slint-disable body/posix-paths, matches the <script> tag pattern -->\n",
+        );
+
+        assert!(
+            suppressions.file.contains("body/posix-paths"),
+            "the directive must survive the '>' in the trailing text: {:?}",
+            suppressions.file
+        );
+    }
+
+    /// The same survival for the per-line form, and the free text must not itself suppress
+    /// anything.
+    #[test]
+    fn a_disable_next_line_comment_survives_free_text_and_suppresses_only_the_named_rules() {
+        let suppressions = Suppressions::read(
+            "one\n<!-- slint-disable-next-line body/posix-paths (like <b> emphasis), but not body/no-secret -->\ntwo\n",
+        );
+
+        assert!(
+            suppressions
+                .lines
+                .iter()
+                .any(|(line, rule)| *line == 3 && rule == "body/posix-paths"),
+            "the named rule must be silenced on the next line: {:?}",
+            suppressions.lines
+        );
+        assert!(
+            !suppressions
+                .lines
+                .iter()
+                .any(|(_, rule)| rule == "body/no-secret"),
+            "a rule named only in the free text must not be silenced: {:?}",
+            suppressions.lines
+        );
+    }
+
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/274 —
+    /// a second directive on the same line used to be dropped: only the first match was read.
+    #[test]
+    fn every_disable_comment_on_a_line_takes_effect() {
+        let suppressions = Suppressions::read(
+            "<!-- slint-disable body/posix-paths --> <!-- slint-disable name/not-generic -->\n",
+        );
+
+        assert!(suppressions.file.contains("body/posix-paths"));
+        assert!(
+            suppressions.file.contains("name/not-generic"),
+            "the second directive on the line must take effect too: {:?}",
+            suppressions.file
+        );
+    }
+
+    #[test]
+    fn every_disable_next_line_comment_on_a_line_takes_effect() {
+        let suppressions = Suppressions::read(
+            "one\n<!-- slint-disable-next-line body/posix-paths --> <!-- slint-disable-next-line body/no-secret -->\ntwo\n",
+        );
+
+        assert!(
+            suppressions
+                .lines
+                .iter()
+                .any(|(line, rule)| *line == 3 && rule == "body/posix-paths"),
+            "{:?}",
+            suppressions.lines
+        );
+        assert!(
+            suppressions
+                .lines
+                .iter()
+                .any(|(line, rule)| *line == 3 && rule == "body/no-secret"),
+            "the second directive on the line must take effect too: {:?}",
+            suppressions.lines
+        );
     }
 
     #[test]
@@ -782,7 +1413,7 @@ mod tests {
             vec![UnusedSuppression {
                 rule: "name/not-generic".into(),
                 line: 4,
-                next_line: false,
+                keyword: KEYWORD_DISABLE,
             }]
         );
     }

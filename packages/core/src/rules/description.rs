@@ -82,8 +82,8 @@ fn strip_markup(description: &str) -> String {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(default)]
-struct LengthOptions {
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct LengthOptions {
     /// Below this, a description cannot carry both what it does and when to use it.
     min: usize,
 }

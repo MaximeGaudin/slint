@@ -10,6 +10,25 @@ description = "The linter for Agent Skills. Static first, a model only where a m
 name = "slint"
 path = "src/main.rs"
 
+[package.metadata.binstall]
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.aarch64-apple-darwin]
+pkg-url = "{ repo }/releases/download/{ version }/slint-darwin-arm64.tar.gz"
+
+[package.metadata.binstall.overrides.x86_64-apple-darwin]
+pkg-url = "{ repo }/releases/download/{ version }/slint-darwin-amd64.tar.gz"
+
+[package.metadata.binstall.overrides.x86_64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/{ version }/slint-linux-amd64.tar.gz"
+
+[package.metadata.binstall.overrides.aarch64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/{ version }/slint-linux-arm64.tar.gz"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-url = "{ repo }/releases/download/{ version }/slint-windows-amd64.zip"
+pkg-fmt = "zip"
+
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }

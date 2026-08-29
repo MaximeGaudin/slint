@@ -9,11 +9,13 @@
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize, Serializer};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use crate::diagnostics::Severity;
+use crate::plugin::Plugin;
+use crate::rules;
 
 /// The names a configuration file can have, in the order they are looked for.
 pub const CONFIG_NAMES: [&str; 4] = [
@@ -121,6 +123,7 @@ impl Provider {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct LlmConfig {
     #[serde(default)]
     pub provider: Provider,
@@ -133,6 +136,7 @@ pub struct LlmConfig {
     #[serde(default)]
     pub api_key_env: Option<String>,
     /// Overrides the provider's own address. This is what makes a local model or a gateway work.
+    /// Must be https, or http to a loopback address for a model on this machine.
     #[serde(default)]
     pub base_url: Option<String>,
     /// Seconds before a request is abandoned.
@@ -152,6 +156,11 @@ pub struct LlmConfig {
     /// Bodies longer than this are truncated before they are sent, and the report says so.
     #[serde(default = "default_max_input")]
     pub max_input_bytes: usize,
+    /// Not a setting: the shape every other tool's config uses, read only so `load` can refuse
+    /// it with the message it deserves instead of letting the secret sit in the file.
+    #[serde(default, skip_serializing)]
+    #[schemars(skip)]
+    pub(crate) api_key: Option<String>,
 }
 
 fn default_timeout() -> u64 {
@@ -182,6 +191,7 @@ impl Default for LlmConfig {
             max_retries: default_max_retries(),
             max_concurrent_requests: default_max_concurrent_requests(),
             max_input_bytes: default_max_input(),
+            api_key: None,
         }
     }
 }
@@ -220,7 +230,11 @@ pub struct Config {
 ///
 /// The `JsonSchema` derive is what `slint schema` prints: one description of the config format,
 /// generated from this struct so the schema cannot drift from what slint actually reads.
+///
+/// `deny_unknown_fields` is the point: a section name off by one used to load as if the file were
+/// empty, so the whole config silently did nothing and the run went on as if none had been read.
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct RawConfig {
     /// Which rules to change, keyed by rule name (`area/thing`).
     #[serde(default)]
@@ -250,12 +264,39 @@ impl Config {
     }
 }
 
+impl PartialEq for Config {
+    /// Two configs agree when what they say agrees. `source` is where a config came from, and
+    /// the same settings under two file names are the same settings.
+    fn eq(&self, other: &Self) -> bool {
+        self.rules == other.rules
+            && self.ignore == other.ignore
+            && self.llm == other.llm
+            && self.plugins == other.plugins
+    }
+}
+
+/// Every recognised config file in `directory`, in the order `find` would take them.
+///
+/// A directory holding more than one of them is where "I edited the wrong file" lives, so the
+/// list is what the warning names when it has something to say.
+pub fn config_files_in(directory: &Path) -> Vec<PathBuf> {
+    CONFIG_NAMES
+        .iter()
+        .map(|name| directory.join(name))
+        .filter(|candidate| candidate.is_file())
+        .collect()
+}
+
 /// Looks for a config file, starting at `from` and walking up to the root.
 ///
 /// The walk is what makes running slint on a subdirectory of a repository behave the way everyone
 /// expects: the settings belong to the project, not to the directory the terminal happens to be in.
+///
 /// When no project config exists anywhere up the tree, a user-global one is the fallback, so a
 /// personal set of defaults does not have to be repeated in every repository.
+///
+/// When a directory holds several config files, the first of `CONFIG_NAMES` wins; the rest are
+/// ignored, which is why the README states the order and the run says so when it sees one.
 pub fn find(from: &Path) -> Option<PathBuf> {
     walk_up(from).or_else(|| {
         let candidate = user_config_path()?;
@@ -268,11 +309,8 @@ fn walk_up(from: &Path) -> Option<PathBuf> {
     let mut directory = Some(from);
 
     while let Some(current) = directory {
-        for name in CONFIG_NAMES {
-            let candidate = current.join(name);
-            if candidate.is_file() {
-                return Some(candidate);
-            }
+        if let Some(first) = config_files_in(current).into_iter().next() {
+            return Some(first);
         }
 
         directory = current.parent();
@@ -372,6 +410,13 @@ pub fn load(path: &Path) -> Result<Config> {
         toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?
     };
 
+    if raw.llm.api_key.is_some() {
+        bail!(
+            "{}: [llm] api_key is not a setting — slint never takes a literal key in a config file, because a key in a file is a key in version control. Use api_key_env to name the variable that holds the key.",
+            path.display()
+        );
+    }
+
     let mut config = Config {
         source: Some(path.to_path_buf()),
         rules: BTreeMap::new(),
@@ -381,9 +426,15 @@ pub fn load(path: &Path) -> Result<Config> {
     };
 
     for (name, value) in raw.rules {
-        config
-            .rules
-            .insert(name.clone(), setting_from(&name, &value)?);
+        let setting = setting_from(&name, &value)?;
+
+        // A rule's options are read by the rule itself, so a value it cannot read would be
+        // swallowed into its default: refuse the file instead.
+        if let RuleSetting::Tuned(_, options) = &setting {
+            crate::rules::validate_rule_options(&name, options)?;
+        }
+
+        config.rules.insert(name, setting);
     }
 
     Ok(config)
@@ -428,6 +479,46 @@ fn setting_from(rule: &str, value: &serde_json::Value) -> Result<RuleSetting> {
         }
         other => bail!("{rule}: {other} is not a severity"),
     }
+}
+
+/// Refuses a config that sets a rule that does not exist.
+///
+/// A setting for a rule that does not exist is never consulted — the lookup is by exact name —
+/// so without this check the key is a no-op in the file the user edited, with zero diagnostic.
+/// Refusing the run is the same way an unknown severity or provider is already refused in this
+/// file.
+///
+/// The check stands down when it cannot see every rule the config may point at: a Wasm plugin
+/// declares its rules by reporting them, and a plugin set that was not loaded (`--no-plugins`)
+/// still leaves its rule names in the config.
+pub fn check_rule_names(config: &Config, plugins: &[Plugin]) -> Result<()> {
+    let wasm_loaded = plugins
+        .iter()
+        .any(|plugin| matches!(plugin, Plugin::Wasm { .. }));
+    let plugins_skipped = !config.plugins.is_empty() && plugins.is_empty();
+
+    if wasm_loaded || plugins_skipped {
+        return Ok(());
+    }
+
+    let mut known: BTreeSet<String> = rules::all_meta()
+        .iter()
+        .map(|meta| meta.name.to_string())
+        .collect();
+
+    for plugin in plugins {
+        known.extend(plugin.rule_names());
+    }
+
+    for name in config.rules.keys() {
+        if !known.contains(name) {
+            bail!(
+                "{name}: no such rule. The setting would do nothing — check the name with `slint rules`."
+            );
+        }
+    }
+
+    Ok(())
 }
 
 /// `--rule name=level` from the command line, which overrides the file.
@@ -601,6 +692,26 @@ mod tests {
         assert_eq!(find(&deep), Some(root.join("slint.toml")));
     }
 
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/42 —
+    /// a directory holding two config files lists them in the order the winner is picked, so a
+    /// message can say which file read the others out.
+    #[test]
+    fn two_config_files_in_one_directory_list_in_precedence_order() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path();
+        fs::write(root.join("slint.config.json"), "{}\n").unwrap();
+        fs::write(root.join("slint.toml"), "[rules]\n").unwrap();
+
+        let files = config_files_in(root);
+        assert_eq!(
+            files,
+            vec![root.join("slint.toml"), root.join("slint.config.json")]
+        );
+
+        // And `find` still takes the first of the two.
+        assert_eq!(find(root), Some(root.join("slint.toml")));
+    }
+
     #[test]
     fn no_config_anywhere_is_a_normal_state() {
         let temporary = tempfile::tempdir().unwrap();
@@ -731,6 +842,79 @@ mod tests {
         assert!(Provider::parse("claude").is_err());
     }
 
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/38 —
+    /// a literal key pasted where api_key_env belongs is the shape every other tool's config
+    /// uses, and it used to be accepted and ignored while the secret sat in the file.
+    #[test]
+    fn a_literal_api_key_in_the_llm_block_is_refused_and_named() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("slint.toml");
+        fs::write(
+            &path,
+            "[llm]\nprovider = \"openai\"\nmodel = \"gpt-5-mini\"\napi_key = \"sk-test-0000\"\n",
+        )
+        .unwrap();
+
+        let failure = load(&path).unwrap_err();
+        let failure = format!("{failure:#}");
+
+        assert!(failure.contains("api_key"), "{failure}");
+        assert!(failure.contains("api_key_env"), "{failure}");
+    }
+
+    #[test]
+    fn an_unknown_field_in_the_llm_block_is_refused_rather_than_silently_dropped() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("slint.config.json");
+        fs::write(
+            &path,
+            r#"{ "llm": { "provider": "openai", "model": "gpt-5-mini", "api_key_environment": "OPENAI_API_KEY" } }"#,
+        )
+        .unwrap();
+
+        let failure = load(&path).unwrap_err();
+        let failure = format!("{failure:#}");
+
+        assert!(failure.contains("api_key_environment"), "{failure}");
+    }
+
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/27 —
+    /// an out-of-range rule option used to be swallowed into the rule's default, so the body
+    /// was judged against 500 lines with no sign that `max = -5` was never read.
+    #[test]
+    fn an_out_of_range_rule_option_fails_the_load_and_names_the_rule() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("slint.toml");
+        fs::write(
+            &path,
+            "[rules]\n\"body/max-lines\" = [\"warn\", { max = -5 }]\n",
+        )
+        .unwrap();
+
+        let failure = load(&path).unwrap_err();
+        let failure = format!("{failure:#}");
+
+        assert!(failure.contains("body/max-lines"), "{failure}");
+        assert!(failure.contains("-5"), "{failure}");
+    }
+
+    /// The same silent drop happened to a misspelt option key: the rule never read it.
+    #[test]
+    fn an_option_key_a_rule_does_not_read_fails_the_load() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("slint.config.json");
+        fs::write(
+            &path,
+            r#"{ "rules": { "description/min-length": ["warn", { "minumum": 100 }] } }"#,
+        )
+        .unwrap();
+
+        let failure = load(&path).unwrap_err();
+        let failure = format!("{failure:#}");
+
+        assert!(failure.contains("description/min-length"), "{failure}");
+    }
+
     #[test]
     fn the_starter_config_is_valid_and_turns_nothing_on() {
         let temporary = tempfile::tempdir().unwrap();
@@ -742,5 +926,91 @@ mod tests {
         assert!(config.rules.is_empty());
         assert_eq!(config.llm.provider, Provider::None);
         assert!(!config.llm.is_configured());
+    }
+
+    #[test]
+    fn a_rule_name_that_no_loaded_rule_answers_for_is_refused() {
+        let mut config = Config::default();
+        config
+            .rules
+            .insert("name/not-genric".into(), RuleSetting::Off);
+
+        let failure = check_rule_names(&config, &[]).unwrap_err().to_string();
+
+        assert!(failure.contains("name/not-genric"), "{failure}");
+        assert!(failure.contains("slint rules"), "{failure}");
+    }
+
+    #[test]
+    fn rule_names_the_catalogue_and_a_loaded_pack_define_are_accepted() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("pack.toml");
+        fs::write(
+            &path,
+            "[[rules]]\nname = \"house/no-todo\"\nseverity = \"warning\"\nsummary = \"No TODO markers.\"\nrationale = \"A TODO reads as an instruction that was not followed.\"\nadvice = \"Finish the step.\"\npattern = \"TODO\"\ntarget = \"body\"\nreference = { title = \"House style\", url = \"https://example.com/style\" }\n",
+        )
+        .unwrap();
+
+        let plugin = crate::plugin::load(
+            &PluginRef {
+                path: "pack.toml".into(),
+            },
+            temporary.path(),
+        )
+        .unwrap();
+
+        let mut config = Config::default();
+        config
+            .rules
+            .insert("body/posix-paths".into(), RuleSetting::Off);
+        config
+            .rules
+            .insert("llm/consistent-terminology".into(), RuleSetting::Off);
+        config
+            .rules
+            .insert("house/no-todo".into(), RuleSetting::Off);
+
+        assert!(check_rule_names(&config, &[plugin]).is_ok());
+    }
+
+    #[test]
+    fn a_name_a_wasm_plugin_might_provide_is_not_refused() {
+        let plugin = crate::plugin::Plugin::Wasm {
+            path: std::path::PathBuf::from("plugin.wasm"),
+        };
+
+        let mut config = Config::default();
+        config.rules.insert("who/knows".into(), RuleSetting::Off);
+
+        assert!(check_rule_names(&config, &[plugin]).is_ok());
+    }
+
+    #[test]
+    fn a_pack_rule_name_is_not_refused_when_the_plugins_were_skipped() {
+        let mut config = Config::default();
+        config.plugins.push(PluginRef {
+            path: "house.toml".into(),
+        });
+        config
+            .rules
+            .insert("house/no-todo".into(), RuleSetting::Off);
+
+        assert!(check_rule_names(&config, &[]).is_ok());
+    }
+
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/26 —
+    /// a section name off by one used to load as if the file were empty, so the whole config
+    /// silently did nothing.
+    #[test]
+    fn a_mis_spelled_top_level_section_is_refused_rather_than_silently_dropped() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("slint.toml");
+        fs::write(&path, "[rule]\n\"name/not-generic\" = \"off\"\n").unwrap();
+
+        let failure = load(&path).unwrap_err();
+        let failure = format!("{failure:#}");
+
+        assert!(failure.contains("unknown field `rule`"), "{failure}");
+        assert!(failure.contains("rules"), "{failure}");
     }
 }

@@ -141,11 +141,15 @@ path = "./team-rules.wasm"
 
 The extension decides which kind a plugin is, so a config never says the same thing twice. A plugin
 that fails to load, crashes or answers with nonsense becomes a note on the report rather than a
-failed run: your rules not working must not stop the rest of the review.
+failed run: your rules not working must not stop the rest of the review. The exact wire contract —
+every input field, every output field, the validation slint applies to what comes back, and what a
+failure costs — is on the [WebAssembly plugin ABI](/plugin-abi/) page.
 
-The exact wire contract — every input field, every output field, the validation slint applies to
-what comes back, and what a failure costs — is on the
-[WebAssembly plugin ABI](/plugin-abi/) page.
+## Turning plugins on
+
+They are off by default, and they run only with `--plugins`. The config that names a plugin lives
+in the project being scanned, and a linter does not execute code a scanned project ships without
+being asked. When the config names plugins and they do not run, the report says so.
 
 ## Turning a plugin's rules off
 

@@ -1,52 +1,94 @@
 name: Bug report
-description: slint produced a wrong finding, crashed, or otherwise did not do what it says it does.
-labels: ["bug"]
+description: Something isn't working
+labels: [bug]
 body:
-  - type: markdown
-    attributes:
-      value: |
-        For security issues, use [private vulnerability reporting](https://github.com/MaximeGaudin/slint/security/advisories/new) instead.
-        Wrong or unhelpful *content* from a rule is also a bug — include the smallest skill that triggers it.
   - type: textarea
     id: summary
     attributes:
       label: Summary
-      description: What happened, and what did you expect instead?
+      description: What is wrong, in a few sentences.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of the repository this concerns.
+      options:
+        - cli
+        - core
+        - engine
+        - llm
+        - plugin
+        - rules
+        - vscode
+        - docs
+        - monorepo
+        - other
+    validations:
+      required: true
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity (reporter's assessment)
+      options:
+        - low
+        - medium
+        - high
+        - critical
     validations:
       required: true
   - type: input
-    id: version
+    id: code
     attributes:
-      label: Version
-      description: Output of `slint --version`, and the OS.
+      label: Code
+      description: File paths and line numbers this concerns (e.g. `packages/core/src/engine.rs:265`).
+      placeholder: packages/core/src/...
+  - type: dropdown
+    id: reproduced
+    attributes:
+      label: Reproduced empirically
+      options:
+        - "yes"
+        - partially
+        - "no"
     validations:
       required: true
   - type: textarea
     id: reproduction
     attributes:
       label: Minimal reproduction
-      description: The smallest SKILL.md (and config, if any) that triggers it, plus the exact command.
+      description: The smallest config, skill, plugin and command line that shows the problem.
       placeholder: |
-        1. `slint .`
-        2. Skill content: …
+        slint.toml:
+        ...
+        $ slint --format json
     validations:
       required: true
   - type: textarea
     id: actual
     attributes:
-      label: Actual output
-      render: text
+      label: Actual behaviour
+      description: What happened. Command output in a code block, please.
     validations:
       required: true
   - type: textarea
     id: expected
     attributes:
-      label: Expected output
-      render: text
+      label: Expected behaviour
+      description: What should have happened instead.
     validations:
       required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `slint --version`, or the commit hash.
+      placeholder: slint 0.2.0
   - type: textarea
     id: notes
     attributes:
       label: Notes
-      description: Anything else — workarounds found, whether --fix made it worse, editor extension involvement.
+      description: Anything else that helps triage this — links, related rules, environment details.
+    validations:
+      required: false

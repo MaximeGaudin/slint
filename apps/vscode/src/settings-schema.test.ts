@@ -32,7 +32,12 @@ describe('settings schema (#51)', () => {
   })
 
   it('keeps the API key out of workspace reach so it cannot be committed', () => {
-    assert.notEqual(properties['slint.llm.apiKey'].scope, 'resource')
+    // #191 removed the plaintext setting entirely in favor of SecretStorage, superseding the
+    // machine-scope hardening: an API key must not be a settings.json value at all.
+    assert.ok(
+      !('slint.llm.apiKey' in properties),
+      'the API key must live in SecretStorage, not in any settings scope',
+    )
   })
 })
 

@@ -1,37 +1,61 @@
 name: Feature request
-description: A rule, reporter, or behaviour that would make slint more useful.
-labels: ["enhancement"]
+description: New feature or request
+labels: [enhancement]
 body:
   - type: textarea
-    id: problem
+    id: summary
     attributes:
-      label: The problem
-      description: What are you trying to catch or do, and what stands in the way? The use case matters more than the proposed solution.
+      label: Summary
+      description: What you are proposing, in a few sentences.
     validations:
       required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of the repository this concerns.
+      options:
+        - cli
+        - core
+        - engine
+        - llm
+        - plugin
+        - rules
+        - vscode
+        - docs
+        - monorepo
+        - other
+    validations:
+      required: true
+  - type: input
+    id: code
+    attributes:
+      label: Code
+      description: File paths and line numbers this concerns, if any (e.g. `apps/cli/src/main.rs:95`).
+      placeholder: packages/core/src/...
   - type: textarea
     id: proposal
     attributes:
-      label: Proposed change
-      description: What should happen? For a rule: what does it check, and what does the advice say?
-    validations:
-      required: true
-  - type: checkboxes
-    id: builtin
-    attributes:
-      label: Could a plugin do this?
-      description: A regex-only check belongs in a [rule pack or Wasm plugin](https://slint.dev/plugins/), not the built-in catalogue. Say why it has to be built in — that argument is usually the citation.
-      options:
-        - label: This cannot be done as a plugin, and I explained why
+      label: Proposal
+      description: The behaviour you want, concretely — flags, config, output, or a sketch of the API. What slint prints or does after this change.
     validations:
       required: true
   - type: textarea
-    id: example
+    id: rationale
     attributes:
-      label: Example
-      description: A skill snippet the feature would flag or fix, and the output you would expect.
+      label: Rationale
+      description: The problem this solves, and what you do about it today. A workaround that already exists weakens the case.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other designs, and why this one wins. Prefer the static pass — if a regular expression can answer it, it does not belong in the model pass.
   - type: textarea
     id: notes
     attributes:
       label: Notes
-      description: Prior art, related issues, links to the standard or best-practice document this comes from.
+      description: Anything else that helps — links, specs, prior art.
+    validations:
+      required: false

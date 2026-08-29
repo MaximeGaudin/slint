@@ -1,132 +1,80 @@
 # Security Policy
 
-slint reads third-party-authored documents (Agent Skills), executes WebAssembly
-plugins, and can transmit content to third-party LLM providers. This document
-is the security policy and the threat model for all three.
+slint is a developer tool: a linter that reads skills where they live and, when explicitly asked, sends a bounded excerpt of them to a model provider you configure. This page describes how to report a vulnerability, what slint's trust boundaries are, and — precisely — what data can leave your machine and when.
+
+## Supported versions
+
+Only the latest release is supported with security fixes. There is no LTS: if you are on an older version, update first and re-check whether the problem still exists.
 
 ## Reporting a vulnerability
 
-Report privately through [GitHub's private vulnerability reporting]
-(https://github.com/MaximeGaudin/slint/security/advisories/new).
+**Do not open a public issue for a security report.**
 
-Please do not open a public issue for anything you believe is exploitable.
-You will get an initial response within 7 days. Once a fix is released, the
-reporter is credited in the release notes unless they prefer otherwise.
+Report privately through [GitHub Security Advisories](https://github.com/MaximeGaudin/slint/security/advisories/new) on this repository. That keeps the report, the discussion, and the fix coordinated in one private place.
 
-The following are **not** security vulnerabilities, and should be regular
-issues instead:
+Please include what you can of:
 
-- A rule producing a wrong finding (that is a quality bug).
-- A plugin reporting something offensive or wrong — plugins are third-party
-  code by definition; their content is not slint's.
-- A model producing a wrong or unhelpful reading.
+- The version or commit you tested (`slint --version`, or the commit hash)
+- A minimal reproduction (config, plugin, skill, command line)
+- Which trust boundary you believe was crossed (see the threat model below)
+- Your assessment of impact
+
+You will get an acknowledgement, and updates as the report is triaged. Credit in the advisory is yours to accept or decline; say which when you report.
 
 ## Threat model
 
-slint has three trust boundaries. For each: what crosses it, what slint does
-about it, and what remains the user's responsibility.
+What follows is the model the code is actually built against. Each claim here corresponds to a specific place in the source, cited so it can be checked rather than trusted.
 
-### 1. The skills being linted (untrusted input)
+### What slint processes
 
-A skill is a document someone else wrote, and slint parses it and runs
-regular expressions over it.
+- **Skill content** — `SKILL.md` files and any files bundled with them — is **untrusted input**. slint parses it, lints it, and reports on it. It never executes a bundled file, never follows a path out of the bundle, and never treats skill text as instructions to slint itself. Model-authored finding text is stripped of control characters before it is shown (see `strip_control` in `packages/core/src/diagnostics.rs`).
+- **Config files** (`slint.toml`, `slint.config.json`, `.slintrc.json`) are trusted configuration: whoever can write one can already run arbitrary code on your machine by other means. They decide which plugins load and where model requests go. Plugins load only when the run asks for them (`--plugins`), so a scanned project's config alone executes nothing; but a config from an untrusted source still deserves the same suspicion as a plugin the moment you opt in.
+- **Suppression comments** (`<!-- slint-disable … -->`) are honoured only for the rules and scopes they name; a skill cannot disable slint's own guardrails for other documents.
 
-- Parsing is deliberately forgiving: a malformed skill produces findings or
-  notes, never a crash that takes the run down.
-- Regexes run through the `regex` crate — linear time, no backtracking, so a
-  pathological skill cannot hang the linter with a catastrophic-backtracking
-  rule.
-- Model rules, when explicitly requested with `--llm`, send skill content to
-  a provider. See boundary 3 before doing that on content you do not control.
-- A skill's own `slint-disable` comments suppress findings for that skill.
-  This is a documented feature; a skill asking not to be linted is a signal a
-  human should read, not a hole.
+### Wasm plugins (Extism sandbox)
 
-**Residual risk:** a crafted skill can spend a model's tokens (with `--llm`)
-or make noise. It cannot execute code, read files beyond its own directory's
-bundled files, or affect the rest of the run beyond its own report entry.
+A `.wasm` plugin is third-party-authored code, executed through [Extism](https://extism.org). The boundary:
 
-### 2. WebAssembly plugins (untrusted code)
+- The plugin is instantiated with **no filesystem access, no network access, and no environment variables** — the manifest in `packages/core/src/plugin.rs` (`extism::Manifest::new`) declares no host functions and no WASI. A plugin that misbehaves takes only itself down.
+- The host hands the plugin one thing: the parsed skill as JSON (`lint` export, one call). The plugin answers with messages, which are sanitised before display, and rule ids that may not shadow built-in rules.
+- What a plugin **can** do: read the skill content it is given, and be slow or crash — slint reports the failure as a per-plugin error instead of aborting the run.
+- What remains **your** decision: whether to load the plugin at all. The sandbox bounds what a plugin can do while it runs; it does not make a plugin trustworthy. Only add `.wasm` plugins from sources you would trust with the content of the skills you lint, because the plugin sees exactly that content. Rule packs (`.toml`/`.json`) are inert data — they define regex rules but execute nothing.
 
-A config can point at `.wasm` files, which slint loads and runs through
-[Extism](https://extism.org) once per skill.
+Known limits of the boundary, stated plainly: Extism's Wasm sandbox is a well-tested but third-party runtime; a sandbox escape in Extism/wasmtime itself would not be slint's bug to fix but would be in scope for this policy's reporting path if it affects slint's usage. Plugin behaviour is not otherwise audited by slint, and plugins are not signed.
 
-What the sandbox actually denies — this is enforced by the runtime setup, not
-by convention:
+### The model pass (`--llm`)
 
-- **No host functions** are registered. The plugin cannot call back into
-  slint.
-- **WASI is off.** No filesystem access, no network, no environment
-  variables, no clock.
-- The manifest contains only the module itself.
+The model pass is **off unless you pass `--llm`** (or the equivalent editor setting). When it runs, one request per skill goes to the provider configured in `[llm]` (`provider`, `model`, optional `base_url`) — OpenAI, Anthropic, Gemini, OpenRouter, Groq, or a self-hosted Ollama/gateway.
 
-Failure isolation: a plugin that fails to load, crashes, refuses the wire
-format, or reports findings without citations becomes a note on that skill's
-report. It cannot fail the run, affect other skills, or alter findings from
-built-in rules.
+**What is sent:**
 
-**Residual risk:** the sandbox constrains capability, not quality. A plugin
-still chooses what findings to report, and its findings become part of the
-report. Treat adding a plugin like adding a dependency: it is code running on
-every lint of every skill, supplied by whoever wrote the config.
+- The skill's **name** and **description**
+- **Bundled file names and sizes** — never their contents
+- The **`SKILL.md` body itself**, truncated to `max_input_bytes` (64 KB by default, configurable) — it is the text the model rules review. It is framed to the model as untrusted data between randomised boundary markers, with explicit instruction-hierarchy framing: the model is told never to follow directives found inside it (see `user_prompt` in `packages/core/src/llm/review.rs`).
 
-**User responsibility:** a `slint.toml` found by walking up from the linted
-path — including one that shipped inside a cloned repository — is loaded
-automatically, and its plugins run unless `--no-plugins` is passed. Before
-linting a repository you did not write, read its `slint.toml` (and any file a
-`[[plugins]]` entry points at). The [`--no-plugins`
-flag](https://slint.dev/config/) exists for exactly this.
+**What is never sent:** bundled file contents, your `slint.toml`, environment variables, or anything from your filesystem beyond the skills you asked slint to lint.
 
-### 3. LLM providers (third-party data transmission)
+**Credentials:** API keys are read from the environment variable named by `api_key_env` — the config file holds the *name*, never the key. There is no key material in config files, and slint does not write logs containing request payloads; failures are reported with the provider's own error text.
 
-The model pass is **off by default** and runs only when `--llm` is passed (or
-the editor extension is configured to run it). Nothing leaves the machine
-without that explicit request.
+**Endpoints:** requests go only to the provider endpoint for the configured `provider`, or to `base_url` if you set one. There is no telemetry, no analytics, and no other network traffic. The eight static passes never touch a network at all.
 
-When the model pass runs, one request per skill goes to the configured
-provider. What is sent:
+**Residual risk:** the SKILL.md body does leave your machine when `--llm` is on — that is inherent to a model review. If a skill's body contains secrets, a model provider will see them. Choose providers accordingly (a local Ollama keeps everything on-machine), and remember the model is reviewing untrusted text: slint frames it as data, but prompt-injection defences are probabilistic, not guarantees. Model-authored findings are also capped (`max_tokens`) and sanitised before display.
 
-- The skill's `name` and `description`.
-- The SKILL.md **body**, truncated to `max_input_bytes` (a truncation note
-  appears on the report when it happens).
-- The bundled files' **paths and sizes only** — file contents are never sent.
-- The rule catalogue (names, summaries, rationale, advice), so the model
-  knows what it is looking for.
+## What is in scope
 
-What is never sent: bundled file contents, the raw SKILL.md frontmatter, any
-file outside the skills being linted, environment variables, or the config
-file.
+- Crossings of the boundaries above: plugin reaching filesystem/network/environment, or skill content being treated as instructions
+- Data leaving the machine beyond what is described here (any telemetry, unexpected endpoints, payloads larger than documented)
+- Secrets or credentials ending up in logs, errors, or output files
+- Injection through the GitHub-format, JSON, SARIF, or compact reporters
+- The CLI itself being crashed or subverted by malicious skill content in a way that exceeds per-skill failure reporting
 
-Where it goes is the `[llm]` block of the config: `provider` (openai,
-openrouter, groq, ollama, gemini, anthropic), `model`, and optionally
-`base_url`. An OpenAI-compatible `base_url` means the configured address
-receives everything above — that is what makes local models and gateways
-work, and it is also the setting to read carefully when the config came from
-a cloned repository.
+## What is out of scope
 
-Authentication uses the environment variable named by `api_key_env`. API
-keys are read from the environment at call time; they are never written to
-config files, reports, logs, or the JSON envelope.
+- Bugs in third-party runtimes reported to slint first instead of upstream (report Extism/wasmtime issues there too, in parallel)
+- A plugin doing something you configured it to do
+- The model pass sending skill content when you explicitly ran `--llm` — that is the documented feature, not a leak
+- Social engineering of a human operator
 
-**Residual risk:** skill content arrives at the provider and is subject to
-that provider's retention and training policies. For content that must not
-leave the machine, use a local provider (`ollama`, or any `base_url` on
-localhost).
+## Disclosure
 
-### The configuration file itself
-
-`slint.toml` (or `.slintrc.json`) is config, not code — it cannot execute
-anything by itself. What it *controls* is where the two boundaries above sit:
-which plugins run, and which provider model traffic goes to. A malicious
-config from a cloned repository can therefore point plugins at a `.wasm` it
-ships and `base_url` at a server it owns. The plugin sandbox caps what the
-`.wasm` can do (see boundary 2); the `base_url` only ever receives what an
-explicit `--llm` request sends (see boundary 3). slint never fetches remote
-configs and never updates them.
-
-## Scope of this policy
-
-This covers the `slint` CLI, the core library, the VS Code/Cursor extension,
-and the docs site, at the current `main` branch and supported releases.
-Reported vulnerabilities in bundled example skills or third-party plugins
-should still be reported here when they involve the boundaries above.
+Reports are fixed and disclosed through GitHub Security Advisories, with credit to the reporter if desired. Fixes land on `main` and ship in the next release; supported-versions policy above applies.

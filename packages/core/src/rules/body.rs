@@ -10,6 +10,11 @@ use crate::rules::{Rule, RuleContext, RuleMeta, sources};
 static WINDOWS_PATH: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[\w.-]+\\[\w.-]+").expect("the windows path pattern compiles"));
 
+/// A whole backslash-separated run (`a\b\c`), not just one pair of segments.
+static WINDOWS_PATH_RUN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"[\w.-]+(?:\\[\w.-]+)+").expect("the windows path run pattern compiles")
+});
+
 static ABSOLUTE_PATH: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?:^|[\s`(\x22'])((?:/(?:Users|home|var|opt|tmp)/|~/)[\w./-]+)")
         .expect("the absolute path pattern compiles")
@@ -57,8 +62,8 @@ pub static SECRETS: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
 });
 
 #[derive(Debug, Deserialize)]
-#[serde(default)]
-struct LineOptions {
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct LineOptions {
     /// Past this, an agent starts skimming rather than reading.
     max: usize,
 }
@@ -70,8 +75,8 @@ impl Default for LineOptions {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(default)]
-struct TokenOptions {
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct TokenOptions {
     /// The published guidance for a skill body.
     max: usize,
 }
@@ -222,10 +227,24 @@ impl Rule for NotEmpty {
     }
 
     fn check(&self, context: &mut RuleContext<'_>) {
-        let instructions: String = context
-            .skill
-            .body
-            .lines()
+        // A setext heading is a text line sitting on a line of = or -, and neither half is an
+        // instruction, so both stay out of the count.
+        let mut kept: Vec<&str> = Vec::new();
+        for line in context.skill.body.lines() {
+            if is_setext_underline(line) {
+                if let Some(previous) = kept.last()
+                    && !previous.trim().is_empty()
+                {
+                    kept.pop();
+                }
+                continue;
+            }
+            kept.push(line);
+        }
+
+        let instructions: String = kept
+            .iter()
+            .copied()
             .filter(|line| !line.trim_start().starts_with('#'))
             .collect::<Vec<_>>()
             .join("")
@@ -240,6 +259,15 @@ impl Rule for NotEmpty {
             );
         }
     }
+}
+
+/// A CommonMark setext underline: a line of `=` (level 1) or `-` (level 2), indented at most 3.
+fn is_setext_underline(line: &str) -> bool {
+    let indent = line.len() - line.trim_start().len();
+    let trimmed = line.trim();
+    indent <= 3
+        && !trimmed.is_empty()
+        && (trimmed.chars().all(|c| c == '=') || trimmed.chars().all(|c| c == '-'))
 }
 
 impl Rule for MaxLines {
@@ -323,41 +351,66 @@ impl Rule for PosixPaths {
             })
             .collect();
 
+        // A fenced block illustrates a path rather than naming one, the same way
+        // body/imperative-instructions and the bundle scan read fences: nothing inside
+        // ``` or ~~~ is an instruction to fix.
+        let mut in_fence = false;
+
         for (index, (line, start)) in lines.into_iter().enumerate() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+                in_fence = !in_fence;
+                continue;
+            }
+            if in_fence {
+                continue;
+            }
+
             if line.contains("http") {
                 continue;
             }
 
-            let Some(found) = WINDOWS_PATH.find(line) else {
+            // A backslash whose tail is a single letter or digit is a regex escape (id\d+),
+            // not a path separator.
+            let Some(found) = WINDOWS_PATH.find_iter(line).find(|candidate| {
+                let tail = candidate
+                    .as_str()
+                    .rsplit_once('\\')
+                    .map(|(_, tail)| tail)
+                    .unwrap_or("");
+                !(tail.chars().count() == 1
+                    && tail.chars().next().is_some_and(char::is_alphanumeric))
+            }) else {
                 continue;
             };
 
+            // Widen the two-segment match to the whole path run on this line, so `a\b\c` is
+            // reported and fixed as one unit in a single pass.
+            let suffix = &line[found.start()..];
+            let run_len = WINDOWS_PATH_RUN
+                .find(suffix)
+                .filter(|candidate| candidate.start() == 0)
+                .map(|candidate| candidate.len())
+                .unwrap_or(found.len());
+            let run_start = found.start();
+            let run_text = &line[run_start..run_start + run_len];
+
             let document_line = context.skill.document_line(index + 1);
-            let location = Location::span(document_line, found.start() + 1, found.len());
+            let location = Location::span(document_line, run_start + 1, run_len);
 
-            // The whole line, with every separator normalised: two backslashes on one line are
-            // one problem, and a fix per occurrence would fight itself on the next pass. Scoped
-            // to the line rather than the document, so it never overlaps another fix elsewhere
-            // in SKILL.md and both apply in one --fix invocation.
-            let replacement = WINDOWS_PATH
-                .replace_all(line, |captures: &regex::Captures<'_>| {
-                    captures[0].replace('\\', "/")
-                })
-                .to_string();
-
+            // The fix covers exactly the run it reports, not the line around it: a backslash
+            // elsewhere on the line (a regex escape, a URL fragment) is nobody's path and stays
+            // untouched. One finding per line: ten separators on one line is one thing to fix.
             context.report_fixable(
-                format!("\"{}\" is a Windows path", found.as_str()),
+                format!("\"{}\" is a Windows path", run_text),
                 location,
                 Fix {
-                    start,
-                    end: start + line.len(),
-                    replacement,
-                    description: "Replaces backslash separators with forward slashes on this line."
-                        .into(),
+                    start: start + run_start,
+                    end: start + run_start + run_len,
+                    replacement: run_text.replace('\\', "/"),
+                    description: "Replaces backslash separators with forward slashes.".into(),
                 },
             );
-
-            // One finding per line: ten separators on one line is one thing to fix.
         }
     }
 }
@@ -491,7 +544,7 @@ impl Rule for UndeclaredTool {
         }
 
         for tool in HOST_SPECIFIC_TOOLS {
-            if !body.contains(tool) {
+            if tool_start(body, tool).is_none() {
                 continue;
             }
 
@@ -503,9 +556,9 @@ impl Rule for UndeclaredTool {
             }
 
             for (index, line) in body.lines().enumerate() {
-                if !line.contains(tool) {
+                let Some(start) = tool_start(line, tool) else {
                     continue;
-                }
+                };
 
                 let lower = line.to_ascii_lowercase();
                 if lower.contains("do not use")
@@ -517,17 +570,33 @@ impl Rule for UndeclaredTool {
                 }
 
                 let document_line = context.skill.document_line(index + 1);
-                let column = line.find(tool).map(|offset| offset + 1).unwrap_or(1);
                 context.report(
                     format!(
                         "Instructions require tool \"{tool}\" but it is not listed in allowed-tools"
                     ),
-                    Location::at(document_line, column),
+                    Location::at(document_line, start + 1),
                 );
                 break;
             }
         }
     }
+}
+
+/// Byte offset of the first occurrence of `tool` in `text` as a standalone identifier — one
+/// whose neighbors are not identifier characters, so `AskQuestion` never matches inside
+/// `AskQuestionnaire`.
+fn tool_start(text: &str, tool: &str) -> Option<usize> {
+    text.match_indices(tool)
+        .find(|&(start, _)| {
+            let before = text[..start].chars().next_back();
+            let after = text[start + tool.len()..].chars().next();
+            before.is_none_or(is_identifier_boundary) && after.is_none_or(is_identifier_boundary)
+        })
+        .map(|(start, _)| start)
+}
+
+fn is_identifier_boundary(c: char) -> bool {
+    !c.is_ascii_alphanumeric() && c != '_'
 }
 
 impl Rule for HardcodedRepoPath {
@@ -740,6 +809,25 @@ mod tests {
     }
 
     #[test]
+    fn a_body_of_setext_headings_and_nothing_else_is_an_error() {
+        let messages = check(
+            &NOT_EMPTY_RULE,
+            &skill_with_body("\nCulling\n=======\n\nLater\n-----\n"),
+        );
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].severity, Severity::Error);
+    }
+
+    #[test]
+    fn a_setext_heading_does_not_count_as_instructions() {
+        let skill =
+            skill_with_body("\nCulling\n=======\n\n1. Import the RAW files, then flag keepers.\n");
+
+        assert!(check(&NOT_EMPTY_RULE, &skill).is_empty());
+    }
+
+    #[test]
     fn a_long_body_is_reported_against_the_configured_maximum() {
         let body = format!("\n## Culling\n\n{}", "Step.\n".repeat(600));
         let skill = skill_with_body(&body);
@@ -821,6 +909,44 @@ mod tests {
     }
 
     #[test]
+    fn the_windows_path_fix_leaves_unrelated_backslash_text_alone() {
+        let skill = skill_with_body(
+            "\n## Culling\n\n1. Read scripts\\notes.md.\n2. See https://example.com/a\\b for the format.\n",
+        );
+        let messages = check(&POSIX_RULE, &skill);
+
+        assert_eq!(messages.len(), 1, "only the path line is reported");
+
+        let fix = messages[0].fix.as_ref().unwrap();
+        let mut patched = skill.source.clone();
+        patched.replace_range(fix.start..fix.end, &fix.replacement);
+
+        assert!(patched.contains("scripts/notes.md"));
+        assert!(
+            patched.contains("https://example.com/a\\b"),
+            "the url line must be untouched, got: {patched}"
+        );
+    }
+
+    #[test]
+    fn the_windows_path_fix_normalises_a_multi_segment_path_in_one_fix() {
+        let skill = skill_with_body("\n## Culling\n\n1. Read scripts\\notes\\more.md first.\n");
+        let messages = check(&POSIX_RULE, &skill);
+
+        assert_eq!(messages.len(), 1, "one finding per line");
+
+        let fix = messages[0].fix.as_ref().unwrap();
+        let mut patched = skill.source.clone();
+        patched.replace_range(fix.start..fix.end, &fix.replacement);
+
+        assert!(patched.contains("scripts/notes/more.md"));
+        assert!(
+            !patched.contains('\\'),
+            "the whole path run is fixed at once"
+        );
+    }
+
+    #[test]
     fn a_fix_in_a_file_with_a_byte_order_mark_lands_on_the_right_bytes() {
         let source = "\u{feff}---\nname: culling\ndescription: Culls a shoot in Lightroom. Use when triaging RAW files after a session.\n---\n\n## Culling\n\n1. Read scripts\\notes.md.\n";
         let skill = crate::skill::parse(source);
@@ -833,6 +959,36 @@ mod tests {
         assert!(patched.contains("scripts/notes.md"), "{patched}");
         assert!(!patched.contains('\\'), "{patched}");
         assert!(patched.starts_with('\u{feff}'), "the mark is untouched");
+    }
+
+    #[test]
+    fn a_windows_path_inside_a_fenced_example_is_not_reported() {
+        for (open, close) in [("```text", "```"), ("~~~", "~~~")] {
+            let skill = skill_with_body(&format!(
+                "\n## Steps\n\n1. Run the conversion.\n\n{open}\nBefore: scripts\\legacy\\run.bat\nAfter: scripts/legacy/run.py\n{close}\n",
+            ));
+
+            assert!(check(&POSIX_RULE, &skill).is_empty(), "for {open}{close}");
+        }
+    }
+
+    #[test]
+    fn a_regex_escape_is_not_mistaken_for_a_windows_path() {
+        let skill = skill_with_body(
+            "\n## Culling\n\nUse the pattern `id\\d+` to match legacy identifiers.\n",
+        );
+
+        assert!(check(&POSIX_RULE, &skill).is_empty());
+    }
+
+    #[test]
+    fn a_regex_escape_does_not_hide_a_real_path_on_the_same_line() {
+        let skill =
+            skill_with_body("\n## Culling\n\nMatch `id\\d+`, then read scripts\\notes.md.\n");
+        let messages = check(&POSIX_RULE, &skill);
+
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].message.contains("scripts\\notes.md"));
     }
 
     #[test]
@@ -1110,5 +1266,37 @@ You might want to start by looking through the briefs folder.\n\
             check(&UNDECLARED_TOOL_RULE, &skill).is_empty(),
             "expected flow-sequence allowed-tools to declare AskQuestion"
         );
+    }
+
+    #[test]
+    fn a_longer_identifier_containing_the_tool_name_is_not_undeclared() {
+        // Regression for https://github.com/MaximeGaudin/slint/issues/100: "AskQuestionnaire" is an
+        // unrelated noun, not a call to the AskQuestion tool.
+        let skill = skill_with_body(
+            "\n## Steps\n\n1. Send the AskQuestionnaire form to the customer before continuing.\n",
+        );
+
+        assert!(
+            check(&UNDECLARED_TOOL_RULE, &skill).is_empty(),
+            "expected no undeclared-tool finding for a substring identifier"
+        );
+    }
+
+    #[test]
+    fn the_reported_column_points_at_the_standalone_tool_name() {
+        let line = "1. Fill AskQuestionnaire, then use AskQuestion for the rest.\n";
+        let skill = skill_with_body(&format!("\n{line}"));
+
+        // The standalone occurrence is the last one in this line, not the one inside
+        // "AskQuestionnaire".
+        let expected_column = line
+            .match_indices("AskQuestion")
+            .last()
+            .map(|(start, _)| start + 1)
+            .expect("line contains a standalone AskQuestion");
+
+        let messages = check(&UNDECLARED_TOOL_RULE, &skill);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].location.column, expected_column);
     }
 }

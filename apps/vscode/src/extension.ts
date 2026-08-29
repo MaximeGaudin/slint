@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process'
 import * as path from 'node:path'
 import { promisify } from 'node:util'
 import * as vscode from 'vscode'
+import { stripReservedLlmArgs } from './argv.js'
 import {
   diagnosticRangeForFinding,
   patchText,
@@ -11,12 +12,21 @@ import {
 import { ignoreEditsForFinding, ruleIdFromCode } from './ignore.js'
 import { LintQueue, LintRunCoordinator, type StatusUpdate } from './lint-runs.js'
 import { ruleOverridesArgv } from './rules-setting.js'
+import { RunFailureNotifier } from './run-failure.js'
+import { type ApiKeyScope, planApiKeyMigration } from './secrets.js'
 import { isUnderAnyRoot } from './skill-paths.js'
+import { mayRunBinary } from './trust.js'
 
 const run = promisify(execFile)
 
-/** Env var the extension injects when `slint.llm.apiKey` is set. Never appears on the argv. */
+/** Env var the extension injects when an API key is stored. Never appears on the argv. */
 const EDITOR_API_KEY_ENV = 'SLINT_EDITOR_API_KEY'
+
+/** SecretStorage key for the model API key. */
+const API_KEY_SECRET = 'slint.llm.apiKey'
+
+/** Where a reader looking for the binary finds out how to get it. */
+const INSTALL_DOCS_URL = 'https://slint.dev'
 
 /**
  * slint, in the editor.
@@ -61,8 +71,16 @@ let diagnostics: vscode.DiagnosticCollection
 let output: vscode.OutputChannel
 let status: vscode.StatusBarItem
 let pending: NodeJS.Timeout | undefined
+let state: vscode.Memento | undefined
+let warnedReservedArgs = false
+let warnedWorkspaceModelPass = false
+let secrets: vscode.SecretStorage
+/** The stored API key, cached so spawn stays synchronous. Undefined when none is stored. */
+let apiKey: string | undefined
 /** Cancels superseded child processes and keeps the status bar honest across overlapping runs. */
 const runs = new LintRunCoordinator()
+/** Surfaces a "could not run" failure once per failure streak instead of on every save. */
+const runFailure = new RunFailureNotifier()
 /** Serializes slint invocations across targets so two runs can never publish over each other. */
 const queue = new LintQueue()
 /** Last static envelope per target — merged back in when the model pass publishes so static never vanishes. */
@@ -74,6 +92,20 @@ const lastStatic = new Map<string, Envelope>()
 const fixableByFile = new Map<string, Finding[]>()
 
 export function activate(context: vscode.ExtensionContext): void {
+  state = context.globalState
+
+  // The keychain can fail (locked, flaky backend). Never let that kill activation: register
+  // everything first, then load — worst case the model pass runs keyless (and fails) with a
+  // warning instead of the whole extension going dark.
+  secrets = context.secrets
+  void bootstrapApiKey().catch((failure: unknown) => {
+    const message = failure instanceof Error ? failure.message : String(failure)
+    output?.appendLine(`slint secure storage unavailable, model pass disabled: ${message}`)
+    void vscode.window.showWarningMessage(
+      'slint could not access secure storage, so the stored model API key is unavailable and the model pass will not run this session.',
+    )
+  })
+
   diagnostics = vscode.languages.createDiagnosticCollection('slint')
   output = vscode.window.createOutputChannel('slint')
   status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50)
@@ -90,6 +122,8 @@ export function activate(context: vscode.ExtensionContext): void {
       lintWorkspace({ model: true }),
     ),
     vscode.commands.registerCommand('slint.fixDocument', () => fixActiveDocument()),
+    vscode.commands.registerCommand('slint.setApiKey', () => setApiKey()),
+    vscode.commands.registerCommand('slint.clearApiKey', () => clearApiKey()),
     vscode.commands.registerCommand('slint.showOutput', () => output.show(true)),
   )
 
@@ -115,6 +149,8 @@ export function activate(context: vscode.ExtensionContext): void {
 
       const onSave = setting<string>('onSave', document.uri) ?? 'no-llm'
       if (onSave === 'nothing') return
+
+      if (onSave === 'llm') warnIfModelPassFromWorkspace()
 
       void lint(directoryOf(document), { model: onSave === 'llm', resource: document.uri })
     }),
@@ -208,6 +244,12 @@ function spawnFor(
   target: string,
   options: { model?: boolean; fix?: boolean; resource?: vscode.Uri } = {},
 ): Spawn {
+  // `slint.arguments` is workspace-settable, so anything that could steer the model pass (and the
+  // API key it carries) to an endpoint of its choosing is dropped before the spawn.
+  const extraArgs = setting<string[]>('arguments', options.resource) ?? []
+  const allowedArgs = stripReservedLlmArgs(extraArgs)
+  if (allowedArgs.length < extraArgs.length) warnReservedArgsIgnored()
+
   const binaryArgs: string[] = [target]
   if (options.fix) binaryArgs.push('--fix')
   // `slint.rules` rides the same `--rule name=level` overrides a config file or the CLI takes;
@@ -217,7 +259,7 @@ function spawnFor(
     'json',
     '--no-color',
     ...ruleOverridesArgv(setting<Record<string, string>>('rules', options.resource)),
-    ...(setting<string[]>('arguments', options.resource) ?? []),
+    ...allowedArgs,
   )
 
   if (options.model) {
@@ -226,14 +268,13 @@ function spawnFor(
     binaryArgs.push('--no-llm')
   }
 
-  return { argv: binaryArgs, env: llmEnv(options.resource) }
+  return { argv: binaryArgs, env: llmEnv() }
 }
 
 function llmArgv(resource?: vscode.Uri): string[] {
   const args: string[] = []
   const provider = setting<string>('llm.provider', resource)?.trim()
   const model = setting<string>('llm.model', resource)?.trim()
-  const apiKey = setting<string>('llm.apiKey', resource)?.trim()
 
   if (provider) args.push('--llm-provider', provider)
   if (model) args.push('--llm-model', model)
@@ -242,11 +283,140 @@ function llmArgv(resource?: vscode.Uri): string[] {
   return args
 }
 
-function llmEnv(resource?: vscode.Uri): NodeJS.ProcessEnv {
-  const apiKey = setting<string>('llm.apiKey', resource)?.trim()
+function llmEnv(): NodeJS.ProcessEnv {
   if (!apiKey) return { ...process.env }
 
   return { ...process.env, [EDITOR_API_KEY_ENV]: apiKey }
+}
+
+async function loadApiKey(): Promise<void> {
+  apiKey = (await secrets.get(API_KEY_SECRET))?.trim() || undefined
+}
+
+async function setApiKey(): Promise<void> {
+  const input = await vscode.window.showInputBox({
+    password: true,
+    ignoreFocusOut: true,
+    prompt: 'API key for the slint model provider',
+    placeHolder: 'Stored in secure storage, never in settings.json',
+  })
+  if (input === undefined) return
+
+  const value = input.trim()
+  if (!value) return
+
+  await secrets.store(API_KEY_SECRET, value)
+  apiKey = value
+}
+
+async function clearApiKey(): Promise<void> {
+  await secrets.delete(API_KEY_SECRET)
+  apiKey = undefined
+}
+
+/** Activate's async half: load the stored key, then migrate any plaintext copy out of settings. */
+async function bootstrapApiKey(): Promise<void> {
+  await loadApiKey()
+  await migrateApiKeyFromSettings()
+}
+
+/**
+ * Keys that predate SecretStorage sit in settings.json in plaintext. Move the most specific one
+ * into secure storage and wipe every plaintext copy, so nothing secret survives the move.
+ *
+ * inspect() is resource-sensitive: folder-scoped values only appear when asked per folder, so the
+ * sweep runs for the window itself and for every workspace folder.
+ */
+async function migrateApiKeyFromSettings(): Promise<void> {
+  const folders = vscode.workspace.workspaceFolders ?? []
+
+  const found: { scope: ApiKeyScope; value: string; resource?: vscode.Uri }[] = []
+  for (const resource of [undefined, ...folders.map((folder) => folder.uri)]) {
+    const info = vscode.workspace.getConfiguration('slint', resource).inspect<string>('llm.apiKey')
+    if (!info) continue
+    if (info.globalValue?.trim()) found.push({ scope: 'global', value: info.globalValue.trim() })
+    if (info.workspaceValue?.trim())
+      found.push({ scope: 'workspace', value: info.workspaceValue.trim(), resource })
+    if (info.workspaceFolderValue?.trim())
+      found.push({ scope: 'workspaceFolder', value: info.workspaceFolderValue.trim(), resource })
+  }
+
+  const mostSpecific = (scope: ApiKeyScope) => found.find((entry) => entry.scope === scope)?.value
+  const plan = planApiKeyMigration(
+    {
+      global: mostSpecific('global'),
+      workspace: mostSpecific('workspace'),
+      workspaceFolder: mostSpecific('workspaceFolder'),
+    },
+    apiKey ?? null,
+  )
+  if (!plan) return
+
+  if (plan.value !== undefined) {
+    await secrets.store(API_KEY_SECRET, plan.value)
+    apiKey = plan.value
+  }
+
+  for (const scope of plan.clear) {
+    const entry = found.find((candidate) => candidate.scope === scope)
+    if (!entry) continue
+    await vscode.workspace
+      .getConfiguration('slint', entry.resource)
+      .update('llm.apiKey', undefined, CONFIGURATION_TARGETS[scope])
+  }
+
+  void vscode.window.showInformationMessage(
+    plan.value !== undefined
+      ? 'slint moved your LLM API key from settings to secure storage.'
+      : 'slint removed a leftover LLM API key from settings.',
+  )
+}
+
+const CONFIGURATION_TARGETS: Record<ApiKeyScope, vscode.ConfigurationTarget> = {
+  global: vscode.ConfigurationTarget.Global,
+  workspace: vscode.ConfigurationTarget.Workspace,
+  workspaceFolder: vscode.ConfigurationTarget.WorkspaceFolder,
+}
+
+/**
+ * A workspace settings.json can be committed to a repo, so a model pass that a workspace turned on
+ * (rather than the user's own settings) sends file contents to a provider on the word of that repo.
+ * One heads-up per session, dismissable permanently.
+ */
+function warnIfModelPassFromWorkspace(): void {
+  if (warnedWorkspaceModelPass) return
+  if (state?.get('slint.workspaceModelPassWarningDismissed')) return
+  if (!modelPassFromWorkspace()) return
+
+  warnedWorkspaceModelPass = true
+  void vscode.window
+    .showWarningMessage(
+      'This workspace enabled the slint model pass on save (slint.onSave is set in workspace settings). Saving a SKILL.md sends its contents to the configured model provider.',
+      "Don't warn again",
+    )
+    .then((choice) => {
+      if (choice === "Don't warn again") {
+        void state?.update('slint.workspaceModelPassWarningDismissed', true)
+      }
+    })
+}
+
+function modelPassFromWorkspace(): boolean {
+  const info = vscode.workspace.getConfiguration('slint').inspect<string>('onSave')
+  if (!info) return false
+
+  const effective = info.workspaceFolderValue ?? info.workspaceValue ?? info.globalValue
+  return effective === 'llm' && info.globalValue !== 'llm'
+}
+
+/** Model-pass flags in `slint.arguments` are dropped, not forwarded — say so once. */
+function warnReservedArgsIgnored(): void {
+  if (warnedReservedArgs) return
+  warnedReservedArgs = true
+
+  void vscode.window.showWarningMessage(
+    'slint ignored model-pass flags in slint.arguments; the extension controls the model pass from its own settings.',
+  )
 }
 
 async function lintActiveWithModel(): Promise<void> {
@@ -287,6 +457,10 @@ async function lint(
   target: string,
   options: { model: boolean; resource?: vscode.Uri },
 ): Promise<void> {
+  // The binary is external and workspace settings steer it; it never runs in an untrusted
+  // workspace (VS Code keeps the extension inactive there; this guard is the in-code half).
+  if (!mayRunBinary(vscode.workspace.isTrusted)) return
+
   const { generation, signal } = runs.begin(target)
 
   const staticResult = await runPass(
@@ -371,6 +545,7 @@ async function runPass(
           '$(error) slint failed',
           error.message ?? 'slint could not run — click for details',
         )
+        notifyRunFailure(error.message)
         return undefined
       }
 
@@ -418,6 +593,8 @@ async function runPass(
       finishFromSummaryText(summary, envelope.summary.skills)
     }
 
+    runFailure.runSucceeded()
+
     return envelope
   })
 }
@@ -426,6 +603,23 @@ function isAbortError(failure: unknown): boolean {
   if (!failure || typeof failure !== 'object') return false
   const error = failure as { name?: string; code?: string }
   return error.name === 'AbortError' || error.code === 'ABORT_ERR'
+}
+
+/**
+ * The status-bar glyph and output-channel line are easy to miss, so a "could not run" failure also
+ * raises a visible, actionable notification — at most once per failure streak.
+ */
+function notifyRunFailure(message: string | undefined): void {
+  if (!runFailure.failureOccurred()) return
+
+  const reason = message ?? 'unknown failure'
+  void vscode.window
+    .showErrorMessage(`slint could not run: ${reason}`, 'Show Output', 'Install slint')
+    .then((choice) => {
+      if (choice === 'Show Output') output.show(true)
+      if (choice === 'Install slint')
+        void vscode.env.openExternal(vscode.Uri.parse(INSTALL_DOCS_URL))
+    })
 }
 
 function summarizePublished(envelope: Envelope, staticSeed?: Envelope): string {
@@ -797,6 +991,8 @@ function fixAllAction(
  * screen is what is on disk.
  */
 async function fixActiveDocument(): Promise<void> {
+  if (!mayRunBinary(vscode.workspace.isTrusted)) return
+
   const editor = vscode.window.activeTextEditor
 
   if (!editor || !isSkill(editor.document)) {
@@ -824,7 +1020,7 @@ async function fixActiveDocument(): Promise<void> {
     const error = failure as { stdout?: string; message?: string }
     if (!error.stdout) {
       setStatus('$(error) slint failed', error.message ?? 'slint could not run')
-      void vscode.window.showErrorMessage(`slint could not run: ${error.message ?? 'unknown'}`)
+      notifyRunFailure(error.message)
       return
     }
   }

@@ -6,6 +6,7 @@
 
 use anyhow::{Context, Result, bail};
 use clap::{CommandFactory, Parser, Subcommand};
+use std::collections::BTreeSet;
 use std::io::{IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -68,6 +69,10 @@ struct Cli {
     #[arg(long)]
     config: Option<PathBuf>,
 
+    /// Look for no config at all: the built-in defaults and the command line only.
+    #[arg(long, conflicts_with = "config")]
+    no_config: bool,
+
     /// Read extra ignore patterns from this file, one glob per line.
     #[arg(long = "ignore-path", value_name = "FILE")]
     ignore_path: Option<PathBuf>,
@@ -100,7 +105,12 @@ struct Cli {
     #[arg(long = "llm-api-key-env", value_name = "VAR")]
     llm_api_key_env: Option<String>,
 
-    /// Skip plugins, whatever the config says.
+    /// Run the plugins the config names. Off by default: the config naming them belongs to the
+    /// project being scanned, and running code a scanned project ships is not a linter's default.
+    #[arg(long)]
+    plugins: bool,
+
+    /// Skip plugins, whatever the config says. Kept for scripts that already pass it.
     #[arg(long)]
     no_plugins: bool,
 
@@ -218,18 +228,46 @@ fn run(cli: &Cli) -> Result<u8> {
         return run_stdin(cli, &config);
     }
 
-    let plugins = if cli.no_plugins {
-        Vec::new()
-    } else {
+    // A base_url that arrived from the config file, not from the command line, chooses where the
+    // API key and the document go. A config found in the scanned tree is not something the user
+    // wrote, so say out loud what it is doing before anything is sent.
+    if cli.model_pass()
+        && cli.llm_base_url.is_none()
+        && let Some(base) = config.llm.base_url.as_deref()
+        && !slint::llm::provider::is_loopback_base_url(base)
+    {
+        let where_from = config
+            .source
+            .as_ref()
+            .map(|path| format!(" file {}", path.display()))
+            .unwrap_or_default();
+        let key_variable = config
+            .llm
+            .api_key_env
+            .as_deref()
+            .unwrap_or("(no api_key_env is named)");
+
+        eprintln!(
+            "slint: the config{where_from} points the model pass at {base}. The key in {key_variable} and the documents being linted go there. If you did not write that config, check it before trusting this run."
+        );
+    }
+
+    let run_plugins = cli.plugins && !cli.no_plugins;
+
+    let plugins = if run_plugins {
         plugin::load_all(&config)?
+    } else {
+        Vec::new()
     };
+
+    config::check_rule_names(&config, &plugins)?;
 
     if cli.verbose {
         say_what_the_run_is(&config, &plugins, cli);
     }
 
     let passes = Passes {
-        plugins: !cli.no_plugins,
+        plugins: run_plugins,
         model: cli.model_pass(),
     };
 
@@ -242,6 +280,10 @@ fn run(cli: &Cli) -> Result<u8> {
             engine::run(&cli.paths, &config, &plugins, passes)
         })?;
     }
+
+    // The exit code reflects what the run found, not what --quiet chooses to hide: a
+    // warnings-only run stays a warnings-only run on the way out, with or without --quiet.
+    let code = exit_code(&report);
 
     if cli.quiet {
         keep_only_errors(&mut report);
@@ -260,7 +302,7 @@ fn run(cli: &Cli) -> Result<u8> {
         Err(error) => return Err(error).context("writing the report"),
     }
 
-    Ok(exit_code(&report, cli.max_warnings))
+    Ok(code)
 }
 
 /// Reads, lints and reports on the document coming in on stdin.
@@ -328,6 +370,9 @@ fn run_stdin(cli: &Cli, config: &Config) -> Result<u8> {
     }
     .sorted();
 
+    // Same as a file run: the exit code is what the document earned, not what --quiet prints.
+    let code = exit_code(&report);
+
     if cli.quiet {
         keep_only_errors(&mut report);
     }
@@ -345,7 +390,7 @@ fn run_stdin(cli: &Cli, config: &Config) -> Result<u8> {
         Err(error) => return Err(error).context("writing the report"),
     }
 
-    Ok(exit_code(&report, cli.max_warnings))
+    Ok(code)
 }
 
 /// --print-config: the config as a caller can now rely on it, file and flags together.
@@ -450,14 +495,20 @@ fn colour_allowed(no_color_flag: bool) -> bool {
 }
 
 /// What the run means, as a number.
-fn exit_code(report: &Report, max_warnings: i64) -> u8 {
+///
+/// The code names the class of what was found, so a CI script can tell an error it must read
+/// from a warning it chose to tolerate: errors are 1, warnings-only is 2 — even when the
+/// `--max-warnings` budget is breached, because relabelling a warnings-only run as "errors"
+/// would contradict the documented contract. The budget verdict lives in the JSON envelope's
+/// `ok` flag instead, and a warnings-only run still fails a CI job the usual way: 2 is non-zero.
+fn exit_code(report: &Report) -> u8 {
     // Nothing was looked at: a typo'd path or an empty directory is not a clean pass, and a CI
     // job pointed at the wrong directory must not sit green forever.
     if report.skills.is_empty() {
         return code::NOTHING_LINTED;
     }
 
-    if !report.passes(max_warnings) {
+    if report.errors() > 0 {
         return code::ERRORS;
     }
 
@@ -506,7 +557,46 @@ fn fix_until_converged(
 }
 
 fn resolve_config(cli: &Cli) -> Result<Config> {
-    let path = match &cli.config {
+    let path = if cli.no_config {
+        None
+    } else {
+        resolve_config_path(cli)
+    };
+
+    let mut config = match &path {
+        Some(path) => config::load(path)?,
+        None => Config::default(),
+    };
+
+    // One config governs the whole run, so a later path that holds a different one of its own
+    // deserves to hear that its file did not get to speak.
+    if cli.config.is_none() {
+        warn_about_unread_configs(cli, path.as_ref(), &config);
+    }
+
+    for text in &cli.overrides {
+        let (name, setting) = config::parse_override(text)?;
+        config.rules.insert(name, setting);
+    }
+
+    if cli.model_pass() {
+        apply_llm_overrides(&mut config, cli)?;
+    } else {
+        // With no model pass the LLM flags have no reader, so a leftover typo in a shared
+        // script must not be able to fail the static run either.
+        for meta in slint::llm::rules::all() {
+            config.rules.insert(meta.name.to_string(), RuleSetting::Off);
+        }
+    }
+
+    Ok(config)
+}
+
+/// The explicit `--config` file, or the one found by walking up from the first path.
+fn resolve_config_path(cli: &Cli) -> Option<PathBuf> {
+    let path = &cli.config;
+
+    match path {
         Some(path) => Some(path.clone()),
         None => {
             let from = cli
@@ -515,37 +605,84 @@ fn resolve_config(cli: &Cli) -> Result<Config> {
                 .cloned()
                 .unwrap_or_else(|| PathBuf::from("."));
 
-            let anchor = if from.is_dir() {
-                from
-            } else {
-                from.parent()
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| PathBuf::from("."))
-            };
-
-            config::find(&anchor)
-        }
-    };
-
-    let mut config = match path {
-        Some(path) => config::load(&path)?,
-        None => Config::default(),
-    };
-
-    for text in &cli.overrides {
-        let (name, setting) = config::parse_override(text)?;
-        config.rules.insert(name, setting);
-    }
-
-    apply_llm_overrides(&mut config, cli)?;
-
-    if !cli.model_pass() {
-        for meta in slint::llm::rules::all() {
-            config.rules.insert(meta.name.to_string(), RuleSetting::Off);
+            let found = config::find(&anchor_for(&from));
+            say_which_config_won(&found);
+            found
         }
     }
+}
 
-    Ok(config)
+/// A directory holding more than one config file is where "I edited the wrong one" lives, so the
+/// run names the file that won and the one that did not read, instead of the edit vanishing.
+fn say_which_config_won(found: &Option<PathBuf>) {
+    let Some(path) = found else {
+        return;
+    };
+    let Some(directory) = path.parent() else {
+        return;
+    };
+
+    let files = config::config_files_in(directory);
+    if files.len() < 2 {
+        return;
+    }
+
+    let name = |one: &PathBuf| one.file_name().unwrap().to_string_lossy().into_owned();
+    let ignored = files
+        .iter()
+        .skip(1)
+        .map(name)
+        .collect::<Vec<_>>()
+        .join(" and ");
+
+    eprintln!(
+        "slint: {} holds more than one config file, so {} wins (precedence: {}) and {} was not read",
+        directory.display(),
+        name(&files[0]),
+        config::CONFIG_NAMES.join(", "),
+        ignored
+    );
+}
+
+/// The directory a config search starts from: the path itself when it is one, its parent when it
+/// is a file.
+fn anchor_for(path: &Path) -> PathBuf {
+    if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        path.parent()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."))
+    }
+}
+
+/// Names the config files a later path holds that this run does not use.
+///
+/// An explicit `--config` is a deliberate choice, so it is never second-guessed here.
+fn warn_about_unread_configs(cli: &Cli, chosen: Option<&PathBuf>, effective: &Config) {
+    let mut seen = BTreeSet::new();
+
+    for path in cli.paths.iter().skip(1) {
+        let Some(file) = config::find(&anchor_for(path)) else {
+            continue;
+        };
+        if Some(&file) == chosen || !seen.insert(file.clone()) {
+            continue;
+        }
+
+        let Ok(other) = config::load(&file) else {
+            continue;
+        };
+        if other == *effective {
+            continue;
+        }
+
+        eprintln!(
+            "slint: {} holds a {} that this run does not use — the config found from the first path governs the whole run",
+            path.display(),
+            file.file_name().unwrap().to_string_lossy()
+        );
+    }
 }
 
 /// Flags from the editor (or a one-off shell) win over whatever the file said.
@@ -580,6 +717,19 @@ fn init() -> Result<u8> {
             path.display()
         );
         return Ok(code::CLEAN);
+    }
+
+    // A config higher up the tree already governs this directory, and the file being written
+    // now takes its place for everything linted below. That is a decision worth seeing. The
+    // directory is canonicalized first, because the walk-up stops at a relative anchor's parent
+    // of ".", which is the empty path.
+    let here = std::fs::canonicalize(".").with_context(|| "resolving the current directory")?;
+    if let Some(inherited) = config::find(&here) {
+        eprintln!(
+            "slint: {} already governs this directory; writing {} will shadow it for everything linted below",
+            inherited.display(),
+            path.display()
+        );
     }
 
     std::fs::write(&path, config::STARTER_CONFIG)
@@ -659,6 +809,7 @@ fn keep_only_errors(report: &mut Report) {
 mod tests {
     use super::*;
     use slint::diagnostics::{Location, Message, Reference, Severity, SkillReport, Source};
+    use std::fs;
     use std::path::Path;
 
     fn report_with(errors: usize, warnings: usize) -> Report {
@@ -695,25 +846,30 @@ mod tests {
 
     #[test]
     fn a_clean_run_exits_zero() {
-        assert_eq!(exit_code(&report_with(0, 0), -1), code::CLEAN);
+        assert_eq!(exit_code(&report_with(0, 0)), code::CLEAN);
     }
 
     #[test]
     fn errors_exit_one() {
-        assert_eq!(exit_code(&report_with(1, 0), -1), code::ERRORS);
+        assert_eq!(exit_code(&report_with(1, 0)), code::ERRORS);
     }
 
     #[test]
     fn warnings_alone_exit_two_so_ci_can_tell_them_apart() {
-        assert_eq!(exit_code(&report_with(0, 3), -1), code::WARNINGS);
+        assert_eq!(exit_code(&report_with(0, 3)), code::WARNINGS);
     }
 
     #[test]
-    fn a_warning_budget_turns_warnings_into_a_failure_once_it_is_passed() {
-        assert_eq!(exit_code(&report_with(0, 3), 5), code::WARNINGS);
-        assert_eq!(exit_code(&report_with(0, 3), 3), code::WARNINGS);
-        assert_eq!(exit_code(&report_with(0, 4), 3), code::ERRORS);
-        assert_eq!(exit_code(&report_with(0, 1), 0), code::ERRORS);
+    fn a_warning_budget_does_not_relabel_a_warnings_only_run() {
+        // https://github.com/MaximeGaudin/slint/issues/143: the exit code names the class of
+        // finding, not how comfortable the budget is — a run with no errors is "warnings only"
+        // (2) even when --max-warnings is breached. The budget verdict lives in the JSON
+        // envelope's `ok`, and 2 still fails a CI job.
+        assert_eq!(exit_code(&report_with(0, 3)), code::WARNINGS);
+        assert_eq!(exit_code(&report_with(0, 3)), code::WARNINGS);
+        assert_eq!(exit_code(&report_with(0, 4)), code::WARNINGS);
+        assert_eq!(exit_code(&report_with(0, 1)), code::WARNINGS);
+        assert_eq!(exit_code(&report_with(0, 0)), code::CLEAN);
     }
 
     #[test]
@@ -775,7 +931,7 @@ mod tests {
             notes: Vec::new(),
         };
 
-        assert_eq!(exit_code(&report, -1), code::NOTHING_LINTED);
+        assert_eq!(exit_code(&report), code::NOTHING_LINTED);
     }
 
     #[test]
@@ -872,6 +1028,34 @@ mod tests {
         for meta in slint::llm::rules::all() {
             assert_eq!(config.rules.get(meta.name), Some(&RuleSetting::Off));
         }
+    }
+
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/41 —
+    /// a run with `--no-config` reads no file, whatever the tree above the path holds.
+    #[test]
+    fn no_config_runs_on_defaults_even_when_a_config_file_is_there() {
+        let temporary = tempfile::tempdir().unwrap();
+        fs::write(
+            temporary.path().join("slint.toml"),
+            "[rules]\n\"name/not-generic\" = \"off\"\n",
+        )
+        .unwrap();
+
+        let cli = Cli::try_parse_from(["slint", temporary.path().to_str().unwrap(), "--no-config"])
+            .unwrap();
+        let config = resolve_config(&cli).unwrap();
+
+        assert_eq!(config.source, None);
+        assert_eq!(config.rules.get("name/not-generic"), None);
+    }
+
+    #[test]
+    fn no_config_conflicts_with_an_explicit_config() {
+        let failure = Cli::try_parse_from(["slint", "--no-config", "--config", "slint.toml"])
+            .unwrap_err()
+            .to_string();
+
+        assert!(failure.contains("cannot be used with"), "{failure}");
     }
 
     #[test]

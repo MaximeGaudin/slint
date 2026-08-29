@@ -1,13 +1,14 @@
 ## Summary
 
-<!-- What was wrong, and what changed. Keep it to the two sentences a reviewer needs. -->
+- What was wrong and what changed.
+
+Fixes #<issue>
 
 ## Test plan
 
-<!-- How the change was verified. Tests are named after the behaviour they protect. -->
+- [ ] Failing regression test written first (and committed red)
+- [ ] Regression test passes after the fix
+- [ ] `./scripts/check.sh` mirrors CI and passed locally
+- [ ] CI green on this PR
 
-- [ ] New or updated tests cover the change (failing first, then green)
-- [ ] `./scripts/check.sh` passes (or the relevant subset: `cargo fmt/clippy/test`, `pnpm lint`)
-- [ ] Rule catalogue synced (`pnpm sync:docs`) if a rule changed
-
-Fixes #
+<!-- Docs-only or content-only PRs: drop the first two items and say what you verified instead. -->

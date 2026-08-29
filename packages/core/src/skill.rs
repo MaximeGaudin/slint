@@ -45,6 +45,10 @@ pub struct Skill {
     pub frontmatter_lines: usize,
     /// Whether a frontmatter block was found at all.
     pub has_frontmatter: bool,
+    /// Whether the frontmatter declared `name:` at all. The directory-name fallback in
+    /// [`read`] is display text for messages, not a declaration, and the name rules must not
+    /// mistake one for the other.
+    pub name_declared: bool,
     pub name: String,
     pub description: String,
     /// The instructions, without the frontmatter.
@@ -96,14 +100,15 @@ pub struct Discovery {
 /// Every skill under the given paths.
 ///
 /// A path that is itself a skill directory is taken as one; anything else is walked. Directories
-/// that are never a skill — `.git`, `node_modules`, `target` — are skipped without being configured,
-/// because nobody has ever wanted them linted. A file argument that is not a `SKILL.md` is not an
-/// error, but it is reported back so the run can say it linted nothing rather than everything.
-pub fn discover(paths: &[PathBuf], ignore: &GlobSet) -> Result<Discovery> {
+/// that are never a skill — everything dotted, `node_modules`, `target` — are skipped without being
+/// configured, because nobody has ever wanted them linted; naming one yourself is the opt-in. A
+/// file argument that is not a `SKILL.md` is not an error, but it is reported back so the run can
+/// say it linted nothing rather than everything.
+pub fn discover(paths: &[PathBuf], ignore: &Ignore) -> Result<Discovery> {
     let mut discovery = Discovery::default();
 
     for path in paths {
-        if path.join(SKILL_FILE).is_file() {
+        if find_manifest(path).is_some() {
             discovery.directories.push(path.clone());
             continue;
         }
@@ -111,7 +116,9 @@ pub fn discover(paths: &[PathBuf], ignore: &GlobSet) -> Result<Discovery> {
         if path.is_file() {
             // A path straight to a SKILL.md is the shape an editor integration sends. Anything
             // else was asked for by name, so leaving it out without a word hides the whole run.
-            if path.file_name().and_then(|name| name.to_str()) == Some(SKILL_FILE)
+            if path
+                .file_name()
+                .is_some_and(|name| name.eq_ignore_ascii_case(SKILL_FILE))
                 && let Some(parent) = path.parent()
             {
                 discovery.directories.push(parent.to_path_buf());
@@ -127,13 +134,13 @@ pub fn discover(paths: &[PathBuf], ignore: &GlobSet) -> Result<Discovery> {
         for entry in WalkDir::new(path)
             .follow_links(false)
             .into_iter()
-            .filter_entry(|entry| !is_never_a_skill(entry.path()))
+            .filter_entry(|entry| entry.depth() == 0 || !is_never_a_skill(entry.path()))
         {
             let entry = entry.with_context(|| format!("walking {}", path.display()))?;
             if !entry.file_type().is_file() {
                 continue;
             }
-            if entry.file_name() != SKILL_FILE {
+            if !entry.file_name().eq_ignore_ascii_case(SKILL_FILE) {
                 continue;
             }
 
@@ -145,43 +152,116 @@ pub fn discover(paths: &[PathBuf], ignore: &GlobSet) -> Result<Discovery> {
 
     discovery
         .directories
-        .retain(|directory| !ignore.is_match(directory));
+        .retain(|directory| !ignore.is_ignored(directory));
     discovery.directories.sort();
     discovery.directories.dedup();
 
     Ok(discovery)
 }
 
-fn is_never_a_skill(path: &Path) -> bool {
-    matches!(
-        path.file_name().and_then(|name| name.to_str()),
-        Some(".git" | "node_modules" | "target" | "dist" | ".venv" | "__pycache__")
-    )
-}
-
-pub fn build_ignore(patterns: &[String]) -> Result<GlobSet> {
-    let mut builder = GlobSetBuilder::new();
-
-    for pattern in patterns {
-        builder.add(Glob::new(pattern).with_context(|| format!("bad ignore pattern: {pattern}"))?);
+/// The manifest of a skill directory, named the way this author spelled it.
+///
+/// The specification shows `SKILL.md`, but a manifest typed as `skill.md` is still the manifest —
+/// a linter that reads only one spelling reports a clean run where it read nothing at all. The
+/// exact spelling wins when both exist, so a directory is read the same on every platform.
+fn find_manifest(directory: &Path) -> Option<PathBuf> {
+    let exact = directory.join(SKILL_FILE);
+    if exact.is_file() {
+        return Some(exact);
     }
 
-    builder.build().context("building the ignore set")
+    let entries = fs::read_dir(directory).ok()?;
+    entries
+        .flatten()
+        .find(|entry| entry.file_name().eq_ignore_ascii_case(SKILL_FILE) && entry.path().is_file())
+        .map(|entry| entry.path())
+}
+
+fn is_never_a_skill(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+
+    // Everything dotted is tool and editor state — caches, checkouts of this very repository,
+    // config directories — and linting it reports the same skill twice under two paths. The named
+    // build outputs are the same story without the dot.
+    name.starts_with('.') || matches!(name, "node_modules" | "target" | "dist" | "__pycache__")
+}
+
+/// A compiled `ignore` list: what is skipped, and the `!`-prefixed patterns that take a path
+/// back, the way `.gitignore` and `.eslintignore` do.
+///
+/// A negated pattern wins over every plain one, whatever their order in the file: the list is a
+/// set of exclusions with a set of exceptions, not a program with a last word. A negated pattern
+/// names a directory and excepts the directory itself as well as everything beneath it.
+pub struct Ignore {
+    excluded: GlobSet,
+    excepted: GlobSet,
+}
+
+impl Ignore {
+    pub fn empty() -> Self {
+        Ignore {
+            excluded: GlobSet::empty(),
+            excepted: GlobSet::empty(),
+        }
+    }
+
+    pub fn is_ignored(&self, directory: &Path) -> bool {
+        self.excluded.is_match(directory) && !self.excepted.is_match(directory)
+    }
+}
+
+pub fn build_ignore(patterns: &[String]) -> Result<Ignore> {
+    let (mut excluded, mut excepted) = (GlobSetBuilder::new(), GlobSetBuilder::new());
+
+    for pattern in patterns {
+        let glob = |text: &str| -> Result<Glob> {
+            Glob::new(text).with_context(|| format!("bad ignore pattern: {pattern}"))
+        };
+
+        if let Some(negated) = pattern.strip_prefix('!') {
+            excepted.add(glob(negated)?);
+            // A trailing `/**` is how a directory is named in these lists, and a skill sits in
+            // the directory itself, so the named directory has to be excepted as well.
+            if let Some(directory) = negated.strip_suffix("/**") {
+                excepted.add(glob(directory)?);
+            }
+        } else {
+            excluded.add(glob(pattern)?);
+        }
+    }
+
+    Ok(Ignore {
+        excluded: excluded.build().context("building the ignore set")?,
+        excepted: excepted.build().context("building the ignore set")?,
+    })
 }
 
 /// Reads one skill directory.
 pub fn read(directory: &Path) -> Result<Skill> {
-    let document_path = directory.join(SKILL_FILE);
+    let document_path = find_manifest(directory)
+        .with_context(|| format!("{} holds no {}", directory.display(), SKILL_FILE))?;
     let source = fs::read_to_string(&document_path)
         .with_context(|| format!("reading {}", document_path.display()))?;
 
     let mut skill = parse(&source);
     skill.directory = directory.to_path_buf();
-    skill.document = format!("{}/{SKILL_FILE}", directory.display());
+    // The leaf is the manifest as the author spelled it; the join stays a forward slash, the
+    // reporting convention on every platform.
+    skill.document = format!(
+        "{}/{}",
+        directory.display(),
+        document_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(SKILL_FILE)
+    );
 
-    if skill.name.is_empty() {
+    if !skill.name_declared && skill.name.is_empty() {
         // The directory name is what an agent would see if the frontmatter is silent, and it makes
-        // every message about the skill say which skill.
+        // every message about the skill say which skill. It is display text only: the name rules
+        // still report the declaration the frontmatter never made.
         skill.name = directory
             .file_name()
             .and_then(|name| name.to_str())
@@ -203,13 +283,15 @@ fn read_bundle(directory: &Path) -> Result<(Vec<BundledFile>, Vec<String>)> {
     for entry in WalkDir::new(directory)
         .follow_links(false)
         .into_iter()
-        .filter_entry(|entry| !is_never_a_skill(entry.path()))
+        .filter_entry(|entry| entry.depth() == 0 || !is_never_a_skill(entry.path()))
     {
         let entry = entry?;
         if !entry.file_type().is_file() {
             continue;
         }
-        if entry.file_name() == SKILL_FILE && entry.path().parent() == Some(directory) {
+        // A manifest belongs to the skill whose directory holds it. A nested skill's SKILL.md is
+        // that skill's document — wherever it sits below this one — never content of this bundle.
+        if entry.file_name().eq_ignore_ascii_case(SKILL_FILE) {
             continue;
         }
 
@@ -280,6 +362,7 @@ pub fn parse(source: &str) -> Skill {
         source: source.to_string(),
         frontmatter_lines: 0,
         has_frontmatter: false,
+        name_declared: false,
         name: String::new(),
         description: String::new(),
         body: source.to_string(),
@@ -291,17 +374,29 @@ pub fn parse(source: &str) -> Skill {
     };
 
     let normalised = source.strip_prefix('\u{feff}').unwrap_or(source);
-    if !normalised.starts_with("---") {
+
+    // Leading blank lines are a copy-paste artifact, not a verdict: locate the opening delimiter
+    // wherever the blank lines end, so a well-formed block is never misread as absent.
+    let leading_blank = normalised
+        .lines()
+        .take_while(|line| line.trim().is_empty())
+        .count();
+    let opens_frontmatter = normalised
+        .lines()
+        .nth(leading_blank)
+        .is_some_and(|line| line.trim_end() == "---");
+
+    if !opens_frontmatter {
         skill.notes.push(
             "No frontmatter: the name and description an agent selects on are not declared.".into(),
         );
         return skill;
     }
 
-    let mut lines = normalised.lines();
+    let mut lines = normalised.lines().skip(leading_blank);
     lines.next();
 
-    let mut consumed = 1;
+    let mut consumed = 1 + leading_blank;
     let mut closed = false;
     let mut frontmatter = String::new();
 
@@ -366,6 +461,9 @@ fn read_frontmatter(skill: &mut Skill, document: Option<&Yaml>) {
 
         match key {
             "name" => {
+                // Declared is not the same as present: an empty or mistyped value stays the
+                // author's problem, reported by the rules, not papered over here.
+                skill.name_declared = true;
                 if let Some(text) = scalar_string(value) {
                     skill.name = text;
                 }
@@ -614,6 +712,23 @@ mod tests {
     }
 
     #[test]
+    fn a_blank_line_before_the_frontmatter_does_not_hide_it() {
+        // Regression for #254: a leading blank line is a copy-paste artifact, and a well-formed
+        // block two lines down was misdiagnosed as "No frontmatter", sending the author looking
+        // for a missing name and description that are plainly there.
+        let skill = parse(
+            "\n---\nname: photo-culling\ndescription: Culls a shoot. Use when triaging RAW files.\n---\n\n## Culling\n\n1. Import.\n",
+        );
+
+        assert!(skill.has_frontmatter);
+        assert_eq!(skill.name, "photo-culling");
+        assert!(skill.notes.is_empty(), "{:?}", skill.notes);
+        assert!(skill.body.starts_with("\n## Culling"));
+        // Line mapping still lands on the file, blank line counted.
+        assert_eq!(skill.document_line(2), 7);
+    }
+
+    #[test]
     fn a_document_with_no_frontmatter_says_so_instead_of_failing() {
         let skill = parse("# Just a heading\n\nSome instructions.\n");
 
@@ -658,7 +773,7 @@ mod tests {
         fs::create_dir_all(&skill).unwrap();
         fs::write(skill.join(SKILL_FILE), DOCUMENT).unwrap();
 
-        let discovery = discover(std::slice::from_ref(&skill), &GlobSet::empty()).unwrap();
+        let discovery = discover(std::slice::from_ref(&skill), &Ignore::empty()).unwrap();
         assert_eq!(discovery.directories, vec![skill]);
         assert!(discovery.skipped.is_empty());
     }
@@ -678,7 +793,7 @@ mod tests {
         fs::create_dir_all(&hidden).unwrap();
         fs::write(hidden.join(SKILL_FILE), DOCUMENT).unwrap();
 
-        let discovery = discover(&[root.to_path_buf()], &GlobSet::empty()).unwrap();
+        let discovery = discover(&[root.to_path_buf()], &Ignore::empty()).unwrap();
 
         assert_eq!(discovery.directories.len(), 2);
         assert!(
@@ -686,6 +801,40 @@ mod tests {
                 .directories
                 .iter()
                 .all(|path| !path.to_string_lossy().contains("node_modules"))
+        );
+    }
+
+    #[test]
+    fn discovery_skips_dot_directories_it_was_not_told_to_enter() {
+        // Regression for #268: only a fixed six-name denylist used to be skipped, so tool and
+        // editor state directories (.mystuff, .cache, .worktrees, …) had any skill inside them
+        // linted twice or presented as first-class. Everything dotted stays out of the walk; an
+        // explicit path argument is still entered, because being asked for is the opt-in.
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path();
+
+        let visible = root.join("skills").join("one");
+        fs::create_dir_all(&visible).unwrap();
+        fs::write(visible.join(SKILL_FILE), DOCUMENT).unwrap();
+
+        for hidden in [
+            ".mystuff/nested-skill",
+            ".cache/kept-skill",
+            ".worktrees/wt",
+        ] {
+            let directory = root.join(hidden);
+            fs::create_dir_all(&directory).unwrap();
+            fs::write(directory.join(SKILL_FILE), DOCUMENT).unwrap();
+        }
+
+        let discovery = discover(&[root.to_path_buf()], &Ignore::empty()).unwrap();
+        assert_eq!(discovery.directories, vec![visible]);
+
+        // Naming a dot-directory yourself is the opt-in: it is walked like any other argument.
+        let explicit = discover(&[root.join(".mystuff")], &Ignore::empty()).unwrap();
+        assert_eq!(
+            explicit.directories,
+            vec![root.join(".mystuff").join("nested-skill")]
         );
     }
 
@@ -707,6 +856,40 @@ mod tests {
         assert!(discovery.directories[0].ends_with("kept"));
     }
 
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/39 —
+    /// `!pattern` takes a path back from the list, in whatever order the two were written.
+    #[test]
+    fn a_negated_pattern_takes_a_path_back_from_the_ignore_list() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path();
+
+        let keep = root.join("fixtures").join("keep-me");
+        let drop = root.join("fixtures").join("drop-me");
+        fs::create_dir_all(&keep).unwrap();
+        fs::create_dir_all(&drop).unwrap();
+        fs::write(keep.join(SKILL_FILE), DOCUMENT).unwrap();
+        fs::write(drop.join(SKILL_FILE), DOCUMENT).unwrap();
+
+        for patterns in [
+            vec!["**/fixtures/**", "!**/fixtures/keep-me/**"],
+            vec!["!**/fixtures/keep-me/**", "**/fixtures/**"],
+        ] {
+            let patterns: Vec<String> = patterns.iter().map(|one| one.to_string()).collect();
+            let ignore = build_ignore(&patterns).unwrap();
+            let discovery = discover(&[root.to_path_buf()], &ignore).unwrap();
+            assert_eq!(
+                discovery.directories,
+                vec![keep.clone()],
+                "for {patterns:?}"
+            );
+        }
+
+        // A negation with nothing to negate changes nothing.
+        let ignore = build_ignore(&["!**/fixtures/keep-me/**".to_string()]).unwrap();
+        let discovery = discover(&[root.to_path_buf()], &ignore).unwrap();
+        assert_eq!(discovery.directories.len(), 2);
+    }
+
     #[test]
     fn a_malformed_ignore_glob_names_the_pattern_and_fails() {
         let failure = match build_ignore(&["[invalid-glob".to_string()]) {
@@ -726,7 +909,7 @@ mod tests {
         let document = directory.join(SKILL_FILE);
         fs::write(&document, DOCUMENT).unwrap();
 
-        let discovery = discover(&[document], &GlobSet::empty()).unwrap();
+        let discovery = discover(&[document], &Ignore::empty()).unwrap();
         assert_eq!(discovery.directories, vec![directory]);
         assert!(discovery.skipped.is_empty());
     }
@@ -739,7 +922,7 @@ mod tests {
         let file = temporary.path().join("random.txt");
         fs::write(&file, "hello\n").unwrap();
 
-        let discovery = discover(std::slice::from_ref(&file), &GlobSet::empty()).unwrap();
+        let discovery = discover(std::slice::from_ref(&file), &Ignore::empty()).unwrap();
 
         assert!(discovery.directories.is_empty());
         assert_eq!(
@@ -806,6 +989,67 @@ mod tests {
 
         let script = skill.file("scripts/cull.py").unwrap();
         assert!(script.text.is_some(), "files under the cap are still read");
+    }
+
+    #[test]
+    fn a_manifest_written_in_another_case_is_still_the_document() {
+        // Regression for #267: `skill.md` and `Skill.MD` are the manifest with the letters the
+        // author happened to type. Discovery and the reader must both take them, and the report
+        // must name the file as it is written, not as the constant spells it.
+        let temporary = tempfile::tempdir().unwrap();
+
+        for (directory, file) in [("lower", "skill.md"), ("mixed", "Skill.MD")] {
+            let path = temporary.path().join(directory);
+            fs::create_dir_all(&path).unwrap();
+            fs::write(path.join(file), DOCUMENT).unwrap();
+
+            let walked = discover(&[temporary.path().to_path_buf()], &Ignore::empty()).unwrap();
+            assert!(
+                walked.directories.contains(&path),
+                "walking must find {file}: {:?}",
+                walked.directories
+            );
+
+            let taken = discover(std::slice::from_ref(&path), &Ignore::empty()).unwrap();
+            assert_eq!(taken.directories, vec![path.clone()], "for {file}");
+
+            // The file is read and parsed whatever the case. The leaf inside `document` follows what
+            // the platform's filesystem reports — case-sensitive ones keep the author's case,
+            // case-insensitive ones may report the canonical name — and it is reached through a
+            // forward-slash join, the reporting convention on every platform.
+            let skill = read(&path).unwrap();
+            assert_eq!(skill.name, "photo-culling", "for {file}");
+
+            let leaf = skill.document.rsplit('/').next().unwrap_or_default();
+            assert!(
+                leaf.eq_ignore_ascii_case(SKILL_FILE),
+                "for {file}: {}",
+                skill.document
+            );
+        }
+    }
+
+    #[test]
+    fn a_nested_manifest_is_not_bundle_content_of_the_enclosing_skill() {
+        // Regression for #269: inner/SKILL.md belongs to the inner skill. Counting it as a file
+        // the outer skill ships produces nonsensical advice about moving another skill's document
+        // into scripts/ or references/.
+        let temporary = tempfile::tempdir().unwrap();
+        let outer = temporary.path().join("outer");
+        fs::create_dir_all(outer.join("inner")).unwrap();
+        fs::write(outer.join(SKILL_FILE), DOCUMENT).unwrap();
+        fs::write(outer.join("inner").join(SKILL_FILE), DOCUMENT).unwrap();
+
+        let skill = read(&outer).unwrap();
+
+        assert!(
+            skill
+                .files
+                .iter()
+                .all(|file| !file.path.ends_with(SKILL_FILE)),
+            "no manifest belongs to the outer bundle: {:?}",
+            skill.files
+        );
     }
 
     #[test]
