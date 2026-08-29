@@ -96,9 +96,10 @@ pub struct Discovery {
 /// Every skill under the given paths.
 ///
 /// A path that is itself a skill directory is taken as one; anything else is walked. Directories
-/// that are never a skill — `.git`, `node_modules`, `target` — are skipped without being configured,
-/// because nobody has ever wanted them linted. A file argument that is not a `SKILL.md` is not an
-/// error, but it is reported back so the run can say it linted nothing rather than everything.
+/// that are never a skill — everything dotted, `node_modules`, `target` — are skipped without being
+/// configured, because nobody has ever wanted them linted; naming one yourself is the opt-in. A
+/// file argument that is not a `SKILL.md` is not an error, but it is reported back so the run can
+/// say it linted nothing rather than everything.
 pub fn discover(paths: &[PathBuf], ignore: &GlobSet) -> Result<Discovery> {
     let mut discovery = Discovery::default();
 
@@ -129,7 +130,7 @@ pub fn discover(paths: &[PathBuf], ignore: &GlobSet) -> Result<Discovery> {
         for entry in WalkDir::new(path)
             .follow_links(false)
             .into_iter()
-            .filter_entry(|entry| !is_never_a_skill(entry.path()))
+            .filter_entry(|entry| entry.depth() == 0 || !is_never_a_skill(entry.path()))
         {
             let entry = entry.with_context(|| format!("walking {}", path.display()))?;
             if !entry.file_type().is_file() {
@@ -173,10 +174,14 @@ fn find_manifest(directory: &Path) -> Option<PathBuf> {
 }
 
 fn is_never_a_skill(path: &Path) -> bool {
-    matches!(
-        path.file_name().and_then(|name| name.to_str()),
-        Some(".git" | "node_modules" | "target" | "dist" | ".venv" | "__pycache__")
-    )
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+
+    // Everything dotted is tool and editor state — caches, checkouts of this very repository,
+    // config directories — and linting it reports the same skill twice under two paths. The named
+    // build outputs are the same story without the dot.
+    name.starts_with('.') || matches!(name, "node_modules" | "target" | "dist" | "__pycache__")
 }
 
 pub fn build_ignore(patterns: &[String]) -> Result<GlobSet> {
@@ -224,7 +229,7 @@ fn read_bundle(directory: &Path) -> Result<(Vec<BundledFile>, Vec<String>)> {
     for entry in WalkDir::new(directory)
         .follow_links(false)
         .into_iter()
-        .filter_entry(|entry| !is_never_a_skill(entry.path()))
+        .filter_entry(|entry| entry.depth() == 0 || !is_never_a_skill(entry.path()))
     {
         let entry = entry?;
         if !entry.file_type().is_file() {
