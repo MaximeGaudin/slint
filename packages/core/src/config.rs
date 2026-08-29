@@ -9,11 +9,13 @@
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize, Serializer};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use crate::diagnostics::Severity;
+use crate::plugin::Plugin;
+use crate::rules;
 
 /// The names a configuration file can have, in the order they are looked for.
 pub const CONFIG_NAMES: [&str; 4] = [
@@ -454,6 +456,46 @@ fn setting_from(rule: &str, value: &serde_json::Value) -> Result<RuleSetting> {
     }
 }
 
+/// Refuses a config that sets a rule that does not exist.
+///
+/// A setting for a rule that does not exist is never consulted — the lookup is by exact name —
+/// so without this check the key is a no-op in the file the user edited, with zero diagnostic.
+/// Refusing the run is the same way an unknown severity or provider is already refused in this
+/// file.
+///
+/// The check stands down when it cannot see every rule the config may point at: a Wasm plugin
+/// declares its rules by reporting them, and a plugin set that was not loaded (`--no-plugins`)
+/// still leaves its rule names in the config.
+pub fn check_rule_names(config: &Config, plugins: &[Plugin]) -> Result<()> {
+    let wasm_loaded = plugins
+        .iter()
+        .any(|plugin| matches!(plugin, Plugin::Wasm { .. }));
+    let plugins_skipped = !config.plugins.is_empty() && plugins.is_empty();
+
+    if wasm_loaded || plugins_skipped {
+        return Ok(());
+    }
+
+    let mut known: BTreeSet<String> = rules::all_meta()
+        .iter()
+        .map(|meta| meta.name.to_string())
+        .collect();
+
+    for plugin in plugins {
+        known.extend(plugin.rule_names());
+    }
+
+    for name in config.rules.keys() {
+        if !known.contains(name) {
+            bail!(
+                "{name}: no such rule. The setting would do nothing — check the name with `slint rules`."
+            );
+        }
+    }
+
+    Ok(())
+}
+
 /// `--rule name=level` from the command line, which overrides the file.
 pub fn parse_override(text: &str) -> Result<(String, RuleSetting)> {
     let Some((name, level)) = text.split_once('=') else {
@@ -839,6 +881,76 @@ mod tests {
         assert!(config.rules.is_empty());
         assert_eq!(config.llm.provider, Provider::None);
         assert!(!config.llm.is_configured());
+    }
+
+    #[test]
+    fn a_rule_name_that_no_loaded_rule_answers_for_is_refused() {
+        let mut config = Config::default();
+        config
+            .rules
+            .insert("name/not-genric".into(), RuleSetting::Off);
+
+        let failure = check_rule_names(&config, &[]).unwrap_err().to_string();
+
+        assert!(failure.contains("name/not-genric"), "{failure}");
+        assert!(failure.contains("slint rules"), "{failure}");
+    }
+
+    #[test]
+    fn rule_names_the_catalogue_and_a_loaded_pack_define_are_accepted() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("pack.toml");
+        fs::write(
+            &path,
+            "[[rules]]\nname = \"house/no-todo\"\nseverity = \"warning\"\nsummary = \"No TODO markers.\"\nrationale = \"A TODO reads as an instruction that was not followed.\"\nadvice = \"Finish the step.\"\npattern = \"TODO\"\ntarget = \"body\"\nreference = { title = \"House style\", url = \"https://example.com/style\" }\n",
+        )
+        .unwrap();
+
+        let plugin = crate::plugin::load(
+            &PluginRef {
+                path: "pack.toml".into(),
+            },
+            temporary.path(),
+        )
+        .unwrap();
+
+        let mut config = Config::default();
+        config
+            .rules
+            .insert("body/posix-paths".into(), RuleSetting::Off);
+        config
+            .rules
+            .insert("llm/consistent-terminology".into(), RuleSetting::Off);
+        config
+            .rules
+            .insert("house/no-todo".into(), RuleSetting::Off);
+
+        assert!(check_rule_names(&config, &[plugin]).is_ok());
+    }
+
+    #[test]
+    fn a_name_a_wasm_plugin_might_provide_is_not_refused() {
+        let plugin = crate::plugin::Plugin::Wasm {
+            path: std::path::PathBuf::from("plugin.wasm"),
+        };
+
+        let mut config = Config::default();
+        config.rules.insert("who/knows".into(), RuleSetting::Off);
+
+        assert!(check_rule_names(&config, &[plugin]).is_ok());
+    }
+
+    #[test]
+    fn a_pack_rule_name_is_not_refused_when_the_plugins_were_skipped() {
+        let mut config = Config::default();
+        config.plugins.push(PluginRef {
+            path: "house.toml".into(),
+        });
+        config
+            .rules
+            .insert("house/no-todo".into(), RuleSetting::Off);
+
+        assert!(check_rule_names(&config, &[]).is_ok());
     }
 
     /// Regression for https://github.com/MaximeGaudin/slint/issues/26 —

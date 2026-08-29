@@ -228,6 +228,8 @@ fn run(cli: &Cli) -> Result<u8> {
         plugin::load_all(&config)?
     };
 
+    config::check_rule_names(&config, &plugins)?;
+
     if cli.verbose {
         say_what_the_run_is(&config, &plugins, cli);
     }

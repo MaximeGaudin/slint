@@ -546,6 +546,31 @@ fn a_config_file_is_found_by_walking_up_from_the_path_being_linted() {
     assert!(!stdout(&output).contains("name/not-generic"));
 }
 
+/// Regression for https://github.com/MaximeGaudin/slint/issues/28 —
+/// a setting for a rule that does not exist used to be stored and never consulted, a no-op
+/// with zero diagnostic.
+#[test]
+fn a_typo_d_rule_name_in_the_config_fails_the_run_and_names_it() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(
+        temporary.path().join("slint.toml"),
+        "[rules]\n\"name/not-genric\" = \"off\"\n",
+    )
+    .unwrap();
+
+    write(temporary.path(), "photo-culling", GOOD);
+
+    let output = slint(&[temporary.path().to_str().unwrap(), "--no-llm"]);
+
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "a setting for a rule that does not exist must fail the run: {stderr}"
+    );
+    assert!(stderr.contains("name/not-genric"), "{stderr}");
+}
+
 /// Regression for https://github.com/MaximeGaudin/slint/issues/26 —
 /// `[rule]` instead of `[rules]` used to load as if the config file were empty, and the run
 /// went on as if no config had been written.
