@@ -4,7 +4,7 @@
 //! exists, and whether a file that exists is one anything reads.
 
 use regex::Regex;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
 
 use crate::diagnostics::{Fix, Location, Reference, Severity};
@@ -501,26 +501,42 @@ impl Rule for NoDangling {
             .collect();
         let body = context.skill.body.clone();
 
-        for path in paths_in(&body) {
-            // data/, templates/ and reference/ are slint extras, not spec directories: a prose
-            // mention of them usually names the user's own files, not a file to be shipped.
-            if !is_in_spec_directory(&path) {
+        // A fenced block illustrates a path rather than naming one — the same way
+        // body/posix-paths reads fences — so nothing inside ``` or ~~~ is a promise to
+        // ship a file.
+        let mut in_fence = false;
+        let mut dangling: BTreeMap<String, usize> = BTreeMap::new();
+
+        for (index, line) in body.lines().enumerate() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+                in_fence = !in_fence;
+                continue;
+            }
+            if in_fence {
                 continue;
             }
 
-            if bundled.contains(&path) {
-                continue;
+            for path in paths_in(line) {
+                // data/, templates/ and reference/ are slint extras, not spec directories: a
+                // prose mention of them usually names the user's own files, not a file to
+                // be shipped.
+                if !is_in_spec_directory(&path) {
+                    continue;
+                }
+
+                if bundled.contains(&path) {
+                    continue;
+                }
+
+                dangling.entry(path).or_insert(index);
             }
+        }
 
-            let line = body
-                .lines()
-                .position(|line| line.contains(&path))
-                .map(|index| context.skill.document_line(index + 1))
-                .unwrap_or(1);
-
+        for (path, index) in dangling {
             context.report(
                 format!("The instructions name {path}, which is not in the bundle"),
-                Location::at(line, 1),
+                Location::at(context.skill.document_line(index + 1), 1),
             );
         }
     }
