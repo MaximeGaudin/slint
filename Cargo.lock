@@ -2958,6 +2958,7 @@ dependencies = [
  "owo-colors",
  "rayon",
  "regex",
+ "reqwest",
  "schemars 1.2.2",
  "serde",
  "serde_json",

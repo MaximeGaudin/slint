@@ -204,8 +204,11 @@ pub fn lint_project(skills: &[Skill], config: &Config) -> Vec<Message> {
     messages
 }
 
-/// What the model pass does for one skill, and the seam its tests swap a fake in through.
-type ModelReview = dyn Fn(&Skill, &Config) -> Result<(Vec<Message>, Vec<String>)> + Send + Sync;
+/// What the model pass does for one skill, and the seam its tests swap a fake in through. The
+/// shared client is resolved by the caller, so a run pays for one client (and one runtime) no
+/// matter how many skills it reviews.
+type ModelReview<'a> =
+    dyn Fn(&Skill, &Config) -> Result<(Vec<Message>, Vec<String>)> + Send + Sync + 'a;
 
 /// Reads, lints and reports on every skill under the given paths.
 pub fn run(
@@ -214,9 +217,20 @@ pub fn run(
     plugins: &[Plugin],
     passes: Passes,
 ) -> Result<Report> {
-    run_with_reviewer(paths, config, plugins, passes, &|skill, config| {
-        llm::review(skill, config)
-    })
+    // One client, one runtime, one limiter for the whole pass: a client per skill pays a fresh
+    // TLS handshake per request and answers to no one about how many of them run at once.
+    let shared = llm::GenAiChat::new(&config.llm);
+    match &shared {
+        Ok(client) => run_with_reviewer(paths, config, plugins, passes, &|skill, cfg| {
+            llm::review_shared(client, skill, cfg)
+        }),
+        Err(failure) => {
+            let message = format!("{failure:#}");
+            run_with_reviewer(paths, config, plugins, passes, &move |_skill, _cfg| {
+                Err(anyhow::anyhow!("{message}"))
+            })
+        }
+    }
 }
 
 /// The same, with the model pass injectable — which is how its degradation behaviour is tested
@@ -226,7 +240,7 @@ pub fn run_with_reviewer(
     config: &Config,
     plugins: &[Plugin],
     passes: Passes,
-    review: &ModelReview,
+    review: &ModelReview<'_>,
 ) -> Result<Report> {
     let ignore = skill::build_ignore(&config.ignore)?;
     let discovery = skill::discover(paths, &ignore)?;
@@ -417,6 +431,67 @@ mod tests {
         let suppressions = Suppressions::read(&source);
 
         assert!(suppressions.file.contains("body/posix-paths"));
+    }
+
+    #[test]
+    fn the_model_pass_runs_one_bounded_request_per_skill() {
+        use crate::llm::mock::MockServer;
+        use std::sync::atomic::Ordering;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let server = MockServer::start(MockServer::ollama_reply(), false);
+        let temporary = tempfile::tempdir().unwrap();
+        // A salt keeps this run's prompts out of the reply cache earlier runs may have warmed:
+        // every request here must really reach the mock, not an entry on disk.
+        let salt = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        for index in 0..6 {
+            let body = GOOD
+                .replace("photo-culling", &format!("skill-{index}"))
+                .replace(
+                    "Import the RAW files.",
+                    &format!("Import shoot {salt}-{index}."),
+                );
+            write_skill(temporary.path(), &format!("skill-{index}"), &body);
+        }
+
+        let mut config = Config::default();
+        config.llm.provider = crate::config::Provider::Ollama;
+        config.llm.model = "llama3.2".into();
+        config.llm.base_url = Some(format!("http://{}/v1", server.address));
+        config.llm.max_concurrent_requests = 2;
+
+        let report = run(
+            &[temporary.path().to_path_buf()],
+            &config,
+            &[],
+            Passes {
+                plugins: false,
+                model: true,
+            },
+        )
+        .expect("every skill reviews clean against the mock provider");
+
+        assert_eq!(server.requests.load(Ordering::SeqCst), 6);
+        let observed = server.max_in_flight.load(Ordering::SeqCst);
+        assert!(
+            observed <= 2,
+            "the model pass must hold requests back, not let {observed} run at once"
+        );
+        assert!(
+            report
+                .skills
+                .iter()
+                .all(|one| !one.notes.iter().any(|note| note.contains("asking"))),
+            "no skill may carry a provider failure note: {:?}",
+            report
+                .skills
+                .iter()
+                .flat_map(|one| &one.notes)
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]

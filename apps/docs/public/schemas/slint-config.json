@@ -12,12 +12,33 @@
           "description": "Overrides the provider's own address. This is what makes a local model or a gateway work.",
           "type": ["string", "null"]
         },
+        "max_concurrent_requests": {
+          "default": 4,
+          "description": "How many model requests may be in flight at once. One per skill is how a large repository\nmeets a provider's rate limit in the first second.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
         "max_input_bytes": {
           "default": 65536,
           "description": "Bodies longer than this are truncated before they are sent, and the report says so.",
           "format": "uint",
           "minimum": 0,
           "type": "integer"
+        },
+        "max_retries": {
+          "default": 2,
+          "description": "Transport-level failures (rate limits, 5xx, connection errors) are retried this many times\nwith backoff before the failure becomes what the run does about it.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_tokens": {
+          "default": null,
+          "description": "Cap on the tokens the model may spend on its reply. None leaves the cap to the provider.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": ["integer", "null"]
         },
         "model": {
           "default": "",
@@ -108,7 +129,10 @@
       "default": {
         "api_key_env": null,
         "base_url": null,
+        "max_concurrent_requests": 4,
         "max_input_bytes": 65536,
+        "max_retries": 2,
+        "max_tokens": null,
         "model": "",
         "provider": "none",
         "timeout_seconds": 90
