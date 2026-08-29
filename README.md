@@ -9,7 +9,7 @@
 
 It is built for terminals, CI, and editors:
 
-- **Static first** — twenty-nine of thirty-seven rules never touch a model; no network, no tokens, no waiting
+- **Static first** — thirty-four of forty-two rules never touch a model; no network, no tokens, no waiting
 - **Cited findings** — every rule names the document its claim comes from; the citation travels into every output format
 - **Computed fixes** — `--fix` normalises paths, sets executable bits, writes contents lists; a model never edits your files
 - **Optional LLM pass** — eight rules that need a reader run only when you pass `--llm`, as their own pass
@@ -229,7 +229,7 @@ pnpm dev:docs             # Astro docs at http://localhost:4321
 
 Coverage needs `[cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov)` and the `llvm-tools-preview` rustup component (`rustup component add llvm-tools-preview && cargo install cargo-llvm-cov --locked`).
 
-`slint rules` prints the catalogue. `slint rules --json` feeds the docs site, so the site and the binary never disagree about what a rule does.
+`slint rules` prints the catalogue. `slint rules --json` feeds the docs site, and CI fails when `apps/docs/src/data/rules.json` no longer matches the binary's catalogue, so the site and the binary never disagree about what a rule does.
 
 More detail: `[apps/docs/README.md](apps/docs/README.md)`.
 
