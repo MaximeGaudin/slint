@@ -913,6 +913,22 @@ mod tests {
         }
     }
 
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/101 — a path in a fenced
+    /// example illustrates a convention; it is not a promise to ship a file.
+    #[test]
+    fn an_illustrative_path_inside_a_fenced_block_is_not_a_bundle_promise() {
+        for (open, close) in [("```text", "```"), ("~~~", "~~~")] {
+            let skill = skill_with_body(&format!(
+                "\n## Steps\n\n1. Run the conversion.\n\n{open}\nBefore: scripts\\legacy\\run.bat\nAfter: scripts/legacy/run.py\n{close}\n",
+            ));
+
+            assert!(
+                check(&DANGLING_RULE, &skill).is_empty(),
+                "for {open}{close}"
+            );
+        }
+    }
+
     #[test]
     fn a_path_that_is_not_in_the_bundle_is_an_error() {
         let skill = skill_with_body("\n## Culling\n\nRun scripts/cull.py when you are done.\n");
