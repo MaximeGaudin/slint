@@ -313,27 +313,52 @@ impl Rule for SaysWhen {
     }
 }
 
+/// The crude stem a word-form collapses to: "culls", "culling" and "cull" compare equal, so a
+/// description cannot slip the name past the removal by inflecting it. Only endings that
+/// regularly mark an inflection are stripped, and only when what remains is still a word —
+/// "using" stays whole, "culling" collapses to "cull".
+fn stem(word: &str) -> &str {
+    for (suffix, minimum) in [("ing", 4), ("ed", 4), ("es", 4), ("s", 4)] {
+        if let Some(stemmed) = word.strip_suffix(suffix)
+            && stemmed.chars().count() >= minimum
+        {
+            return stemmed;
+        }
+    }
+
+    word
+}
+
 impl Rule for NotJustName {
     fn meta(&self) -> &'static RuleMeta {
         &NOT_JUST_NAME
     }
 
     fn check(&self, context: &mut RuleContext<'_>) {
-        let name = context.skill.name.replace('-', " ").to_ascii_lowercase();
+        let name = context.skill.name.to_ascii_lowercase();
         let description = context.skill.description.trim().to_ascii_lowercase();
 
         if name.is_empty() || description.is_empty() {
             return;
         }
 
-        let stripped = description
-            .replace(&name, "")
-            .chars()
-            .filter(|character| character.is_alphanumeric())
-            .count();
+        let name_stems: Vec<&str> = name
+            .split(|character: char| !character.is_alphanumeric())
+            .filter(|word| !word.is_empty())
+            .map(stem)
+            .collect();
 
-        // What is left once the name is removed is what the description actually contributed.
-        if stripped < 24 {
+        // Every form of the name is the name's own words, contributed in full by the field
+        // the agent already sees. What is left once they are gone is what the description
+        // actually added.
+        let contributed: usize = description
+            .split(|character: char| !character.is_alphanumeric())
+            .filter(|word| !word.is_empty())
+            .filter(|word| !name_stems.contains(&stem(word)))
+            .map(|word| word.chars().filter(|c| c.is_alphanumeric()).count())
+            .sum();
+
+        if contributed < 24 {
             context.report("The description repeats the name and stops", at(context));
         }
     }
