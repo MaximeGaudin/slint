@@ -460,8 +460,19 @@ const STANDARD_DIRECTORY_PREFIXES: &[&str] = &[
     "data/",
 ];
 
+/// The optional directories the Agent Skills specification names. Only a mention of one of these
+/// in the instructions is a promise to ship the file; the slint extras (data/, templates/,
+/// reference/) are generic words that prose often uses for the user's own files.
+const SPEC_DIRECTORY_PREFIXES: &[&str] = &["scripts/", "references/", "assets/"];
+
 fn is_in_standard_directory(path: &str) -> bool {
     STANDARD_DIRECTORY_PREFIXES
+        .iter()
+        .any(|prefix| path.starts_with(prefix))
+}
+
+fn is_in_spec_directory(path: &str) -> bool {
+    SPEC_DIRECTORY_PREFIXES
         .iter()
         .any(|prefix| path.starts_with(prefix))
 }
@@ -491,6 +502,12 @@ impl Rule for NoDangling {
         let body = context.skill.body.clone();
 
         for path in paths_in(&body) {
+            // data/, templates/ and reference/ are slint extras, not spec directories: a prose
+            // mention of them usually names the user's own files, not a file to be shipped.
+            if !is_in_spec_directory(&path) {
+                continue;
+            }
+
             if bundled.contains(&path) {
                 continue;
             }
@@ -904,6 +921,50 @@ mod tests {
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].severity, Severity::Error);
         assert!(messages[0].message.contains("scripts/cull.py"));
+    }
+
+    #[test]
+    fn a_generic_data_directory_in_prose_is_not_a_bundle_promise() {
+        // Regression for https://github.com/MaximeGaudin/slint/issues/76: data/ is not one of the
+        // Agent Skills optional directories (scripts/, references/, assets/), so a prose mention
+        // of the user's own data/... is not a promise to ship that file.
+        let skill = skill_with_body(
+            "\n## Steps\n\n1. Read the data/sales.csv the user provides and merge it with data/inventory.csv.\n",
+        );
+
+        assert!(
+            check(&DANGLING_RULE, &skill).is_empty(),
+            "a generic data/ mention must not dangle"
+        );
+    }
+
+    #[test]
+    fn a_dangling_path_in_a_spec_directory_is_still_an_error() {
+        for path in [
+            "scripts/cull.py",
+            "references/formats.md",
+            "assets/logo.png",
+        ] {
+            let skill =
+                skill_with_body(&format!("\n## Culling\n\nRun {path} when you are done.\n"));
+            let messages = check(&DANGLING_RULE, &skill);
+
+            assert_eq!(messages.len(), 1, "for {path}");
+            assert!(messages[0].message.contains(path), "for {path}");
+        }
+    }
+
+    #[test]
+    fn a_bundled_data_file_referenced_in_the_body_is_not_unused() {
+        let mut skill = skill_with_body(
+            "\n## Culling\n\nRun scripts/cull.py, which reads data/defaults.json.\n",
+        );
+        skill
+            .files
+            .push(file("scripts/cull.py", "print(1)\n", true));
+        skill.files.push(file("data/defaults.json", "{}\n", false));
+
+        assert!(check(&UNUSED_RULE, &skill).is_empty());
     }
 
     #[test]
