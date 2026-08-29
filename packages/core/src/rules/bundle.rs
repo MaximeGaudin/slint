@@ -816,7 +816,17 @@ fn with_contents(text: &str) -> Option<String> {
     let mut fenced = false;
 
     for (index, line) in lines.iter().enumerate() {
-        let opening = line.trim_start();
+        // A byte-order mark rides on the file's first line, ahead of anything it means to say.
+        // Looking past it is the same tolerance the parser applies when it strips the mark before
+        // reading frontmatter — and the mark itself stays in the text, since only the scan sees
+        // the stripped line.
+        let prose = if index == 0 {
+            line.strip_prefix('\u{feff}').unwrap_or(line)
+        } else {
+            line
+        };
+
+        let opening = prose.trim_start();
         if opening.starts_with("```") || opening.starts_with("~~~") {
             fenced = !fenced;
             continue;
@@ -826,9 +836,9 @@ fn with_contents(text: &str) -> Option<String> {
             continue;
         }
 
-        if line.starts_with("## ") {
-            headings.push(format!("- {}", line.trim_start_matches("## ")));
-        } else if title_after.is_none() && line.starts_with("# ") {
+        if prose.starts_with("## ") {
+            headings.push(format!("- {}", prose.trim_start_matches("## ")));
+        } else if title_after.is_none() && prose.starts_with("# ") {
             // After the title if there is one, which is where a reader looks for a contents list.
             title_after = Some(index + 1);
         }
