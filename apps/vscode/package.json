@@ -42,6 +42,18 @@
     "onCommand:slint.showOutput"
   ],
   "main": "./out/extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "restrictedConfigurations": [
+        "slint.path",
+        "slint.arguments",
+        "slint.llm.provider",
+        "slint.llm.model",
+        "slint.llm.apiKey"
+      ]
+    }
+  },
   "contributes": {
     "configuration": {
       "title": "slint",

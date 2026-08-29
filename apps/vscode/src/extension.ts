@@ -12,6 +12,7 @@ import { ignoreEditsForFinding, ruleIdFromCode } from './ignore.js'
 import { LintQueue, LintRunCoordinator, type StatusUpdate } from './lint-runs.js'
 import { ruleOverridesArgv } from './rules-setting.js'
 import { isUnderAnyRoot } from './skill-paths.js'
+import { mayRunBinary } from './trust.js'
 
 const run = promisify(execFile)
 
@@ -287,6 +288,10 @@ async function lint(
   target: string,
   options: { model: boolean; resource?: vscode.Uri },
 ): Promise<void> {
+  // The binary is external and workspace settings steer it; it never runs in an untrusted
+  // workspace (VS Code keeps the extension inactive there; this guard is the in-code half).
+  if (!mayRunBinary(vscode.workspace.isTrusted)) return
+
   const { generation, signal } = runs.begin(target)
 
   const staticResult = await runPass(
@@ -797,6 +802,8 @@ function fixAllAction(
  * screen is what is on disk.
  */
 async function fixActiveDocument(): Promise<void> {
+  if (!mayRunBinary(vscode.workspace.isTrusted)) return
+
   const editor = vscode.window.activeTextEditor
 
   if (!editor || !isSkill(editor.document)) {
