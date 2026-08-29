@@ -89,7 +89,9 @@ struct Cli {
     #[arg(long, short)]
     quiet: bool,
 
-    /// Never colour the output. Colour is off automatically when stdout is not a terminal.
+    /// Never colour the output. Beyond the flag, colour follows the usual environment conventions:
+    /// NO_COLOR, CLICOLOR=0, and TERM=dumb turn it off; CLICOLOR_FORCE and FORCE_COLOR turn it on;
+    /// and a stdout that is not a terminal is plain.
     #[arg(long)]
     no_color: bool,
 
@@ -176,13 +178,56 @@ fn run(cli: &Cli) -> Result<u8> {
         }
     }
 
-    let colour = !cli.no_color && std::io::stdout().is_terminal();
+    let colour = colour_allowed(cli.no_color);
     let text = report::render(&report, cli.format, colour, cli.max_warnings);
 
     let mut stdout = std::io::stdout().lock();
-    writeln!(stdout, "{text}").context("writing the report")?;
+    match writeln!(stdout, "{text}").and_then(|()| stdout.flush()) {
+        Ok(()) => {}
+        // A downstream reader that hung up (`slint … | head`) is not a failure of the run: the
+        // report went wherever it was still wanted, and the Unix convention is to bow out
+        // quietly rather than complain about a pipe nobody is reading.
+        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => return Ok(code::CLEAN),
+        Err(error) => return Err(error).context("writing the report"),
+    }
 
     Ok(exit_code(&report, cli.max_warnings))
+}
+
+/// Whether the report may be coloured, from the flag, the environment, and stdout.
+///
+/// The conventions this follows are https://no-color.org and https://bixense.com/clicolors/, so
+/// slint behaves like every other tool in a pipeline. Highest first:
+///
+/// 1. `--no-color`, an explicit refusal on the command line.
+/// 2. NO_COLOR set to anything non-empty, CLICOLOR=0, or TERM=dumb — each turns colour off.
+/// 3. CLICOLOR_FORCE or FORCE_COLOR set to anything non-empty but "0" — colour on, even piped.
+/// 4. Otherwise colour only when stdout is a terminal.
+fn colour_allowed(no_color_flag: bool) -> bool {
+    if no_color_flag {
+        return false;
+    }
+
+    if std::env::var_os("NO_COLOR").is_some_and(|value| !value.is_empty()) {
+        return false;
+    }
+
+    if std::env::var("CLICOLOR").is_ok_and(|value| value == "0") {
+        return false;
+    }
+
+    if std::env::var("TERM").is_ok_and(|value| value == "dumb") {
+        return false;
+    }
+
+    let forced = ["CLICOLOR_FORCE", "FORCE_COLOR"]
+        .iter()
+        .any(|name| std::env::var(name).is_ok_and(|value| !value.is_empty() && value != "0"));
+    if forced {
+        return true;
+    }
+
+    std::io::stdout().is_terminal()
 }
 
 /// What the run means, as a number.
