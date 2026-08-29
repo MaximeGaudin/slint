@@ -275,6 +275,17 @@
     "reference_url": "https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices"
   },
   {
+    "name": "frontmatter/compatibility-max-length",
+    "summary": "Keep the compatibility field at or under 500 characters.",
+    "rationale": "The specification caps compatibility at 1–500 characters. A longer field is rejected by strict hosts, and an environment blurb that long is doing the body's job.",
+    "advice": "Shorten compatibility to the environment requirements only (example: \"Requires Python 3.11+ and docker\"), and move the rest into the body.",
+    "default_severity": "error",
+    "fixable": false,
+    "needs_model": false,
+    "reference_title": "The AgentSkill specification",
+    "reference_url": "https://agentskills.io/specification"
+  },
+  {
     "name": "frontmatter/key-format",
     "summary": "Frontmatter keys should be lowercase with hyphens (no spaces).",
     "rationale": "Keys with spaces or odd capitalization often fail to resolve when the skill is loaded.",
@@ -434,6 +445,17 @@
     "rationale": "Names like helper or utils give the agent nothing to match a user request against, and they collide with other generic skills.",
     "advice": "Rename it to the domain plus the action (example: cull-photos, not helper).",
     "default_severity": "warning",
+    "fixable": false,
+    "needs_model": false,
+    "reference_title": "Skill authoring best practices — Claude Docs",
+    "reference_url": "https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices"
+  },
+  {
+    "name": "project/consistent-naming-style",
+    "summary": "Skill names in the same project should follow one naming convention.",
+    "rationale": "The best-practices guide lists inconsistent patterns within a skill collection as an anti-pattern. Gerund names beside noun-phrase names read as an accident and make the collection harder to scan.",
+    "advice": "Pick one convention for the whole collection — the guide suggests the gerund form (verb + -ing, as in processing-pdfs) — and rename the outliers to match.",
+    "default_severity": "info",
     "fixable": false,
     "needs_model": false,
     "reference_title": "Skill authoring best practices — Claude Docs",
