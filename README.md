@@ -99,7 +99,7 @@ skills/photo-culling  1 error, 2 warnings
 1 of them are computed fixes: run again with --fix.
 ```
 
-Exit codes: `0` clean, `1` errors, `2` warnings only, `3` slint itself failed, `4` nothing was linted (no `SKILL.md` was found under the given path — check the path before trusting a green run). Running `slint init` when a config already exists is an idempotent no-op and exits `0`; nothing is overwritten.
+Exit codes: `0` clean, `1` errors, `2` warnings only, `3` slint itself failed, `4` nothing was linted (no `SKILL.md` was found under the given path — check the path before trusting a green run). Running `slint init` when a config already exists is an idempotent no-op and exits `0`; nothing is overwritten. The `--format json` envelope is a versioned, documented contract: [slint.dev/json](https://slint.dev/json/).
 
 
 | Flag                    | What it does                                                       |
@@ -207,7 +207,7 @@ message = "\"{match}\" is a note to a person, in a document a machine follows."
 reference = { title = "House style", url = "https://example.com/style" }
 ```
 
-**A WebAssembly plugin** is code, run through [Extism](https://extism.org). Point the config at a `.wasm` file; slint calls its exported `lint` function with the parsed skill as JSON and reads messages back. It runs sandboxed — no filesystem, no network.
+**A WebAssembly plugin** is code, run through [Extism](https://extism.org). Point the config at a `.wasm` file; slint calls its exported `lint` function with the parsed skill as JSON and reads messages back. It runs sandboxed — no filesystem, no network. The wire contract plugin authors write against is specified field by field at [slint.dev/plugin-abi](https://slint.dev/plugin-abi/).
 
 Both are held to the same standard as the built-in catalogue: a namespaced rule name, and a citation.
 

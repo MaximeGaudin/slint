@@ -1,0 +1,143 @@
+---
+layout: ../layouts/Page.astro
+title: The WebAssembly plugin ABI
+description: The exact JSON wire contract between slint and a Wasm plugin — input, output, validation, failures, versioning.
+section: plugins
+---
+
+<div class="page-intro">
+
+# The WebAssembly plugin ABI
+
+<p class="lead">
+  {'What crosses the boundary between slint and a .wasm plugin: one JSON document in, one JSON document out, one exported function. This page is the contract; nothing else is negotiated.'}
+</p>
+
+</div>
+
+This page describes the wire format as slint 0.2 implements it in
+`packages/core/src/plugin.rs`. A plugin author needs nothing else — no Rust,
+no access to the source — to write a working plugin in any language that
+compiles to WebAssembly.
+
+## The runtime
+
+slint runs a plugin through [Extism](https://extism.org). The sandbox is
+concrete, not aspirational:
+
+- The manifest contains **only your `.wasm` module** — nothing else is mapped in.
+- **No host functions** are offered. A plugin cannot call back into slint.
+- **WASI is off.** No filesystem, no network, no environment variables, no clock.
+
+A plugin that misbehaves has nothing to misbehave *with*: it sees the skill
+text and answers JSON, and that is the whole world it gets.
+
+## The export
+
+One function, named **`lint`**, taking a UTF-8 JSON string and returning a
+UTF-8 JSON string:
+
+```
+lint(input: string) -> string
+```
+
+With the Extism PDK that is `#[plugin_fn] pub fn lint(input: String) -> FnResult<String>`.
+
+## Input
+
+slint calls `lint` once per skill with:
+
+```json
+{
+  "version": 1,
+  "skill": { ... }
+}
+```
+
+| Field | Type | What it is |
+| --- | --- | --- |
+| `version` | number | The wire format's version, so a plugin can refuse a shape it does not know. `1` today. |
+| `skill` | object | The parsed skill, exactly as slint holds it. |
+
+Every field of `skill` is present; nothing is omitted:
+
+| Field | Type | What it is |
+| --- | --- | --- |
+| `directory` | string | The skill's directory on disk, as slint found it. |
+| `document` | string | Path of the SKILL.md, relative to the run. |
+| `source` | string | The full file text, frontmatter included — the same string `--fix` patches. |
+| `frontmatter_lines` | number | Lines the frontmatter occupies, for mapping body lines back to document lines. |
+| `has_frontmatter` | boolean | Whether the file had one at all. |
+| `name_declared` | boolean | Whether the frontmatter declared `name:` at all — the directory name is a display fallback, not a declaration. |
+| `name` | string | Frontmatter `name`. |
+| `description` | string | Frontmatter `description`. |
+| `body` | string | The instructions, after the frontmatter. |
+| `body_offset` | number | Byte offset of `body` inside `source`. |
+| `metadata` | object | Frontmatter keys other than name and description, in the order they were written. |
+| `scalar_types` | object | The YAML type each top-level frontmatter key parsed as, so a rule can tell a `description: true` was not written as a string. |
+| `files` | array | Bundled companion files: `path`, `bytes`, `executable`, and `text` — the file's content, or `null` when it could not be read as text. |
+| `notes` | array | What parsing said out loud, for the same reasons a report does. |
+
+## Output
+
+`lint` answers with:
+
+```json
+{
+  "messages": [ ... ]
+}
+```
+
+`messages` may be empty, and a plugin that returns `{}` — or nothing worth
+parsing — is treated as reporting nothing. Each message:
+
+| Field | Type | What it is |
+| --- | --- | --- |
+| `rule` | string | **Required.** Namespaced, like every rule: `team/needs-review`. A name without `/` refuses the whole plugin run. |
+| `severity` | string | `error`, `warning` or `info`. Optional, default `warning`. An unrecognised value degrades to `warning` rather than failing the run. |
+| `message` | string | **Required.** One line, in the imperative or the indicative. |
+| `advice` | string | Optional. When absent: "See the plugin's own documentation." |
+| `line` | number | Optional, 1-based, default `1`. The column is always `1`. |
+| `file` | string | Optional. Default: the skill's own document path. Use it for findings on a bundled file. |
+| `reference` | object | **Required.** `{"title": "...", "url": "..."}` — a citation. A `url` not starting with `http` refuses the whole plugin run. |
+
+## What slint does with the answer
+
+Every reported message is re-checked before it becomes a finding, by the same
+two rules the built-in catalogue is held to:
+
+1. **A namespaced rule name that is not one of the built-ins.** `needs-review` is refused; `team/needs-review` is not. Reporting under a rule id the built-in catalogue already owns (say `body/posix-paths`) is refused too — one config switch would then control two unrelated rules.
+2. **A citation.** No `reference.url`, no finding.
+
+Before any of that, every string a plugin reports is stripped of control
+characters, the same way pack authors' strings are.
+
+A plugin's rules are then ordinary rules: a config can silence or raise them by
+name (`"team/needs-review" = "off"`), and a document can opt out with a
+`slint-disable` comment.
+
+## Failures, and what they cost
+
+A plugin is never allowed to fail a run. Any of these becomes a **note** on
+that skill's report — `The plugin {path} did not run, so its rules did not
+either: {reason}` — and the rest of the review continues:
+
+- The module fails to load (not valid WebAssembly, export missing).
+- The call fails, including a plugin that returns an error to refuse an
+  input `version` it does not know.
+- The answer is not the JSON this expects.
+- A message fails the namespaced-name or citation check, which refuses the
+  whole plugin run rather than the single message.
+
+Notes are not errors: they do not change `ok` or the exit code. A plugin whose
+answer cannot be trusted is worth reading about, not worth dying over.
+
+## Versioning
+
+The `version` field in the input is the wire contract's version, `1` today. It
+moves only when a plugin written against this page would misread the new input
+or slint would misread the new output: a field removed or reinterpreted. Adding
+a field does not move it.
+
+A plugin should read `version` and fail the call on a value it does not know —
+slint turns that into a note, and the author updates at their own pace.

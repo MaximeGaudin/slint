@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/MaximeGaudin/slint/security/advisories/new
+    about: Report security issues privately — do not open a public issue. See SECURITY.md.
+  - name: Questions and usage help
+    url: https://slint.dev/
+    about: Documentation for rules, config, plugins, and CI usage.

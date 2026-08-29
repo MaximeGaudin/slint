@@ -795,6 +795,32 @@ mod tests {
     /// environment must hold this lock for its entire body (issue #114).
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/122 —
+    /// dogfooding: the skills slint ships in its own repository must pass slint
+    /// itself at error severity, because any error finding makes a run exit 1.
+    #[test]
+    fn the_bundled_skills_slint_ships_pass_slint_itself() {
+        let bundled = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.cursor/skills")
+            .canonicalize()
+            .expect("the repository's bundled .cursor/skills directory exists");
+
+        let report = run(&[bundled], &Config::default(), &[], Passes::default()).unwrap();
+
+        let errors: Vec<String> = report
+            .skills
+            .iter()
+            .flat_map(|one| one.messages.iter())
+            .filter(|message| message.severity == Severity::Error)
+            .map(|message| format!("{}: {} ({})", message.file, message.rule, message.message))
+            .collect();
+
+        assert!(
+            errors.is_empty(),
+            "slint's own bundled skills fail slint itself: {errors:#?}"
+        );
+    }
+
     fn write_skill(root: &std::path::Path, name: &str, document: &str) -> PathBuf {
         let directory = root.join(name);
         fs::create_dir_all(&directory).unwrap();

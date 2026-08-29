@@ -9,8 +9,16 @@ use serde::Serialize;
 
 use crate::diagnostics::Report;
 
+/// The version of the envelope's shape, so a consumer can detect a breaking
+/// change before it breaks them. Bump on any change to the fields below that
+/// removes or reinterprets one; adding a field does not.
+pub const SCHEMA_VERSION: u32 = 1;
+
 #[derive(Debug, Serialize)]
 pub struct Envelope<'a> {
+    /// The version of this shape. Pinned in `SCHEMA_VERSION`.
+    #[serde(rename = "schemaVersion")]
+    pub schema_version: u32,
     /// False when the run failed: anything at error severity was found, or `--max-warnings` was
     /// exceeded. Warnings alone do not flip it — they are the linter's opinion, and a caller that
     /// wants them fatal says so with --max-warnings, which this flag honours.
@@ -31,6 +39,7 @@ pub struct Summary {
 
 pub fn envelope(report: &Report, max_warnings: i64) -> Envelope<'_> {
     Envelope {
+        schema_version: SCHEMA_VERSION,
         ok: report.passes(max_warnings),
         summary: Summary {
             skills: report.skills.len(),
@@ -53,6 +62,16 @@ pub fn render(report: &Report, max_warnings: i64) -> String {
 mod tests {
     use super::*;
     use crate::report::tests::sample;
+
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/125 —
+    /// a consumer can only parse a moving format safely if the envelope says
+    /// which version of it they are looking at.
+    #[test]
+    fn the_envelope_names_its_schema_version_so_consumers_can_detect_change() {
+        let parsed: serde_json::Value = serde_json::from_str(&render(&sample(), -1)).unwrap();
+
+        assert_eq!(parsed["schemaVersion"], 1);
+    }
 
     #[test]
     fn the_envelope_says_whether_anything_is_broken_before_the_data_is_read() {

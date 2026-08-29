@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **JSON envelope versioning** — `--format json` opens with `schemaVersion: 1`, and the full envelope shape is documented field by field at slint.dev/json.
+- **WebAssembly plugin ABI spec** — the wire contract for plugin authors (export, input, output, validation, failure semantics) is specified field by field at slint.dev/plugin-abi, written from the implementation.
 - **Suppression wildcards** — `<!-- slint-disable body/* -->` silences every rule under a namespace: a rule name ending in `*` matches by prefix, the way eslint users silence a whole area instead of one rule at a time.
 - **Suppression block form** — `<!-- slint-disable-start rule -->` … `<!-- slint-disable-end -->` silences the named rules between the two comments; a range never closed runs to the end of the document.
 - **Suppression re-enable** — `<!-- slint-enable rule -->` re-activates a rule a file-wide `slint-disable` — or an open `slint-disable-start` — turned off, from that line on, the way `eslint-enable` and `markdownlint-enable` do. An `slint-enable` naming a rule nothing is disabled for is reported as `suppression/unused` like any other dead directive.
@@ -19,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Suppression comments** — A `slint-disable` comment is scoped to the document it is written in: it no longer silences findings on the files bundled beside `SKILL.md`.
 - **Suppression comments** — A directive inside a fenced code block is documentation of the syntax, not a live directive, so showing an example no longer silences the rest of the document.
 - **Suppression comments** — A directive that suppressed nothing (for example a misspelled rule name) is now reported as a `suppression/unused` warning, the way ESLint reports unused disable directives. The warning counts toward `--max-warnings` and can be retuned or turned off in config.
+
+### Fixed
+
+- **Dogfooding** — a regression test keeps the shipped `.cursor/skills` passing slint itself, so the bundled skills cannot regress quietly.
 
 ## [0.2.0] - 2026-08-20
 
