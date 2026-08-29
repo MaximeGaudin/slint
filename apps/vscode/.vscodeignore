@@ -1,6 +1,7 @@
 .vscode/**
 .turbo/**
 src/**
+test/**
 tsconfig.json
 **/*.ts
 **/*.*map

@@ -1,0 +1,159 @@
+{
+  "$defs": {
+    "LlmConfig": {
+      "properties": {
+        "api_key_env": {
+          "default": null,
+          "description": "The environment variable holding the key, never the key itself. A secret in a config file\nis a secret in version control.",
+          "type": ["string", "null"]
+        },
+        "base_url": {
+          "default": null,
+          "description": "Overrides the provider's own address. This is what makes a local model or a gateway work.",
+          "type": ["string", "null"]
+        },
+        "max_concurrent_requests": {
+          "default": 4,
+          "description": "How many model requests may be in flight at once. One per skill is how a large repository\nmeets a provider's rate limit in the first second.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_input_bytes": {
+          "default": 65536,
+          "description": "Bodies longer than this are truncated before they are sent, and the report says so.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_retries": {
+          "default": 2,
+          "description": "Transport-level failures (rate limits, 5xx, connection errors) are retried this many times\nwith backoff before the failure becomes what the run does about it.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_tokens": {
+          "default": null,
+          "description": "Cap on the tokens the model may spend on its reply. None leaves the cap to the provider.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": ["integer", "null"]
+        },
+        "model": {
+          "default": "",
+          "description": "Any model id the provider understands. No default is invented: a wrong model id fails\nloudly at the provider, and a guessed one fails after being charged for.",
+          "type": "string"
+        },
+        "provider": {
+          "$ref": "#/$defs/Provider",
+          "default": "none"
+        },
+        "timeout_seconds": {
+          "default": 90,
+          "description": "Seconds before a request is abandoned.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "PluginRef": {
+      "description": "A plugin, as a config refers to one.\n\nPlugins are files rather than compiled objects: a rule pack is data, and an external plugin is a\nprogram slint talks to over a pipe. Neither can crash the linter, and neither needs the person\nwriting it to know any Rust.",
+      "properties": {
+        "path": {
+          "description": "Path to a rule pack (`.toml` or `.json`) or to a `.wasm` plugin, relative to the config file.\n\nThe extension decides which kind it is, so a config never says the same thing twice.",
+          "type": "string"
+        }
+      },
+      "required": ["path"],
+      "type": "object"
+    },
+    "Provider": {
+      "description": "Which service answers the rules a regular expression cannot.\n\nOne field decides the wire format and one decides the address, which is all the difference\nbetween the providers actually amounts to. Anything OpenAI-compatible — OpenRouter, Groq,\nOllama, vLLM, LM Studio, a gateway inside a company — is the same variant with a different\n`base_url`.",
+      "oneOf": [
+        {
+          "const": "none",
+          "description": "Nothing is sent anywhere. The static rules still run, and the report says which did not.",
+          "type": "string"
+        },
+        {
+          "const": "openai",
+          "description": "The OpenAI chat completions shape.",
+          "type": "string"
+        },
+        {
+          "const": "openrouter",
+          "description": "The same shape, at OpenRouter's address.",
+          "type": "string"
+        },
+        {
+          "const": "groq",
+          "description": "The same shape, at Groq's address ([GroqCloud](https://console.groq.com/)).",
+          "type": "string"
+        },
+        {
+          "const": "ollama",
+          "description": "The same shape, at a local Ollama.",
+          "type": "string"
+        },
+        {
+          "const": "gemini",
+          "description": "Google's generative language API, which is its own shape.",
+          "type": "string"
+        },
+        {
+          "const": "anthropic",
+          "description": "Anthropic's messages API.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$id": "https://slint.dev/schemas/slint-config.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Configuration for slint, the linter for Agent Skills. Save it as slint.toml or slint.config.json; rules not mentioned keep the severity they were written with.",
+  "properties": {
+    "ignore": {
+      "default": [],
+      "description": "Glob patterns for directories that should never be linted.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "llm": {
+      "$ref": "#/$defs/LlmConfig",
+      "default": {
+        "api_key_env": null,
+        "base_url": null,
+        "max_concurrent_requests": 4,
+        "max_input_bytes": 65536,
+        "max_retries": 2,
+        "max_tokens": null,
+        "model": "",
+        "provider": "none",
+        "timeout_seconds": 90
+      },
+      "description": "Which model answers the rules a regular expression cannot."
+    },
+    "plugins": {
+      "default": [],
+      "description": "Rule packs and external plugins to load.",
+      "items": {
+        "$ref": "#/$defs/PluginRef"
+      },
+      "type": "array"
+    },
+    "rules": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Which rules to change, keyed by rule name (`area/thing`).",
+      "type": "object"
+    }
+  },
+  "title": "slint configuration",
+  "type": "object"
+}
