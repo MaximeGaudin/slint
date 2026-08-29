@@ -431,6 +431,19 @@ mod tests {
     }
 
     #[test]
+    fn config_resolution_must_not_read_the_repositorys_own_config() {
+        // Reproduction of #89: with no --config and the default path, resolve_config walks up
+        // from the process CWD (apps/cli under cargo test) and loads the repository's own
+        // apps/cli/slint.toml — which configures provider "openrouter" and a deepseek model —
+        // so a test for flag merging starts from state an ancestor directory controls.
+        let cli = Cli::try_parse_from(["slint"]).unwrap();
+        let config = resolve_config(&cli).unwrap();
+
+        assert_eq!(config.llm.provider, slint::config::Provider::None);
+        assert_eq!(config.llm.model, "");
+    }
+
+    #[test]
     fn no_llm_turns_every_model_rule_off_in_the_resolved_config() {
         let cli = Cli::try_parse_from(["slint", "--no-llm"]).unwrap();
         let config = resolve_config(&cli).unwrap();
