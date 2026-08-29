@@ -16,6 +16,9 @@ use walkdir::WalkDir;
 /// The document an agent is handed.
 pub const SKILL_FILE: &str = "SKILL.md";
 
+/// Bundled files at or below this size are read as text; anything larger is counted, not read.
+pub const MAX_TEXT_FILE_BYTES: usize = 1024 * 1024;
+
 /// A file shipped beside the instructions.
 #[derive(Debug, Clone, Serialize)]
 pub struct BundledFile {
@@ -555,6 +558,44 @@ mod tests {
         assert_eq!(skill.files.len(), 1);
         assert_eq!(skill.files[0].path, "scripts/cull.py");
         assert!(skill.files[0].text.as_deref().unwrap().starts_with("#!"));
+    }
+
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/103 — a bundled file above the
+    /// size cap is counted but never read into memory, and the run says so.
+    #[test]
+    fn a_bundled_file_above_the_size_cap_is_counted_but_not_read() {
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = temporary.path().join("photo-culling");
+        fs::create_dir_all(directory.join("assets")).unwrap();
+        fs::create_dir_all(directory.join("scripts")).unwrap();
+        fs::write(directory.join(SKILL_FILE), DOCUMENT).unwrap();
+        fs::write(
+            directory.join("assets/blob.bin"),
+            vec![0xff; MAX_TEXT_FILE_BYTES + 1],
+        )
+        .unwrap();
+        fs::write(
+            directory.join("scripts/cull.py"),
+            "#!/usr/bin/env python3\n",
+        )
+        .unwrap();
+
+        let skill = read(&directory).unwrap();
+
+        let blob = skill.file("assets/blob.bin").unwrap();
+        assert_eq!(blob.bytes, MAX_TEXT_FILE_BYTES + 1);
+        assert!(blob.text.is_none(), "an oversized file must not be read");
+        assert!(
+            skill
+                .notes
+                .iter()
+                .any(|note| note.contains("assets/blob.bin") && note.contains("not read")),
+            "the reader should say what it skipped, got {:?}",
+            skill.notes
+        );
+
+        let script = skill.file("scripts/cull.py").unwrap();
+        assert!(script.text.is_some(), "files under the cap are still read");
     }
 
     #[test]

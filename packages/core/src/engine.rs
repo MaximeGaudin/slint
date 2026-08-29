@@ -548,6 +548,100 @@ mod tests {
         }
     }
 
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/66 — a skill whose directory
+    /// name is a string prefix of a sibling's (`a` before `ab`) must not swallow the sibling's
+    /// project-rule findings; each report hears only about its own document.
+    #[test]
+    fn a_project_finding_is_not_stolen_by_a_prefix_sibling() {
+        let temporary = tempfile::tempdir().unwrap();
+        let shared = "---\nname: {name}\ndescription: Culls a photo shoot in Lightroom by flagging keepers. Use when triaging RAW files after a {tail}.\n---\n\n## Culling\n\n1. Import.\n";
+
+        write_skill(
+            temporary.path(),
+            "a",
+            &shared.replace("{name}", "a").replace("{tail}", "session"),
+        );
+        write_skill(
+            temporary.path(),
+            "ab",
+            &shared.replace("{name}", "ab").replace("{tail}", "shoot"),
+        );
+
+        let report = run(
+            &[temporary.path().to_path_buf()],
+            &Config::default(),
+            &[],
+            Passes {
+                plugins: false,
+                model: false,
+            },
+        )
+        .unwrap();
+
+        for skill in &report.skills {
+            let about_self = skill
+                .messages
+                .iter()
+                .filter(|one| {
+                    one.rule == "project/distinct-descriptions"
+                        && one.file == format!("{}/SKILL.md", skill.path)
+                })
+                .count();
+
+            assert_eq!(
+                about_self, 1,
+                "{} should hear exactly once about its own description, got {:?}",
+                skill.name, skill.messages
+            );
+            assert!(
+                !skill
+                    .messages
+                    .iter()
+                    .any(|one| one.rule == "project/distinct-descriptions"
+                        && one.file != format!("{}/SKILL.md", skill.path)),
+                "{} was handed a finding about another skill",
+                skill.name
+            );
+        }
+    }
+
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/104 — the skip note is a fact
+    /// about the run, so every skill's report carries it rather than one arbitrary skill.
+    #[test]
+    fn every_skill_says_when_the_model_pass_was_skipped() {
+        let temporary = tempfile::tempdir().unwrap();
+        let shared = GOOD.replace("photo-culling", "{name}");
+
+        for name in ["alpha", "beta", "gamma"] {
+            write_skill(temporary.path(), name, &shared.replace("{name}", name));
+        }
+
+        let report = run(
+            &[temporary.path().to_path_buf()],
+            &Config::default(),
+            &[],
+            Passes {
+                plugins: false,
+                model: false,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(report.skills.len(), 3);
+
+        for skill in &report.skills {
+            assert!(
+                skill
+                    .notes
+                    .iter()
+                    .any(|note| note.contains("Skipped") && note.contains("model rules")),
+                "{} should carry the skip note, got {:?}",
+                skill.name,
+                skill.notes
+            );
+        }
+    }
+
     #[test]
     fn a_static_only_run_says_how_to_run_the_rest() {
         let temporary = tempfile::tempdir().unwrap();
