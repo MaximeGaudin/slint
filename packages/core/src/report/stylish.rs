@@ -280,7 +280,27 @@ mod tests {
     #[test]
     fn the_summary_counts_every_severity() {
         let text = render(&sample(), false);
-        assert!(text.contains("2 problem(s): 1 error(s), 1 warning(s), 0 note(s)"));
+        assert!(text.contains("2 problems: 1 error, 1 warning, 0 notes"));
+    }
+
+    #[test]
+    fn singular_counts_are_not_written_with_a_parenthesised_s() {
+        // https://github.com/MaximeGaudin/slint/issues/169: the summary hard-coded "(s)", so
+        // one finding read as "1 problem(s): 1 error(s)" while the per-skill line right above
+        // it already said "1 warning". Same numbers, same words.
+        let mut single = sample();
+        single.skills[0].messages.truncate(1);
+        single.skills[0].notes.clear();
+        single.fixed = 1;
+
+        let text = render(&single, false);
+
+        assert!(
+            text.contains("1 problem: 0 errors, 1 warning, 0 notes across 1 skill."),
+            "{text}"
+        );
+        assert!(text.contains("1 fix applied."), "{text}");
+        assert!(!text.contains("(s)"), "{text}");
     }
 
     #[test]
@@ -291,7 +311,7 @@ mod tests {
             skill.notes.clear();
         }
 
-        assert!(render(&clean, false).contains("Nothing to report across 1 skill(s)."));
+        assert!(render(&clean, false).contains("Nothing to report across 1 skill."));
     }
 
     #[test]
@@ -320,7 +340,7 @@ mod tests {
         let text = render(&fixed, false);
 
         assert!(text.contains("Nothing to report"), "{text}");
-        assert!(text.contains("3 fix(es) applied."), "{text}");
+        assert!(text.contains("3 fixes applied."), "{text}");
     }
 
     #[test]

@@ -238,7 +238,10 @@ fn fixing_rewrites_the_file_and_the_next_run_is_cleaner() {
     assert!(stdout(&before).contains("body/posix-paths"));
 
     let fixed = slint(&[temporary.path().to_str().unwrap(), "--no-llm", "--fix"]);
-    assert!(stdout(&fixed).contains("fix(es) applied"));
+    // https://github.com/MaximeGaudin/slint/issues/169: whatever the count, the pluralisation
+    // is real words now, never the "(s)" placeholder.
+    assert!(stdout(&fixed).contains(" applied."), "{:?}", stdout(&fixed));
+    assert!(!stdout(&fixed).contains("(s)"));
 
     let document = fs::read_to_string(temporary.path().join("photo-culling/SKILL.md")).unwrap();
     assert!(document.contains("references/formats.md"));
