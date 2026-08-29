@@ -21,7 +21,9 @@ pub(crate) fn strip_control(text: &str) -> String {
 }
 
 /// How much a finding matters. Ordered worst-first, so a sort is a sort.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
     /// The skill is broken, or the specification would refuse it.
@@ -63,7 +65,7 @@ impl fmt::Display for Severity {
 /// Lines and columns are 1-based, as every editor and every compiler reports them. `end` is
 /// exclusive and optional: a rule that knows only the line says only the line rather than
 /// inventing a span that would underline the wrong words.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Location {
     pub line: usize,
     pub column: usize,
@@ -103,7 +105,7 @@ impl Location {
 /// Byte offsets rather than lines, because a fix is applied to text and re-linted afterwards; a
 /// line-based patch has to be re-resolved after the fix above it lands, and that is where an
 /// autofixer starts corrupting files.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Fix {
     /// Byte offset into the file's text, inclusive.
     pub start: usize,
@@ -119,14 +121,14 @@ pub struct Fix {
 /// Not optional, and that is the point: every rule here asserts something about someone else's
 /// writing, and an assertion with no source has to be taken on trust. A rule without a citation
 /// does not get into the registry.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Reference {
     pub title: String,
     pub url: String,
 }
 
 /// What produced a finding, which is also how much it can be trusted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Source {
     /// Read from the text. Exact, free, and always available.
@@ -138,7 +140,7 @@ pub enum Source {
 }
 
 /// One finding.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Message {
     /// The rule that fired, as it is written in a config file.
     pub rule: String,
@@ -165,7 +167,7 @@ impl Message {
 }
 
 /// Everything found in one skill, plus what could not be looked at.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SkillReport {
     /// The skill's directory, relative to the run.
     pub path: String,
@@ -186,7 +188,7 @@ impl SkillReport {
 }
 
 /// Every skill looked at in one run.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Report {
     pub skills: Vec<SkillReport>,
     /// Fixes written to disk during this run, when `--fix` was given.

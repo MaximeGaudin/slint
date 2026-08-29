@@ -406,20 +406,20 @@ fn report_scalar(
 }
 
 /// What a plugin is sent, and what it answers with.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct PluginInput<'a> {
     /// The wire format's version, so a plugin can refuse a shape it does not know.
     version: u32,
     skill: &'a Skill,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct PluginOutput {
     #[serde(default)]
     messages: Vec<PluginMessage>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct PluginMessage {
     rule: String,
     #[serde(default = "default_severity")]
@@ -436,6 +436,77 @@ struct PluginMessage {
 
 /// The function a plugin exports. One entry point, so a plugin is a function of a skill.
 pub const PLUGIN_EXPORT: &str = "lint";
+
+/// Where the published copy of the plugin ABI schema lives, and the `$id` the generated schema carries.
+pub const PLUGIN_ABI_SCHEMA_URL: &str = "https://slint.dev/schemas/plugin-abi.json";
+
+/// The plugin wire format, as JSON Schema, for plugin authors and their tests.
+///
+/// Generated from [`PluginInput`] and [`PluginOutput`], so the schema and the wire are the same
+/// code — the same move the config schema makes. One document describes both directions, each as a
+/// named definition; the published copy lives at [`PLUGIN_ABI_SCHEMA_URL`], and `slint schema
+/// plugin-abi` prints it.
+pub fn plugin_abi_json_schema() -> serde_json::Value {
+    let mut input = serde_json::to_value(schemars::schema_for!(PluginInput<'static>))
+        .expect("the plugin input has a representable schema");
+    let mut output = serde_json::to_value(schemars::schema_for!(PluginOutput))
+        .expect("the plugin output has a representable schema");
+
+    // Each root inlines its own shape and carries a `$defs` map for the named types it reaches.
+    // Both roots become named definitions themselves, their `$defs` entries merge below them, and
+    // the internal `$ref`s — all of them `#/$defs/…` — keep resolving against the one document.
+    let mut definitions = take_definitions(&mut input);
+    definitions.extend(take_definitions(&mut output));
+
+    for (name, mut root) in [("PluginInput", input), ("PluginOutput", output)] {
+        if let Some(object) = root.as_object_mut() {
+            object.remove("$schema");
+        }
+        definitions.insert(name.into(), root);
+    }
+
+    let mut schema = serde_json::Map::new();
+    schema.insert(
+        "$schema".into(),
+        serde_json::Value::String("https://json-schema.org/draft/2020-12/schema".into()),
+    );
+    schema.insert(
+        "$id".into(),
+        serde_json::Value::String(PLUGIN_ABI_SCHEMA_URL.into()),
+    );
+    schema.insert(
+        "title".into(),
+        serde_json::Value::String("slint plugin ABI".into()),
+    );
+    schema.insert(
+        "description".into(),
+        serde_json::Value::String(
+            "The wire contract between slint and a WebAssembly plugin: one JSON document in \
+             (PluginInput), one JSON document out (PluginOutput), one exported `lint` function. \
+             See https://slint.dev/plugin-abi for what each field means and what a failure costs."
+                .into(),
+        ),
+    );
+    schema.insert(
+        "oneOf".into(),
+        serde_json::json!([
+            { "$ref": "#/$defs/PluginInput" },
+            { "$ref": "#/$defs/PluginOutput" }
+        ]),
+    );
+    schema.insert("$defs".into(), serde_json::Value::Object(definitions));
+
+    serde_json::Value::Object(schema)
+}
+
+/// Lifts a schema's `$defs` map out of its root, leaving the root bare.
+fn take_definitions(schema: &mut serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
+    schema
+        .as_object_mut()
+        .and_then(|object| object.remove("$defs"))
+        .and_then(|defs| defs.as_object().cloned())
+        .unwrap_or_default()
+}
 
 /// How long one plugin call may take before it is treated as a crash. A plugin that lints one
 /// skill's JSON in under a few seconds is fine; one that needs longer is looping, and a loop is

@@ -49,6 +49,14 @@ misreading one.
 that could not complete (an unreadable path, a model pass that hard-fails) is
 an error on stderr, not a malformed envelope on stdout.
 
+A consumer does not have to take this page's word for the shape: a JSON Schema
+for the envelope is published at
+[`https://slint.dev/schemas/report.json`](https://slint.dev/schemas/report.json),
+and `slint schema report` prints the same document. Both are generated from the
+structs the binary itself prints, so the schema cannot drift from the output —
+point a validator at the URL and a report that was not written for it fails
+before it is misread.
+
 ## SkillReport
 
 | Field | Type | What it is |

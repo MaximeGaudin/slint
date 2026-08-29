@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **JSON envelope versioning** — `--format json` opens with `schemaVersion: 1`, and the full envelope shape is documented field by field at slint.dev/json.
+- **Published JSON Schemas** — `slint schema` now takes a target: `config` (as before), `report` (the `--format json` envelope), or `plugin-abi` (the Wasm wire format). Each is generated from the same structs the binary prints and reads, published under `slint.dev/schemas/`, and a test keeps the committed copies from drifting from the binary.
 - **WebAssembly plugin ABI spec** — the wire contract for plugin authors (export, input, output, validation, failure semantics) is specified field by field at slint.dev/plugin-abi, written from the implementation.
 - **Suppression wildcards** — `<!-- slint-disable body/* -->` silences every rule under a namespace: a rule name ending in `*` matches by prefix, the way eslint users silence a whole area instead of one rule at a time.
 - **Suppression block form** — `<!-- slint-disable-start rule -->` … `<!-- slint-disable-end -->` silences the named rules between the two comments; a range never closed runs to the end of the document.

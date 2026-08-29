@@ -176,6 +176,8 @@ For editor autocomplete over the JSON shapes, point `$schema` at the published s
 }
 ```
 
+The other two machine contracts are published the same way: `https://slint.dev/schemas/report.json` describes what `--format json` prints, and `https://slint.dev/schemas/plugin-abi.json` describes the WebAssembly plugin wire format. `slint schema`, `slint schema report` and `slint schema plugin-abi` print exactly what those URLs serve, and each is generated from the code that reads or writes the format, so none of them can drift from what slint actually does.
+
 A document can also opt out of a rule for itself:
 
 ```markdown

@@ -88,3 +88,21 @@ And `--format json` is the whole report, envelope first, for anything building a
 
 Data goes to stdout and everything else to stderr, so a pipe is always safe — and findings are not
 failures: slint exits `1` when it found errors, and that run is the useful one.
+
+## Config autocomplete
+
+A JSON config (`slint.config.json`, `.slintrc.json`) can name the published schema, and any editor
+that speaks `$schema` flags a misspelt field before slint ever runs:
+
+```json
+{
+  "$schema": "https://slint.dev/schemas/slint-config.json",
+  "rules": { "description/says-when": "error" }
+}
+```
+
+The schema's `$id` is that URL, and it is generated from the code that reads the config, so it
+cannot drift from what slint accepts. The VS Code extension above contributes the schema for
+`slint.config.json` and `.slintrc.json` on its own — no `$schema` line needed there. The same URL
+serves `report.json` (what `--format json` prints) and `plugin-abi.json` (the Wasm wire format),
+and `slint schema` prints any of the three.
