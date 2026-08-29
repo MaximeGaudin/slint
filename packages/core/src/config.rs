@@ -8,8 +8,9 @@
 //! each have a file they already have opinions about.
 
 use anyhow::{Context, Result, bail};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use crate::diagnostics::Severity;
@@ -21,6 +22,9 @@ pub const CONFIG_NAMES: [&str; 4] = [
     ".slintrc.json",
     ".slintrc.toml",
 ];
+
+/// Where the generated config schema is published, for `$schema` and for the docs.
+pub const SCHEMA_URL: &str = "https://slint.dev/schemas/slint-config.json";
 
 /// What a config says about one rule.
 #[derive(Debug, Clone, PartialEq)]
@@ -48,13 +52,37 @@ impl RuleSetting {
     }
 }
 
+/// Prints a setting the way a config file may write it, so `--print-config` shows the shapes
+/// someone typed rather than Rust's idea of them.
+impl Serialize for RuleSetting {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            RuleSetting::Off => serializer.serialize_str("off"),
+            RuleSetting::On(severity) => serializer.serialize_str(severity.as_str()),
+            RuleSetting::Tuned(severity, options) => {
+                use serde::ser::SerializeSeq;
+
+                let mut pair = serializer.serialize_seq(Some(2))?;
+                pair.serialize_element(severity.as_str())?;
+                pair.serialize_element(options)?;
+                pair.end()
+            }
+        }
+    }
+}
+
 /// Which service answers the rules a regular expression cannot.
 ///
 /// One field decides the wire format and one decides the address, which is all the difference
 /// between the providers actually amounts to. Anything OpenAI-compatible — OpenRouter, Groq,
 /// Ollama, vLLM, LM Studio, a gateway inside a company — is the same variant with a different
 /// `base_url`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Provider {
     /// Nothing is sent anywhere. The static rules still run, and the report says which did not.
@@ -92,7 +120,7 @@ impl Provider {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct LlmConfig {
     #[serde(default)]
     pub provider: Provider,
@@ -110,6 +138,17 @@ pub struct LlmConfig {
     /// Seconds before a request is abandoned.
     #[serde(default = "default_timeout")]
     pub timeout_seconds: u64,
+    /// Cap on the tokens the model may spend on its reply. None leaves the cap to the provider.
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
+    /// Transport-level failures (rate limits, 5xx, connection errors) are retried this many times
+    /// with backoff before the failure becomes what the run does about it.
+    #[serde(default = "default_max_retries")]
+    pub max_retries: u32,
+    /// How many model requests may be in flight at once. One per skill is how a large repository
+    /// meets a provider's rate limit in the first second.
+    #[serde(default = "default_max_concurrent_requests")]
+    pub max_concurrent_requests: usize,
     /// Bodies longer than this are truncated before they are sent, and the report says so.
     #[serde(default = "default_max_input")]
     pub max_input_bytes: usize,
@@ -117,6 +156,14 @@ pub struct LlmConfig {
 
 fn default_timeout() -> u64 {
     90
+}
+
+fn default_max_retries() -> u32 {
+    2
+}
+
+fn default_max_concurrent_requests() -> usize {
+    4
 }
 
 fn default_max_input() -> usize {
@@ -131,6 +178,9 @@ impl Default for LlmConfig {
             api_key_env: None,
             base_url: None,
             timeout_seconds: default_timeout(),
+            max_tokens: None,
+            max_retries: default_max_retries(),
+            max_concurrent_requests: default_max_concurrent_requests(),
             max_input_bytes: default_max_input(),
         }
     }
@@ -147,7 +197,7 @@ impl LlmConfig {
 /// Plugins are files rather than compiled objects: a rule pack is data, and an external plugin is a
 /// program slint talks to over a pipe. Neither can crash the linter, and neither needs the person
 /// writing it to know any Rust.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PluginRef {
     /// Path to a rule pack (`.toml` or `.json`) or to a `.wasm` plugin, relative to the config file.
     ///
@@ -156,7 +206,7 @@ pub struct PluginRef {
 }
 
 /// The whole configuration, after merging.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct Config {
     /// Where it was loaded from, for messages and for resolving relative paths.
     pub source: Option<PathBuf>,
@@ -167,14 +217,21 @@ pub struct Config {
 }
 
 /// The file, before the severities are turned into something typed.
-#[derive(Debug, Default, Deserialize)]
+///
+/// The `JsonSchema` derive is what `slint schema` prints: one description of the config format,
+/// generated from this struct so the schema cannot drift from what slint actually reads.
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 struct RawConfig {
+    /// Which rules to change, keyed by rule name (`area/thing`).
     #[serde(default)]
     rules: BTreeMap<String, serde_json::Value>,
+    /// Glob patterns for directories that should never be linted.
     #[serde(default)]
     ignore: Vec<String>,
+    /// Which model answers the rules a regular expression cannot.
     #[serde(default)]
     llm: LlmConfig,
+    /// Rule packs and external plugins to load.
     #[serde(default)]
     plugins: Vec<PluginRef>,
 }
@@ -197,7 +254,17 @@ impl Config {
 ///
 /// The walk is what makes running slint on a subdirectory of a repository behave the way everyone
 /// expects: the settings belong to the project, not to the directory the terminal happens to be in.
+/// When no project config exists anywhere up the tree, a user-global one is the fallback, so a
+/// personal set of defaults does not have to be repeated in every repository.
 pub fn find(from: &Path) -> Option<PathBuf> {
+    walk_up(from).or_else(|| {
+        let candidate = user_config_path()?;
+        candidate.is_file().then_some(candidate)
+    })
+}
+
+/// The project config search alone: every parent of `from`, nearest first.
+fn walk_up(from: &Path) -> Option<PathBuf> {
     let mut directory = Some(from);
 
     while let Some(current) = directory {
@@ -212,6 +279,87 @@ pub fn find(from: &Path) -> Option<PathBuf> {
     }
 
     None
+}
+
+/// Where the user's own config lives, below any project config.
+///
+/// `$XDG_CONFIG_HOME/slint/config.toml`, or `~/.config/slint/config.toml` when XDG is unset — or
+/// relative, which the spec says to treat as unset. Where there is no home either, `%APPDATA%`
+/// stands in, which is the closest thing Windows has to both.
+pub fn user_config_path() -> Option<PathBuf> {
+    user_config_path_from(std::env::vars_os())
+}
+
+/// The same decision, from an explicit set of environment variables.
+///
+/// Taking the variables instead of reading them here keeps the choice testable without mutating
+/// the process environment from inside a parallel test run.
+pub fn user_config_path_from<V, K, S>(variables: V) -> Option<PathBuf>
+where
+    V: IntoIterator<Item = (K, S)>,
+    K: AsRef<OsStr>,
+    S: AsRef<OsStr>,
+{
+    let mut xdg = None;
+    let mut home = None;
+    let mut appdata = None;
+
+    for (key, value) in variables {
+        match key.as_ref().to_string_lossy().as_ref() {
+            "XDG_CONFIG_HOME" => xdg = Some(PathBuf::from(value.as_ref())),
+            "HOME" => home = Some(PathBuf::from(value.as_ref())),
+            "APPDATA" => appdata = Some(PathBuf::from(value.as_ref())),
+            _ => {}
+        }
+    }
+
+    // XDG says an absolute path or nothing. `has_root` is that test, spelled portably: on Unix it
+    // is exactly "starts with /", and on Windows it also accepts a rooted path with no drive, so
+    // an XDG variable pointing at `/slint-config` still works there.
+    if let Some(directory) = xdg.filter(|path| path.has_root()) {
+        return Some(directory.join("slint").join("config.toml"));
+    }
+
+    if let Some(home) = home {
+        return Some(home.join(".config").join("slint").join("config.toml"));
+    }
+
+    appdata.map(|directory| directory.join("slint").join("config.toml"))
+}
+
+/// The config file format, as JSON Schema, for editors.
+///
+/// Generated from [`RawConfig`], so the schema and the reader are the same code. Point a config
+/// file's `$schema` at the published copy (`https://slint.dev/schemas/slint-config.json`) and an
+/// editor flags a misspelt field before slint ever runs.
+pub fn config_json_schema() -> serde_json::Value {
+    let mut schema = serde_json::to_value(schemars::schema_for!(RawConfig))
+        .expect("the config format has a representable schema");
+
+    if let Some(object) = schema.as_object_mut() {
+        object.insert(
+            "$id".into(),
+            serde_json::Value::String(SCHEMA_URL.to_string()),
+        );
+        object.insert(
+            "title".into(),
+            serde_json::Value::String("slint configuration".into()),
+        );
+        object.insert(
+            "description".into(),
+            serde_json::Value::String(
+                "Configuration for slint, the linter for Agent Skills. Save it as slint.toml or \
+                 slint.config.json; rules not mentioned keep the severity they were written with."
+                    .into(),
+            ),
+        );
+        object.insert(
+            "additionalProperties".into(),
+            serde_json::Value::Bool(false),
+        );
+    }
+
+    schema
 }
 
 pub fn load(path: &Path) -> Result<Config> {
@@ -485,6 +633,94 @@ mod tests {
 
         llm.model = "gpt-5-mini".into();
         assert!(llm.is_configured());
+    }
+
+    #[test]
+    fn token_concurrency_and_retry_defaults_are_conservative() {
+        let llm = LlmConfig::default();
+
+        assert_eq!(llm.max_tokens, None, "no reply cap invented silently");
+        assert_eq!(llm.max_retries, 2);
+        assert_eq!(llm.max_concurrent_requests, 4);
+    }
+
+    #[test]
+    fn the_llm_knobs_are_settable_from_the_config_file() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("slint.toml");
+        fs::write(
+            &path,
+            "[llm]\nprovider = \"openai\"\nmodel = \"gpt-5-mini\"\nmax_tokens = 512\nmax_retries = 1\nmax_concurrent_requests = 8\n",
+        )
+        .unwrap();
+
+        let config = load(&path).unwrap();
+
+        assert_eq!(config.llm.max_tokens, Some(512));
+        assert_eq!(config.llm.max_retries, 1);
+        assert_eq!(config.llm.max_concurrent_requests, 8);
+    }
+
+    #[test]
+    fn the_user_config_lives_under_a_rooted_xdg_config_home() {
+        let variables = [
+            (
+                "XDG_CONFIG_HOME".to_string(),
+                "/userdata/config".to_string(),
+            ),
+            ("HOME".to_string(), "/userdata/home".to_string()),
+        ];
+
+        assert_eq!(
+            user_config_path_from(variables),
+            Some(PathBuf::from("/userdata/config/slint/config.toml"))
+        );
+    }
+
+    #[test]
+    fn without_xdg_the_user_config_is_under_the_home() {
+        let variables = [("HOME".to_string(), "/userdata/home".to_string())];
+
+        assert_eq!(
+            user_config_path_from(variables),
+            Some(PathBuf::from("/userdata/home/.config/slint/config.toml"))
+        );
+    }
+
+    #[test]
+    fn a_relative_xdg_config_home_is_ignored_as_the_spec_demands() {
+        let variables = [
+            ("XDG_CONFIG_HOME".to_string(), "relative/config".to_string()),
+            ("HOME".to_string(), "/userdata/home".to_string()),
+        ];
+
+        assert_eq!(
+            user_config_path_from(variables),
+            Some(PathBuf::from("/userdata/home/.config/slint/config.toml"))
+        );
+    }
+
+    #[test]
+    fn the_user_config_falls_back_to_appdata_where_there_is_no_home() {
+        let variables = [(
+            "APPDATA".to_string(),
+            "C:\\Users\\someone\\AppData\\Roaming".to_string(),
+        )];
+
+        assert_eq!(
+            user_config_path_from(variables),
+            Some(
+                PathBuf::from("C:\\Users\\someone\\AppData\\Roaming")
+                    .join("slint")
+                    .join("config.toml")
+            )
+        );
+    }
+
+    #[test]
+    fn with_nothing_set_there_is_no_user_config() {
+        let variables: [(String, String); 0] = [];
+        assert_eq!(user_config_path_from(variables), None);
     }
 
     #[test]
