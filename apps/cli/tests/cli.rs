@@ -642,6 +642,54 @@ fn two_fixable_rules_on_one_file_converge_in_a_single_fix() {
     assert!(document.contains("references/formats.md"));
 }
 
+/// Reproduces https://github.com/MaximeGaudin/slint/issues/227 — a write failure partway through
+/// a multi-file --fix used to abort the run with a bare error line, leaving the files fixed
+/// before it on disk and nothing in the report saying so.
+#[test]
+#[cfg(unix)]
+fn a_fix_that_cannot_write_one_file_still_reports_the_rest() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temporary = tempfile::tempdir().unwrap();
+    let document = |name: &str| {
+        format!(
+            "---\nname: {name}\ndescription: Culls a photo shoot in Lightroom by flagging the keepers and rejecting the rest. Use when triaging RAW files after a session.\n---\n\n## Culling\n\n1. Read scripts\\notes.md.\n"
+        )
+    };
+
+    for name in ["a-locked", "b-open"] {
+        write(temporary.path(), name, &document(name));
+    }
+
+    // The first skill alphabetically cannot be written: replacing a file starts with a new file
+    // beside it, so a directory that refuses one is what makes the write fail.
+    let locked = temporary.path().join("a-locked");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o555)).unwrap();
+
+    let output = slint(&[temporary.path().to_str().unwrap(), "--no-llm", "--fix"]);
+
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "slint failed at its one write job: {:?}",
+        stdout(&output)
+    );
+
+    // The report still comes out, and it names the file that did not get fixed.
+    let text = stdout(&output);
+    assert!(text.contains("a-locked/SKILL.md"), "{text}");
+    assert!(text.contains("failed"), "{text}");
+    assert!(text.contains("1 fix applied"), "{text}");
+
+    // The writable skill was fixed anyway, and the locked one is exactly as it was.
+    let open = fs::read_to_string(temporary.path().join("b-open/SKILL.md")).unwrap();
+    assert!(!open.contains('\\'), "{open}");
+    let locked_document = fs::read_to_string(temporary.path().join("a-locked/SKILL.md")).unwrap();
+    assert!(locked_document.contains('\\'), "{locked_document}");
+}
+
 #[test]
 fn the_json_format_is_an_envelope_a_caller_can_branch_on() {
     let temporary = tempfile::tempdir().unwrap();
