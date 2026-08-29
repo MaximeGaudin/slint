@@ -214,6 +214,17 @@ impl Report {
             .count()
     }
 
+    /// Whether the run survives the caller's warning budget: anything at error severity fails
+    /// it, and so does going over `--max-warnings`. The exit code and the JSON envelope's `ok`
+    /// flag both read this, so the two verdicts a caller can see cannot disagree.
+    pub fn passes(&self, max_warnings: i64) -> bool {
+        if self.errors() > 0 {
+            return false;
+        }
+
+        !(max_warnings >= 0 && self.warnings() as i64 > max_warnings)
+    }
+
     /// Worst first, then by file, then by position: the order a list of problems is read in.
     pub fn sorted(mut self) -> Self {
         for skill in &mut self.skills {
