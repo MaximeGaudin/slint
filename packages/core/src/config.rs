@@ -263,6 +263,17 @@ impl Config {
     }
 }
 
+impl PartialEq for Config {
+    /// Two configs agree when what they say agrees. `source` is where a config came from, and
+    /// the same settings under two file names are the same settings.
+    fn eq(&self, other: &Self) -> bool {
+        self.rules == other.rules
+            && self.ignore == other.ignore
+            && self.llm == other.llm
+            && self.plugins == other.plugins
+    }
+}
+
 /// Every recognised config file in `directory`, in the order `find` would take them.
 ///
 /// A directory holding more than one of them is where "I edited the wrong file" lives, so the

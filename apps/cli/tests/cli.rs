@@ -100,6 +100,64 @@ fn a_clean_base_exits_zero_and_says_so() {
     assert!(stdout(&output).contains("Nothing to report"));
 }
 
+/// Regression for https://github.com/MaximeGaudin/slint/issues/29 —
+/// the first path's config governed every path, so a later path's own config was read by
+/// nobody and said nothing.
+#[test]
+fn a_later_path_with_its_own_config_is_named_when_the_first_path_governs() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+
+    // Both names are generic enough to trip name/not-generic, different enough not to trip
+    // the project rules.
+    write(
+        root.join("alpha").as_path(),
+        "helper",
+        "---\nname: helper\ndescription: Culls a photo shoot in Lightroom by flagging the keepers and rejecting the rest. Use when triaging RAW files after a session.\n---\n\n## Helper\n\n1. Import the files.\n",
+    );
+    write(
+        root.join("beta").as_path(),
+        "utils",
+        "---\nname: utils\ndescription: Restores a corrupted drive image by verifying the checksums and repacking the volumes. Use when a restore fails halfway through.\n---\n\n## Utils\n\n1. Verify the checksums.\n",
+    );
+    fs::write(
+        root.join("beta").join("slint.toml"),
+        "[rules]\n\"name/not-generic\" = \"off\"\n",
+    )
+    .unwrap();
+
+    // alpha first: no config of its own, so the run uses defaults — but beta's file must be
+    // named, because it is the file that does not get to speak.
+    let output = slint(&[
+        root.join("alpha").to_str().unwrap(),
+        root.join("beta").to_str().unwrap(),
+        "--no-llm",
+    ]);
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        stderr.contains("slint.toml"),
+        "beta's config must be named: {stderr}"
+    );
+    assert!(stderr.contains("beta"), "{stderr}");
+    // And the first path's config really did govern: beta's "off" was not applied.
+    assert!(stdout(&output).contains("name/not-generic"));
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+
+    // beta first: its config is the one that governs, and alpha has no file, so there is
+    // nothing to warn about.
+    let output = slint(&[
+        root.join("beta").to_str().unwrap(),
+        root.join("alpha").to_str().unwrap(),
+        "--no-llm",
+    ]);
+
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        stderr.is_empty(),
+        "no config is ignored in this order: {stderr}"
+    );
+}
+
 /// Regression for https://github.com/MaximeGaudin/slint/issues/42 —
 /// two config files in one directory used to let the second be read by nobody, with no sign.
 #[test]
@@ -118,7 +176,6 @@ fn two_config_files_in_one_directory_say_which_one_wins() {
     .unwrap();
 
     let output = slint(&[temporary.path().to_str().unwrap(), "--no-llm"]);
-
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     assert!(
         stderr.contains("slint.toml"),
