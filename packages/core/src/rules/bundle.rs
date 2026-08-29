@@ -1017,6 +1017,15 @@ mod tests {
         assert!(check(&DANGLING_RULE, &skill).is_empty());
     }
 
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/243 — the citation has to
+    /// substantiate the rule's claim, and the paper never discusses unreferenced bundle
+    /// files. The best-practices guide does: "Ignored content: if Claude never accesses a
+    /// bundled file, it might be unnecessary or poorly signaled in the main instructions".
+    #[test]
+    fn the_unused_file_rule_cites_a_source_about_ignored_bundle_files() {
+        assert_eq!(UNUSED_FILE.reference_url, sources::BEST_PRACTICES.1);
+    }
+
     #[test]
     fn a_file_nothing_refers_to_is_reported() {
         let mut skill = good_skill();
