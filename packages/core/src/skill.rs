@@ -17,6 +17,9 @@ use yaml_rust2::{Yaml, YamlEmitter, YamlLoader};
 /// The document an agent is handed.
 pub const SKILL_FILE: &str = "SKILL.md";
 
+/// Bundled files at or below this size are read as text; anything larger is counted, not read.
+pub const MAX_TEXT_FILE_BYTES: usize = 1024 * 1024;
+
 /// A file shipped beside the instructions.
 #[derive(Debug, Clone, Serialize)]
 pub struct BundledFile {
@@ -24,7 +27,8 @@ pub struct BundledFile {
     pub path: String,
     pub bytes: usize,
     pub executable: bool,
-    /// `None` for anything that is not UTF-8 text: an image is a file to count, not to read.
+    /// `None` for anything that is not UTF-8 text, or above [`MAX_TEXT_FILE_BYTES`]: an image
+    /// is a file to count, not to read.
     pub text: Option<String>,
 }
 
@@ -185,13 +189,16 @@ pub fn read(directory: &Path) -> Result<Skill> {
             .to_string();
     }
 
-    skill.files = read_bundle(directory)?;
+    let (files, bundle_notes) = read_bundle(directory)?;
+    skill.files = files;
+    skill.notes.extend(bundle_notes);
 
     Ok(skill)
 }
 
-fn read_bundle(directory: &Path) -> Result<Vec<BundledFile>> {
+fn read_bundle(directory: &Path) -> Result<(Vec<BundledFile>, Vec<String>)> {
     let mut files = Vec::new();
+    let mut notes = Vec::new();
 
     for entry in WalkDir::new(directory)
         .follow_links(false)
@@ -217,9 +224,19 @@ fn read_bundle(directory: &Path) -> Result<Vec<BundledFile>> {
             .metadata()
             .map(|meta| meta.len() as usize)
             .unwrap_or(0);
-        let text = fs::read(entry.path())
-            .ok()
-            .and_then(|raw| String::from_utf8(raw).ok());
+
+        // The size is known before anything is read, so an oversized asset never reaches
+        // memory at all — it is counted and named, the way an image already is.
+        let text = if bytes > MAX_TEXT_FILE_BYTES {
+            notes.push(format!(
+                "{relative} is {bytes} bytes, above the {MAX_TEXT_FILE_BYTES}-byte limit for bundled text, so it was counted but not read."
+            ));
+            None
+        } else {
+            fs::read(entry.path())
+                .ok()
+                .and_then(|raw| String::from_utf8(raw).ok())
+        };
 
         files.push(BundledFile {
             path: relative,
@@ -230,7 +247,7 @@ fn read_bundle(directory: &Path) -> Result<Vec<BundledFile>> {
     }
 
     files.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(files)
+    Ok((files, notes))
 }
 
 #[cfg(unix)]
@@ -751,6 +768,44 @@ mod tests {
         assert_eq!(skill.files.len(), 1);
         assert_eq!(skill.files[0].path, "scripts/cull.py");
         assert!(skill.files[0].text.as_deref().unwrap().starts_with("#!"));
+    }
+
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/103 — a bundled file above the
+    /// size cap is counted but never read into memory, and the run says so.
+    #[test]
+    fn a_bundled_file_above_the_size_cap_is_counted_but_not_read() {
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = temporary.path().join("photo-culling");
+        fs::create_dir_all(directory.join("assets")).unwrap();
+        fs::create_dir_all(directory.join("scripts")).unwrap();
+        fs::write(directory.join(SKILL_FILE), DOCUMENT).unwrap();
+        fs::write(
+            directory.join("assets/blob.bin"),
+            vec![0xff; MAX_TEXT_FILE_BYTES + 1],
+        )
+        .unwrap();
+        fs::write(
+            directory.join("scripts/cull.py"),
+            "#!/usr/bin/env python3\n",
+        )
+        .unwrap();
+
+        let skill = read(&directory).unwrap();
+
+        let blob = skill.file("assets/blob.bin").unwrap();
+        assert_eq!(blob.bytes, MAX_TEXT_FILE_BYTES + 1);
+        assert!(blob.text.is_none(), "an oversized file must not be read");
+        assert!(
+            skill
+                .notes
+                .iter()
+                .any(|note| note.contains("assets/blob.bin") && note.contains("not read")),
+            "the reader should say what it skipped, got {:?}",
+            skill.notes
+        );
+
+        let script = skill.file("scripts/cull.py").unwrap();
+        assert!(script.text.is_some(), "files under the cap are still read");
     }
 
     #[test]

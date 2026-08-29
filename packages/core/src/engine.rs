@@ -9,7 +9,7 @@ use anyhow::Result;
 use rayon::prelude::*;
 use regex::Regex;
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use crate::config::Config;
@@ -416,10 +416,14 @@ pub fn run_with_reviewer(
         })
         .collect();
 
+    // A finding is filed under the directory it names, matched exactly. A string prefix would let
+    // `a` swallow every finding about a sibling `ab`, since `ab/SKILL.md` starts with `a`.
     for message in lint_project(&skills, config) {
+        let directory = Path::new(&message.file).parent();
+
         if let Some(report) = per_skill
             .iter_mut()
-            .find(|one| message.file.starts_with(&one.path))
+            .find(|one| directory == Some(Path::new(&one.path)))
         {
             report.messages.push(message);
         }
@@ -476,10 +480,12 @@ pub fn run_with_reviewer(
     } else if !passes.model {
         // Intentional skip, not a failure. Keep it short: the editor runs --no-llm on every
         // static pass and a lecture about slint.toml there reads like something went wrong.
+        // Every report carries it, because a consumer that renders one skill at a time would
+        // otherwise read an empty notes list as "the model pass ran and found nothing".
         let count = llm::rules::all().len();
 
-        if let Some(first) = per_skill.first_mut() {
-            first.notes.push(format!(
+        for report in &mut per_skill {
+            report.notes.push(format!(
                 "Skipped {count} model rules (not requested). Pass --llm to run them."
             ));
         }
@@ -842,6 +848,100 @@ mod tests {
                     .any(|one| one.rule == "project/distinct-descriptions"),
                 "{} heard nothing about its twin",
                 skill.name
+            );
+        }
+    }
+
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/66 — a skill whose directory
+    /// name is a string prefix of a sibling's (`a` before `ab`) must not swallow the sibling's
+    /// project-rule findings; each report hears only about its own document.
+    #[test]
+    fn a_project_finding_is_not_stolen_by_a_prefix_sibling() {
+        let temporary = tempfile::tempdir().unwrap();
+        let shared = "---\nname: {name}\ndescription: Culls a photo shoot in Lightroom by flagging keepers. Use when triaging RAW files after a {tail}.\n---\n\n## Culling\n\n1. Import.\n";
+
+        write_skill(
+            temporary.path(),
+            "a",
+            &shared.replace("{name}", "a").replace("{tail}", "session"),
+        );
+        write_skill(
+            temporary.path(),
+            "ab",
+            &shared.replace("{name}", "ab").replace("{tail}", "shoot"),
+        );
+
+        let report = run(
+            &[temporary.path().to_path_buf()],
+            &Config::default(),
+            &[],
+            Passes {
+                plugins: false,
+                model: false,
+            },
+        )
+        .unwrap();
+
+        for skill in &report.skills {
+            let about_self = skill
+                .messages
+                .iter()
+                .filter(|one| {
+                    one.rule == "project/distinct-descriptions"
+                        && one.file == format!("{}/SKILL.md", skill.path)
+                })
+                .count();
+
+            assert_eq!(
+                about_self, 1,
+                "{} should hear exactly once about its own description, got {:?}",
+                skill.name, skill.messages
+            );
+            assert!(
+                !skill
+                    .messages
+                    .iter()
+                    .any(|one| one.rule == "project/distinct-descriptions"
+                        && one.file != format!("{}/SKILL.md", skill.path)),
+                "{} was handed a finding about another skill",
+                skill.name
+            );
+        }
+    }
+
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/104 — the skip note is a fact
+    /// about the run, so every skill's report carries it rather than one arbitrary skill.
+    #[test]
+    fn every_skill_says_when_the_model_pass_was_skipped() {
+        let temporary = tempfile::tempdir().unwrap();
+        let shared = GOOD.replace("photo-culling", "{name}");
+
+        for name in ["alpha", "beta", "gamma"] {
+            write_skill(temporary.path(), name, &shared.replace("{name}", name));
+        }
+
+        let report = run(
+            &[temporary.path().to_path_buf()],
+            &Config::default(),
+            &[],
+            Passes {
+                plugins: false,
+                model: false,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(report.skills.len(), 3);
+
+        for skill in &report.skills {
+            assert!(
+                skill
+                    .notes
+                    .iter()
+                    .any(|note| note.contains("Skipped") && note.contains("model rules")),
+                "{} should carry the skip note, got {:?}",
+                skill.name,
+                skill.notes
             );
         }
     }
