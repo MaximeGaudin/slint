@@ -1411,6 +1411,22 @@ You might want to start by looking through the briefs folder.\n\
         );
     }
 
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/215 — a step that names its
+    /// tool explicitly ("Call the X tool") declares a host dependency whatever tool it is;
+    /// only the one enumerated name used to be checked.
+    #[test]
+    fn an_imperative_call_on_an_unlisted_tool_is_reported() {
+        let skill = crate::skill::parse(
+            "---\nname: legacy-review\ndescription: Reviews a pull request using the host's review panel. Use when the user asks to review a PR with inline comments.\nallowed-tools: Read\n---\n\n## Review\n\n1. Call the OpenReviewPanel tool to display inline comments.\n",
+        );
+
+        let messages = check(&UNDECLARED_TOOL_RULE, &skill);
+
+        assert_eq!(messages.len(), 1, "{messages:?}");
+        assert!(messages[0].message.contains("OpenReviewPanel"));
+        assert_eq!(messages[0].rule, "body/undeclared-tool");
+    }
+
     #[test]
     fn a_longer_identifier_containing_the_tool_name_is_not_undeclared() {
         // Regression for https://github.com/MaximeGaudin/slint/issues/100: "AskQuestionnaire" is an
