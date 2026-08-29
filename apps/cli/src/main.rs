@@ -228,6 +228,15 @@ fn run(cli: &Cli) -> Result<u8> {
         return run_stdin(cli, &config);
     }
 
+    // The conventional stdin placeholder has no file to read, and a message that names the
+    // flag that does read stdin is worth more than the walker's IO error. After the --stdin
+    // branch, so `slint - --stdin` still reads stdin: with that flag the paths are not paths.
+    if cli.paths.iter().any(|path| path.as_os_str() == "-") {
+        bail!(
+            "- is not a path slint can read: it lints SKILL.md files and directories on disk. To lint the document on stdin, pass --stdin."
+        );
+    }
+
     // A base_url that arrived from the config file, not from the command line, chooses where the
     // API key and the document go. A config found in the scanned tree is not something the user
     // wrote, so say out loud what it is doing before anything is sent.

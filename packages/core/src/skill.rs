@@ -108,6 +108,17 @@ pub fn discover(paths: &[PathBuf], ignore: &Ignore) -> Result<Discovery> {
     let mut discovery = Discovery::default();
 
     for path in paths {
+        if !path.exists() {
+            // The walker's error for a missing root repeats the OS message twice; one line
+            // naming the path says more, and a run left with nothing to lint still fails
+            // with the nothing-linted exit code rather than a bare OS error.
+            discovery.skipped.push(format!(
+                "{} does not exist, so it was not linted",
+                path.display()
+            ));
+            continue;
+        }
+
         if find_manifest(path).is_some() {
             discovery.directories.push(path.clone());
             continue;

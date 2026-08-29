@@ -360,6 +360,70 @@ fn an_empty_directory_is_a_failure_not_a_clean_run() {
     );
 }
 
+/// Regression for https://github.com/MaximeGaudin/slint/issues/52 —
+/// `-` used to die with a doubled OS error that never said what slint does read, and a
+/// missing path printed the same OS error twice.
+#[test]
+fn dash_names_the_stdin_flag_and_a_missing_path_is_said_once() {
+    // `-` is the conventional stdin placeholder: point at the flag that does read stdin.
+    let output = slint(&["-", "--no-llm"]);
+    let errors = stderr(&output);
+    assert_eq!(output.status.code(), Some(3), "{errors}");
+    assert!(
+        errors.contains("--stdin"),
+        "the message must name the flag that reads stdin: {errors}"
+    );
+    assert!(!errors.contains("os error"), "no raw OS error: {errors}");
+
+    // A path that does not exist is said once, where the report can show it, and a run
+    // left with nothing to lint fails with the nothing-linted code, not a bare OS error.
+    let output = slint(&["/definitely/does/not/exist", "--no-llm"]);
+    let errors = stderr(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(4),
+        "nothing was linted, which is not a clean pass: {errors}"
+    );
+    let text = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(
+        text.contains("/definitely/does/not/exist"),
+        "the run must name the path: {text}"
+    );
+    assert!(
+        text.contains("not linted"),
+        "the run must say the path was not linted: {text}"
+    );
+    assert!(
+        !errors.contains("No such file or directory"),
+        "no raw OS error on stderr: {errors}"
+    );
+}
+
+#[test]
+fn a_missing_path_among_others_is_said_once_and_the_run_continues() {
+    let temporary = tempfile::tempdir().unwrap();
+    write(temporary.path(), "photo-culling", GOOD);
+
+    let output = slint(&[
+        temporary.path().join("photo-culling").to_str().unwrap(),
+        "/definitely/does/not/exist",
+        "--no-llm",
+    ]);
+
+    assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
+    assert!(stdout(&output).contains("Nothing to report"));
+    let text = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(
+        text.contains("/definitely/does/not/exist"),
+        "the run must name the path it could not lint: {text}"
+    );
+    assert!(
+        !stderr(&output).contains("No such file or directory"),
+        "no raw OS error: {}",
+        stderr(&output)
+    );
+}
+
 #[test]
 fn an_error_exits_one() {
     let temporary = tempfile::tempdir().unwrap();
