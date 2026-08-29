@@ -642,6 +642,23 @@ mod tests {
     }
 
     #[test]
+    fn a_blank_line_before_the_frontmatter_does_not_hide_it() {
+        // Regression for #254: a leading blank line is a copy-paste artifact, and a well-formed
+        // block two lines down was misdiagnosed as "No frontmatter", sending the author looking
+        // for a missing name and description that are plainly there.
+        let skill = parse(
+            "\n---\nname: photo-culling\ndescription: Culls a shoot. Use when triaging RAW files.\n---\n\n## Culling\n\n1. Import.\n",
+        );
+
+        assert!(skill.has_frontmatter);
+        assert_eq!(skill.name, "photo-culling");
+        assert!(skill.notes.is_empty(), "{:?}", skill.notes);
+        assert!(skill.body.starts_with("\n\n## Culling"));
+        // Line mapping still lands on the file, blank line counted.
+        assert_eq!(skill.document_line(2), 8);
+    }
+
+    #[test]
     fn a_document_with_no_frontmatter_says_so_instead_of_failing() {
         let skill = parse("# Just a heading\n\nSome instructions.\n");
 
