@@ -250,17 +250,18 @@ fn push_naming_messages(
         .collect();
 
     let flagged_are_gerunds = style_of(&flagged[0].name) == Style::Gerund;
+    let verb = if examples.len() == 1 { "is" } else { "are" };
 
     for skill in flagged {
         let message = if flagged_are_gerunds {
             format!(
-                "The name \"{}\" is a gerund (verb + -ing), but {} are not",
+                "The name \"{}\" is a gerund (verb + -ing), but {} {verb} not",
                 skill.name,
                 examples.join(", ")
             )
         } else {
             format!(
-                "The name \"{}\" is not a gerund (verb + -ing), but {} is",
+                "The name \"{}\" is not a gerund (verb + -ing), but {} {verb}",
                 skill.name,
                 examples.join(", ")
             )
@@ -476,8 +477,10 @@ mod tests {
         // The lone gerund name is the outlier; the two imperative names are the majority.
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].severity, Severity::Info);
-        assert!(messages[0].message.contains("processing-pdfs"));
-        assert!(messages[0].message.contains("extract-pdf-text"));
+        assert_eq!(
+            messages[0].message,
+            "The name \"processing-pdfs\" is a gerund (verb + -ing), but extract-pdf-text, cull-photos are not"
+        );
         assert_eq!(messages[0].file, "skills/processing-pdfs/SKILL.md");
     }
 
