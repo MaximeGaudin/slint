@@ -370,7 +370,17 @@ impl Rule for PosixPaths {
                 continue;
             }
 
-            let Some(found) = WINDOWS_PATH.find(line) else {
+            // A backslash whose tail is a single letter or digit is a regex escape (id\d+),
+            // not a path separator.
+            let Some(found) = WINDOWS_PATH.find_iter(line).find(|candidate| {
+                let tail = candidate
+                    .as_str()
+                    .rsplit_once('\\')
+                    .map(|(_, tail)| tail)
+                    .unwrap_or("");
+                !(tail.chars().count() == 1
+                    && tail.chars().next().is_some_and(char::is_alphanumeric))
+            }) else {
                 continue;
             };
 
@@ -960,6 +970,25 @@ mod tests {
 
             assert!(check(&POSIX_RULE, &skill).is_empty(), "for {open}{close}");
         }
+    }
+
+    #[test]
+    fn a_regex_escape_is_not_mistaken_for_a_windows_path() {
+        let skill = skill_with_body(
+            "\n## Culling\n\nUse the pattern `id\\d+` to match legacy identifiers.\n",
+        );
+
+        assert!(check(&POSIX_RULE, &skill).is_empty());
+    }
+
+    #[test]
+    fn a_regex_escape_does_not_hide_a_real_path_on_the_same_line() {
+        let skill =
+            skill_with_body("\n## Culling\n\nMatch `id\\d+`, then read scripts\\notes.md.\n");
+        let messages = check(&POSIX_RULE, &skill);
+
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].message.contains("scripts\\notes.md"));
     }
 
     #[test]
