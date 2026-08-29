@@ -1285,6 +1285,50 @@ fn the_sarif_format_is_a_valid_sarif_log() {
     );
 }
 
+// https://github.com/MaximeGaudin/slint/issues/172: CI systems that render test reports —
+// Jenkins, GitLab — read JUnit XML, not annotations.
+#[test]
+fn the_junit_format_is_xml_a_ci_can_ingest() {
+    let temporary = tempfile::tempdir().unwrap();
+    write(temporary.path(), "helper", BROKEN);
+
+    let output = slint(&[
+        temporary.path().to_str().unwrap(),
+        "--no-llm",
+        "--format",
+        "junit",
+    ]);
+
+    let text = stdout(&output);
+
+    assert!(text.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"), "{text}");
+    assert!(text.contains("<testsuites name=\"slint\""), "{text}");
+    assert!(text.contains("<testsuite name="), "{text}");
+    assert!(
+        text.contains("<error message=") || text.contains("<failure message="),
+        "the dangling path is at least one failed testcase:\n{text}"
+    );
+    assert!(text.contains("bundle/no-dangling-path"), "{text}");
+}
+
+#[test]
+fn the_junit_format_reports_a_clean_run_as_a_passing_testcase() {
+    let temporary = tempfile::tempdir().unwrap();
+    write(temporary.path(), "photo-culling", GOOD);
+
+    let output = slint(&[
+        temporary.path().to_str().unwrap(),
+        "--no-llm",
+        "--format",
+        "junit",
+    ]);
+
+    let text = stdout(&output);
+
+    assert!(text.contains("failures=\"0\" errors=\"0\""), "{text}");
+    assert!(text.contains("<testcase"), "at least one testcase exists: {text}");
+}
+
 // Colour is decided by more than the `--no-color` flag: the standard environment conventions
 // (https://no-color.org and https://bixense.com/clicolors/) apply as well. These tests run the
 // binary with stdout piped, which is never a terminal, so anything coloured must have been forced.

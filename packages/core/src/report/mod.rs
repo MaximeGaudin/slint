@@ -6,6 +6,7 @@
 
 pub mod github;
 pub mod json;
+pub mod junit;
 pub mod sarif;
 pub mod stylish;
 
@@ -26,6 +27,8 @@ pub enum Format {
     Github,
     /// For scanners and quality dashboards: SARIF 2.1.0, one result per finding.
     Sarif,
+    /// For CI test reports: JUnit XML, one testcase per finding.
+    Junit,
     /// One line per finding, for grep and for editors that expect a compiler.
     Compact,
 }
@@ -39,9 +42,10 @@ impl FromStr for Format {
             "json" => Ok(Format::Json),
             "github" => Ok(Format::Github),
             "sarif" => Ok(Format::Sarif),
+            "junit" => Ok(Format::Junit),
             "compact" => Ok(Format::Compact),
             other => Err(format!(
-                "unknown format \"{other}\" — try stylish, json, github, sarif or compact"
+                "unknown format \"{other}\" — try stylish, json, github, sarif, junit or compact"
             )),
         }
     }
@@ -55,6 +59,7 @@ pub fn render(report: &Report, format: Format, colour: bool, max_warnings: i64) 
         Format::Json => json::render(report, max_warnings),
         Format::Github => github::render(report),
         Format::Sarif => sarif::render(report),
+        Format::Junit => junit::render(report),
         Format::Compact => compact(report),
     }
 }
@@ -146,6 +151,7 @@ mod tests {
         assert_eq!("json".parse::<Format>().unwrap(), Format::Json);
         assert_eq!("github".parse::<Format>().unwrap(), Format::Github);
         assert_eq!("sarif".parse::<Format>().unwrap(), Format::Sarif);
+        assert_eq!("junit".parse::<Format>().unwrap(), Format::Junit);
         assert_eq!("compact".parse::<Format>().unwrap(), Format::Compact);
 
         let failure = "yaml".parse::<Format>().unwrap_err();
@@ -191,6 +197,8 @@ mod tests {
 
         assert!(render(&report, Format::Json, false, -1).starts_with('{'));
         assert!(render(&report, Format::Github, false, -1).starts_with("::"));
+        assert!(render(&report, Format::Sarif, false, -1).starts_with('{'));
+        assert!(render(&report, Format::Junit, false, -1).starts_with("<?xml"));
         assert!(render(&report, Format::Compact, false, -1).contains("SKILL.md:2:1"));
         assert!(render(&report, Format::Stylish, false, -1).contains("helper"));
     }
