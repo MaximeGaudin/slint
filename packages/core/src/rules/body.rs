@@ -57,8 +57,8 @@ pub static SECRETS: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
 });
 
 #[derive(Debug, Deserialize)]
-#[serde(default)]
-struct LineOptions {
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct LineOptions {
     /// Past this, an agent starts skimming rather than reading.
     max: usize,
 }
@@ -70,8 +70,8 @@ impl Default for LineOptions {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(default)]
-struct TokenOptions {
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct TokenOptions {
     /// The published guidance for a skill body.
     max: usize,
 }

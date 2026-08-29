@@ -381,9 +381,15 @@ pub fn load(path: &Path) -> Result<Config> {
     };
 
     for (name, value) in raw.rules {
-        config
-            .rules
-            .insert(name.clone(), setting_from(&name, &value)?);
+        let setting = setting_from(&name, &value)?;
+
+        // A rule's options are read by the rule itself, so a value it cannot read would be
+        // swallowed into its default: refuse the file instead.
+        if let RuleSetting::Tuned(_, options) = &setting {
+            crate::rules::validate_rule_options(&name, options)?;
+        }
+
+        config.rules.insert(name, setting);
     }
 
     Ok(config)
@@ -729,6 +735,43 @@ mod tests {
         assert_eq!(Provider::parse("groq").unwrap(), Provider::Groq);
         assert_eq!(Provider::parse("OpenAI").unwrap(), Provider::Openai);
         assert!(Provider::parse("claude").is_err());
+    }
+
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/27 —
+    /// an out-of-range rule option used to be swallowed into the rule's default, so the body
+    /// was judged against 500 lines with no sign that `max = -5` was never read.
+    #[test]
+    fn an_out_of_range_rule_option_fails_the_load_and_names_the_rule() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("slint.toml");
+        fs::write(
+            &path,
+            "[rules]\n\"body/max-lines\" = [\"warn\", { max = -5 }]\n",
+        )
+        .unwrap();
+
+        let failure = load(&path).unwrap_err();
+        let failure = format!("{failure:#}");
+
+        assert!(failure.contains("body/max-lines"), "{failure}");
+        assert!(failure.contains("-5"), "{failure}");
+    }
+
+    /// The same silent drop happened to a misspelt option key: the rule never read it.
+    #[test]
+    fn an_option_key_a_rule_does_not_read_fails_the_load() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("slint.config.json");
+        fs::write(
+            &path,
+            r#"{ "rules": { "description/min-length": ["warn", { "minumum": 100 }] } }"#,
+        )
+        .unwrap();
+
+        let failure = load(&path).unwrap_err();
+        let failure = format!("{failure:#}");
+
+        assert!(failure.contains("description/min-length"), "{failure}");
     }
 
     #[test]
