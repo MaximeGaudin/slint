@@ -373,8 +373,12 @@ static UNUSED_FILE: RuleMeta = RuleMeta {
     // normalised in the same run can make this very file referenced.
     fixable: false,
     needs_model: false,
-    reference_title: sources::PAPER.0,
-    reference_url: sources::PAPER.1,
+    // The best-practices guide's "Observe how Claude navigates Skills" section covers exactly
+    // this: "Ignored content: if Claude never accesses a bundled file, it might be unnecessary
+    // or poorly signaled in the main instructions". The paper previously cited here never
+    // discusses unreferenced bundle files.
+    reference_title: sources::BEST_PRACTICES.0,
+    reference_url: sources::BEST_PRACTICES.1,
 };
 
 static EXECUTABLE: RuleMeta = RuleMeta {
