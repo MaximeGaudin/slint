@@ -8,8 +8,16 @@ use serde::Serialize;
 
 use crate::diagnostics::Report;
 
+/// The version of the envelope's shape, so a consumer can detect a breaking
+/// change before it breaks them. Bump on any change to the fields below that
+/// removes or reinterprets one; adding a field does not.
+pub const SCHEMA_VERSION: u32 = 1;
+
 #[derive(Debug, Serialize)]
 pub struct Envelope<'a> {
+    /// The version of this shape. Pinned in `SCHEMA_VERSION`.
+    #[serde(rename = "schemaVersion")]
+    pub schema_version: u32,
     /// False when anything at error severity was found. Warnings do not flip it: they are the
     /// linter's opinion, and a caller that wants them fatal says so with --max-warnings.
     pub ok: bool,
@@ -29,6 +37,7 @@ pub struct Summary {
 
 pub fn envelope(report: &Report) -> Envelope<'_> {
     Envelope {
+        schema_version: SCHEMA_VERSION,
         ok: report.errors() == 0,
         summary: Summary {
             skills: report.skills.len(),
