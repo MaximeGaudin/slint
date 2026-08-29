@@ -297,4 +297,68 @@ mod tests {
                 .is_empty()
         );
     }
+
+    /// Regression for #93: nothing compared naming style across a project's skills.
+    fn consistent_naming_messages(skills: &[Skill]) -> Vec<Message> {
+        crate::engine::lint_project(skills, &Config::default())
+            .into_iter()
+            .filter(|message| message.rule == "project/consistent-naming-style")
+            .collect()
+    }
+
+    #[test]
+    fn a_collection_mixing_naming_styles_is_reported() {
+        let skills = vec![
+            skill("processing-pdfs", "Culls a photo shoot. Use when triaging RAW files."),
+            skill("extract-pdf-text", "Culls a photo shoot. Use when triaging RAW files."),
+            skill("cull-photos", "Culls a photo shoot. Use when triaging RAW files."),
+        ];
+
+        let messages = consistent_naming_messages(&skills);
+
+        // The lone gerund name is the outlier; the two imperative names are the majority.
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].severity, Severity::Info);
+        assert!(messages[0].message.contains("processing-pdfs"));
+        assert!(messages[0].message.contains("extract-pdf-text"));
+        assert_eq!(messages[0].file, "skills/processing-pdfs/SKILL.md");
+    }
+
+    #[test]
+    fn a_consistently_gerund_collection_passes() {
+        let skills = vec![
+            skill("processing-pdfs", "Culls a photo shoot. Use when triaging RAW files."),
+            skill("culling-photos", "Culls a photo shoot. Use when triaging RAW files."),
+        ];
+
+        assert!(consistent_naming_messages(&skills).is_empty());
+    }
+
+    #[test]
+    fn a_consistently_non_gerund_collection_passes() {
+        let skills = vec![
+            skill("extract-pdf-text", "Culls a photo shoot. Use when triaging RAW files."),
+            skill("pdf-export", "Culls a photo shoot. Use when triaging RAW files."),
+            skill("invoice-builder", "Culls a photo shoot. Use when triaging RAW files."),
+        ];
+
+        assert!(consistent_naming_messages(&skills).is_empty());
+    }
+
+    #[test]
+    fn a_single_skill_is_never_reported() {
+        let skills = vec![skill("processing-pdfs", "Culls a photo shoot. Use when triaging RAW files.")];
+
+        assert!(consistent_naming_messages(&skills).is_empty());
+    }
+
+    #[test]
+    fn words_that_merely_end_in_ing_are_not_gerunds() {
+        let skills = vec![
+            skill("string-utils", "Culls a photo shoot. Use when triaging RAW files."),
+            skill("thing-counter", "Culls a photo shoot. Use when triaging RAW files."),
+        ];
+
+        assert!(consistent_naming_messages(&skills).is_empty());
+    }
 }
