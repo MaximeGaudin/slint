@@ -236,4 +236,43 @@ mod tests {
         assert_eq!(messages.len(), 1);
         assert!(messages[0].message.contains("team"));
     }
+
+    /// Regression for #92: the spec caps compatibility at 500 characters, and nothing checked it.
+    fn compatibility_max_length_messages(source: &str) -> Vec<crate::diagnostics::Message> {
+        let parsed = skill::parse(source);
+        crate::engine::lint_skill(&parsed, &crate::config::Config::default())
+            .into_iter()
+            .filter(|message| message.rule == "frontmatter/compatibility-max-length")
+            .collect()
+    }
+
+    #[test]
+    fn an_oversized_compatibility_field_is_reported() {
+        let filler = "requires ".repeat(70);
+        let source = format!(
+            "---\nname: photo-culling\ndescription: Culls a photo shoot. Use when triaging RAW files.\ncompatibility: \"{filler}\"\n---\n\n## Culling\n\n1. Import the RAW files.\n"
+        );
+        let messages = compatibility_max_length_messages(&source);
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].severity, Severity::Error);
+        assert!(messages[0].message.contains("500"), "{}", messages[0].message);
+        assert_eq!(messages[0].location.line, 4);
+    }
+
+    #[test]
+    fn a_compatibility_field_within_the_limit_passes() {
+        let messages = compatibility_max_length_messages(
+            "---\nname: a\ndescription: b\ncompatibility: Requires Python 3.11+ and docker\n---\n\nBody.\n",
+        );
+
+        assert!(messages.is_empty());
+    }
+
+    #[test]
+    fn a_missing_compatibility_field_is_not_reported() {
+        let messages = compatibility_max_length_messages("---\nname: a\ndescription: b\n---\n\nBody.\n");
+
+        assert!(messages.is_empty());
+    }
 }
