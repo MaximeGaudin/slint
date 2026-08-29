@@ -53,6 +53,7 @@ pub fn render(report: &Report) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::diagnostics::Location;
     use crate::report::tests::sample;
 
     #[test]
@@ -63,6 +64,32 @@ mod tests {
         assert_eq!(lines.len(), 2);
         assert!(lines[0].starts_with("::warning file=skills/helper/SKILL.md,line=2,col=1"));
         assert!(lines[1].starts_with("::error file=skills/helper/SKILL.md,line=9,col=1"));
+    }
+
+    // https://github.com/MaximeGaudin/slint/issues/144: a rule that knows the span (say, a
+    // Windows path it matched) has to say where it ends, or GitHub underlines one character
+    // where the offending text is seventeen.
+    #[test]
+    fn a_span_becomes_endline_and_endcolumn_so_the_whole_match_is_underlined() {
+        let mut report = sample();
+        report.skills[0].messages[0].location = Location::span(8, 9, 17);
+
+        let text = render(&report);
+        let line = text.lines().next().unwrap();
+
+        assert!(
+            line.contains("line=8,col=9,endLine=8,endColumn=26,"),
+            "the span travels into the annotation: {line}"
+        );
+    }
+
+    #[test]
+    fn a_finding_with_no_span_stays_a_point_annotation() {
+        let text = render(&sample());
+        let line = text.lines().next().unwrap();
+
+        assert!(!line.contains("endLine"), "{line}");
+        assert!(!line.contains("endColumn"), "{line}");
     }
 
     #[test]
