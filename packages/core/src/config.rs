@@ -263,12 +263,28 @@ impl Config {
     }
 }
 
+/// Every recognised config file in `directory`, in the order `find` would take them.
+///
+/// A directory holding more than one of them is where "I edited the wrong file" lives, so the
+/// list is what the warning names when it has something to say.
+pub fn config_files_in(directory: &Path) -> Vec<PathBuf> {
+    CONFIG_NAMES
+        .iter()
+        .map(|name| directory.join(name))
+        .filter(|candidate| candidate.is_file())
+        .collect()
+}
+
 /// Looks for a config file, starting at `from` and walking up to the root.
 ///
 /// The walk is what makes running slint on a subdirectory of a repository behave the way everyone
 /// expects: the settings belong to the project, not to the directory the terminal happens to be in.
+///
 /// When no project config exists anywhere up the tree, a user-global one is the fallback, so a
 /// personal set of defaults does not have to be repeated in every repository.
+///
+/// When a directory holds several config files, the first of `CONFIG_NAMES` wins; the rest are
+/// ignored, which is why the README states the order and the run says so when it sees one.
 pub fn find(from: &Path) -> Option<PathBuf> {
     walk_up(from).or_else(|| {
         let candidate = user_config_path()?;
@@ -281,11 +297,8 @@ fn walk_up(from: &Path) -> Option<PathBuf> {
     let mut directory = Some(from);
 
     while let Some(current) = directory {
-        for name in CONFIG_NAMES {
-            let candidate = current.join(name);
-            if candidate.is_file() {
-                return Some(candidate);
-            }
+        if let Some(first) = config_files_in(current).into_iter().next() {
+            return Some(first);
         }
 
         directory = current.parent();
@@ -665,6 +678,26 @@ mod tests {
         fs::create_dir_all(&deep).unwrap();
 
         assert_eq!(find(&deep), Some(root.join("slint.toml")));
+    }
+
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/42 —
+    /// a directory holding two config files lists them in the order the winner is picked, so a
+    /// message can say which file read the others out.
+    #[test]
+    fn two_config_files_in_one_directory_list_in_precedence_order() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path();
+        fs::write(root.join("slint.config.json"), "{}\n").unwrap();
+        fs::write(root.join("slint.toml"), "[rules]\n").unwrap();
+
+        let files = config_files_in(root);
+        assert_eq!(
+            files,
+            vec![root.join("slint.toml"), root.join("slint.config.json")]
+        );
+
+        // And `find` still takes the first of the two.
+        assert_eq!(find(root), Some(root.join("slint.toml")));
     }
 
     #[test]

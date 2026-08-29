@@ -21,9 +21,11 @@ section: config
 slint init
 ```
 
-That writes `slint.toml`. `slint.config.json` and `.slintrc.json` work too, with the same fields.
-The file is found by walking up from whatever you asked slint to lint, so running it inside a
-subdirectory uses the project's settings rather than none.
+That writes `slint.toml`. `slint.config.json`, `.slintrc.json` and `.slintrc.toml` work too, with
+the same fields. The file is found by walking up from whatever you asked slint to lint, so running
+it inside a subdirectory uses the project's settings rather than none. If a directory holds more
+than one of them, the first of `slint.toml`, `slint.config.json`, `.slintrc.json`, `.slintrc.toml`
+wins, and the run says which file it read.
 
 ## Editor autocomplete
 

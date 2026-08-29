@@ -151,7 +151,7 @@ api_key_env = "OPENAI_API_KEY"   # the variable holding the key, never the key i
 path = "./slint-house-rules.toml"
 ```
 
-`slint.config.json` and `.slintrc.json` work too. The file is found by walking up from whatever you asked slint to lint. When no project config exists anywhere up the tree, a user-global one is used: `$XDG_CONFIG_HOME/slint/config.toml`, or `~/.config/slint/config.toml` — the place for a personal provider or a severity you always disagree with. A project config always wins.
+`slint.config.json`, `.slintrc.json` and `.slintrc.toml` work too. The file is found by walking up from whatever you asked slint to lint. If a directory holds more than one of them, the first of `slint.toml`, `slint.config.json`, `.slintrc.json`, `.slintrc.toml` wins and the run says which file it read. When no project config exists anywhere up the tree, a user-global one is used: `$XDG_CONFIG_HOME/slint/config.toml`, or `~/.config/slint/config.toml` — the place for a personal provider or a severity you always disagree with. A project config always wins.
 
 For editor autocomplete over the JSON shapes, point `$schema` at the published schema:
 
