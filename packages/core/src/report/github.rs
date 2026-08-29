@@ -36,14 +36,31 @@ pub fn render(report: &Report) -> String {
                 message.message, message.rule, message.advice, message.reference.url
             ));
 
-            lines.push(format!(
-                "::{level} file={},line={},col={},title=slint {}::{}",
+            // The span rides along when the rule knows it, in the order the workflow-command
+            // spec lists the properties, so GitHub underlines the whole match and not just the
+            // first character of it.
+            let mut command = format!(
+                "::{level} file={},line={},col={}",
                 escape_property(&message.file),
                 message.location.line,
                 message.location.column,
+            );
+
+            if let Some(end_line) = message.location.end_line {
+                command.push_str(&format!(",endLine={end_line}"));
+            }
+
+            if let Some(end_column) = message.location.end_column {
+                command.push_str(&format!(",endColumn={end_column}"));
+            }
+
+            command.push_str(&format!(
+                ",title=slint {}::{}",
                 escape_property(&message.rule),
                 body
             ));
+
+            lines.push(command);
         }
     }
 
