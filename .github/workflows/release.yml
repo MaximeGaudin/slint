@@ -46,6 +46,7 @@ jobs:
     permissions:
       contents: read
       actions: write
+      id-token: write
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -119,6 +120,22 @@ jobs:
         run: |
           $hash = (Get-FileHash -Algorithm SHA256 "${{ matrix.artifact }}.zip").Hash.ToLower()
           Set-Content -Path "${{ matrix.artifact }}.zip.sha256" -Value "$hash  ${{ matrix.artifact }}.zip"
+
+      - uses: sigstore/cosign-installer@ba7bc0a3fef59531c69a25acd34668d6d3fe6f22  # v4.1.0
+
+      - name: Sign artifact (keyless Sigstore)
+        env:
+          ARTIFACT: ${{ matrix.artifact }}
+        run: |
+          case "$ARTIFACT" in
+            *.zip) FILE="$ARTIFACT.zip" ;;
+            *)     FILE="$ARTIFACT.tar.gz" ;;
+          esac
+          cosign sign-blob --yes \
+            --output-signature "$FILE.sig" \
+            --output-certificate "$FILE.cert" \
+            --bundle "$FILE.bundle" \
+            "$FILE"
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
