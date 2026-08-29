@@ -150,7 +150,7 @@ A document can also opt out of a rule for itself:
 
 The rules a regular expression cannot answer — ambiguity, terminology drift, whether a plausible request would actually route here — need a reader. slint uses [genai](https://github.com/jeremychone/rust-genai) for that, so OpenAI, Anthropic, Gemini, Ollama, OpenRouter and Groq are supported natively, and `base_url` points any of those wire formats at a gateway or a self-hosted server.
 
-One request per skill covers all eight rules at once, and **only when you ask for it**: the model pass is off unless `--llm` is given. File contents are never sent — only names and sizes.
+One request per skill covers all eight rules at once, and **only when you ask for it**: the model pass is off unless `--llm` is given. Bundled file contents are never sent — only their names and sizes. The SKILL.md body itself is sent (truncated to `max_input_bytes`, 64 KB by default), since it is the text the model rules review, and it is framed to the model as untrusted data to review rather than instructions to follow.
 
 ## Plugins
 
