@@ -11,9 +11,12 @@ use crate::diagnostics::{Fix, Location, Reference, Severity};
 use crate::rules::{Rule, RuleContext, RuleMeta, sources};
 
 /// A relative path that looks like it means a bundled file.
+///
+/// `*` is in the leading set so the Markdown-bold bullet style (`**scripts/cull.py**: …`) —
+/// the convention Anthropic's own best-practices documentation shows — counts as a reference.
 static BUNDLED_REFERENCE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"(?:^|[\s`(\x22'\[])((?:scripts|references|reference|assets|templates|data)/[\w./-]+)",
+        r"(?:^|[\s`(\x22'\[*])((?:scripts|references|reference|assets|templates|data)/[\w./-]+)",
     )
     .expect("the bundled reference pattern compiles")
 });
@@ -23,49 +26,329 @@ static PYTHON_IMPORT: LazyLock<Regex> = LazyLock::new(|| {
         .expect("the import pattern compiles")
 });
 
-const PYTHON_STDLIB: [&str; 42] = [
-    "sys",
-    "os",
-    "json",
-    "re",
-    "pathlib",
-    "subprocess",
-    "datetime",
-    "time",
-    "math",
-    "random",
-    "itertools",
-    "functools",
-    "collections",
-    "typing",
-    "dataclasses",
-    "argparse",
-    "csv",
-    "io",
-    "shutil",
-    "glob",
-    "tempfile",
-    "textwrap",
-    "hashlib",
-    "base64",
-    "urllib",
-    "http",
-    "html",
-    "sqlite3",
-    "unittest",
-    "logging",
-    "string",
-    "enum",
-    "abc",
-    "copy",
-    "statistics",
-    "zipfile",
-    "tarfile",
-    "uuid",
-    "signal",
-    "traceback",
-    "warnings",
+/// Every top-level module of the CPython standard library, from 3.8 through 3.14 (the names from
+/// `sys.stdlib_module_names`, plus the ones 3.10 and 3.12 dropped).
+const PYTHON_STDLIB: [&str; 320] = [
     "__future__",
+    "_abc",
+    "_aix_support",
+    "_android_support",
+    "_apple_support",
+    "_ast",
+    "_ast_unparse",
+    "_asyncio",
+    "_bisect",
+    "_blake2",
+    "_bz2",
+    "_codecs",
+    "_codecs_cn",
+    "_codecs_hk",
+    "_codecs_iso2022",
+    "_codecs_jp",
+    "_codecs_kr",
+    "_codecs_tw",
+    "_collections",
+    "_collections_abc",
+    "_colorize",
+    "_compat_pickle",
+    "_contextvars",
+    "_csv",
+    "_ctypes",
+    "_curses",
+    "_curses_panel",
+    "_datetime",
+    "_dbm",
+    "_decimal",
+    "_elementtree",
+    "_frozen_importlib",
+    "_frozen_importlib_external",
+    "_functools",
+    "_gdbm",
+    "_hashlib",
+    "_heapq",
+    "_hmac",
+    "_imp",
+    "_interpchannels",
+    "_interpqueues",
+    "_interpreters",
+    "_io",
+    "_ios_support",
+    "_json",
+    "_locale",
+    "_lsprof",
+    "_lzma",
+    "_markupbase",
+    "_md5",
+    "_multibytecodec",
+    "_multiprocessing",
+    "_opcode",
+    "_opcode_metadata",
+    "_operator",
+    "_osx_support",
+    "_overlapped",
+    "_pickle",
+    "_posixshmem",
+    "_posixsubprocess",
+    "_py_abc",
+    "_py_warnings",
+    "_pydatetime",
+    "_pydecimal",
+    "_pyio",
+    "_pylong",
+    "_pyrepl",
+    "_queue",
+    "_random",
+    "_remote_debugging",
+    "_scproxy",
+    "_sha1",
+    "_sha2",
+    "_sha3",
+    "_signal",
+    "_sitebuiltins",
+    "_socket",
+    "_sqlite3",
+    "_sre",
+    "_ssl",
+    "_stat",
+    "_statistics",
+    "_string",
+    "_strptime",
+    "_struct",
+    "_suggestions",
+    "_symtable",
+    "_sysconfig",
+    "_thread",
+    "_threading_local",
+    "_tkinter",
+    "_tokenize",
+    "_tracemalloc",
+    "_types",
+    "_typing",
+    "_uuid",
+    "_warnings",
+    "_weakref",
+    "_weakrefset",
+    "_winapi",
+    "_wmi",
+    "_zoneinfo",
+    "_zstd",
+    "abc",
+    "aifc",
+    "annotationlib",
+    "antigravity",
+    "argparse",
+    "array",
+    "ast",
+    "asynchat",
+    "asyncio",
+    "asyncore",
+    "atexit",
+    "audioop",
+    "base64",
+    "bdb",
+    "binascii",
+    "bisect",
+    "builtins",
+    "bz2",
+    "cProfile",
+    "calendar",
+    "cgi",
+    "cgitb",
+    "chunk",
+    "cmath",
+    "cmd",
+    "code",
+    "codecs",
+    "codeop",
+    "collections",
+    "colorsys",
+    "compileall",
+    "compression",
+    "concurrent",
+    "configparser",
+    "contextlib",
+    "contextvars",
+    "copy",
+    "copyreg",
+    "csv",
+    "ctypes",
+    "curses",
+    "dataclasses",
+    "datetime",
+    "dbm",
+    "decimal",
+    "difflib",
+    "dis",
+    "distutils",
+    "doctest",
+    "email",
+    "encodings",
+    "ensurepip",
+    "enum",
+    "errno",
+    "faulthandler",
+    "fcntl",
+    "filecmp",
+    "fileinput",
+    "fnmatch",
+    "fractions",
+    "ftplib",
+    "functools",
+    "gc",
+    "genericpath",
+    "getopt",
+    "getpass",
+    "gettext",
+    "glob",
+    "graphlib",
+    "grp",
+    "gzip",
+    "hashlib",
+    "heapq",
+    "hmac",
+    "html",
+    "http",
+    "idlelib",
+    "imaplib",
+    "imp",
+    "importlib",
+    "inspect",
+    "io",
+    "ipaddress",
+    "itertools",
+    "json",
+    "keyword",
+    "lib2to3",
+    "linecache",
+    "locale",
+    "logging",
+    "lzma",
+    "mailbox",
+    "mailcap",
+    "marshal",
+    "math",
+    "mimetypes",
+    "mmap",
+    "modulefinder",
+    "msilib",
+    "msvcrt",
+    "multiprocessing",
+    "netrc",
+    "nis",
+    "nntplib",
+    "nt",
+    "ntpath",
+    "nturl2path",
+    "numbers",
+    "opcode",
+    "operator",
+    "optparse",
+    "os",
+    "ossaudiodev",
+    "pathlib",
+    "pdb",
+    "pickle",
+    "pickletools",
+    "pipes",
+    "pkgutil",
+    "platform",
+    "plistlib",
+    "poplib",
+    "posix",
+    "posixpath",
+    "pprint",
+    "profile",
+    "pstats",
+    "pty",
+    "pwd",
+    "py_compile",
+    "pyclbr",
+    "pydoc",
+    "pydoc_data",
+    "pyexpat",
+    "queue",
+    "quopri",
+    "random",
+    "re",
+    "readline",
+    "reprlib",
+    "resource",
+    "rlcompleter",
+    "runpy",
+    "sched",
+    "secrets",
+    "select",
+    "selectors",
+    "shelve",
+    "shlex",
+    "shutil",
+    "signal",
+    "site",
+    "smtpd",
+    "smtplib",
+    "sndhdr",
+    "socket",
+    "socketserver",
+    "spwd",
+    "sqlite3",
+    "sre_compile",
+    "sre_constants",
+    "sre_parse",
+    "ssl",
+    "stat",
+    "statistics",
+    "string",
+    "stringprep",
+    "struct",
+    "subprocess",
+    "sunau",
+    "symtable",
+    "sys",
+    "sysconfig",
+    "syslog",
+    "tabnanny",
+    "tarfile",
+    "telnetlib",
+    "tempfile",
+    "termios",
+    "textwrap",
+    "this",
+    "threading",
+    "time",
+    "timeit",
+    "tkinter",
+    "token",
+    "tokenize",
+    "tomllib",
+    "trace",
+    "traceback",
+    "tracemalloc",
+    "tty",
+    "turtle",
+    "turtledemo",
+    "types",
+    "typing",
+    "unicodedata",
+    "unittest",
+    "urllib",
+    "uu",
+    "uuid",
+    "venv",
+    "warnings",
+    "wave",
+    "weakref",
+    "webbrowser",
+    "winreg",
+    "winsound",
+    "wsgiref",
+    "xdrlib",
+    "xml",
+    "xmlrpc",
+    "zipapp",
+    "zipfile",
+    "zipimport",
+    "zlib",
+    "zoneinfo",
 ];
 
 static NO_DANGLING: RuleMeta = RuleMeta {
@@ -150,8 +433,8 @@ static SCRIPT_PREREQUISITES: RuleMeta = RuleMeta {
     default_severity: Severity::Warning,
     fixable: false,
     needs_model: false,
-    reference_title: sources::SPECIFICATION.0,
-    reference_url: sources::SPECIFICATION.1,
+    reference_title: sources::PROJECT_CONVENTIONS.0,
+    reference_url: sources::PROJECT_CONVENTIONS.1,
 };
 
 fn paths_in(text: &str) -> BTreeSet<String> {
@@ -177,8 +460,19 @@ const STANDARD_DIRECTORY_PREFIXES: &[&str] = &[
     "data/",
 ];
 
+/// The optional directories the Agent Skills specification names. Only a mention of one of these
+/// in the instructions is a promise to ship the file; the slint extras (data/, templates/,
+/// reference/) are generic words that prose often uses for the user's own files.
+const SPEC_DIRECTORY_PREFIXES: &[&str] = &["scripts/", "references/", "assets/"];
+
 fn is_in_standard_directory(path: &str) -> bool {
     STANDARD_DIRECTORY_PREFIXES
+        .iter()
+        .any(|prefix| path.starts_with(prefix))
+}
+
+fn is_in_spec_directory(path: &str) -> bool {
+    SPEC_DIRECTORY_PREFIXES
         .iter()
         .any(|prefix| path.starts_with(prefix))
 }
@@ -208,6 +502,12 @@ impl Rule for NoDangling {
         let body = context.skill.body.clone();
 
         for path in paths_in(&body) {
+            // data/, templates/ and reference/ are slint extras, not spec directories: a prose
+            // mention of them usually names the user's own files, not a file to be shipped.
+            if !is_in_spec_directory(&path) {
+                continue;
+            }
+
             if bundled.contains(&path) {
                 continue;
             }
@@ -507,23 +807,38 @@ fn has_contents(text: &str) -> bool {
 
 fn with_contents(text: &str) -> Option<String> {
     let lines: Vec<&str> = text.lines().collect();
+    let ending = dominant_line_ending(text);
 
-    let headings: Vec<String> = lines
-        .iter()
-        .filter(|line| line.starts_with("## "))
-        .map(|line| format!("- {}", line.trim_start_matches("## ")))
-        .collect();
+    // Fenced blocks are code, not prose: a `## ` comment in bash is not a section and a `#`
+    // comment is not the title, so neither scan reads anything inside ``` or ~~~ fences.
+    let mut headings: Vec<String> = Vec::new();
+    let mut title_after: Option<usize> = None;
+    let mut fenced = false;
+
+    for (index, line) in lines.iter().enumerate() {
+        let opening = line.trim_start();
+        if opening.starts_with("```") || opening.starts_with("~~~") {
+            fenced = !fenced;
+            continue;
+        }
+
+        if fenced {
+            continue;
+        }
+
+        if line.starts_with("## ") {
+            headings.push(format!("- {}", line.trim_start_matches("## ")));
+        } else if title_after.is_none() && line.starts_with("# ") {
+            // After the title if there is one, which is where a reader looks for a contents list.
+            title_after = Some(index + 1);
+        }
+    }
 
     if headings.is_empty() {
         return None;
     }
 
-    // After the title if there is one, which is where a reader looks for a contents list.
-    let at = lines
-        .iter()
-        .position(|line| line.starts_with("# ") && !line.starts_with("## "))
-        .map(|index| index + 1)
-        .unwrap_or(0);
+    let at = title_after.unwrap_or(0);
 
     let mut rebuilt: Vec<String> = lines[..at].iter().map(|line| line.to_string()).collect();
     rebuilt.push(String::new());
@@ -532,12 +847,22 @@ fn with_contents(text: &str) -> Option<String> {
     rebuilt.extend(headings);
     rebuilt.extend(lines[at..].iter().map(|line| line.to_string()));
 
-    let mut joined = rebuilt.join("\n");
-    if text.ends_with('\n') {
-        joined.push('\n');
+    // The file's own convention is kept: a fix that rewrites the ending of every line it never
+    // meant to touch is not a fix but a silent re-encoding.
+    let mut joined = rebuilt.join(ending);
+    if text.ends_with(ending) {
+        joined.push_str(ending);
     }
 
     Some(joined)
+}
+
+/// The line ending the file mostly uses, so a rewrite speaks the file's own dialect.
+fn dominant_line_ending(text: &str) -> &'static str {
+    let crlf = text.matches("\r\n").count();
+    let lf = text.matches('\n').count() - crlf;
+
+    if crlf > lf { "\r\n" } else { "\n" }
 }
 
 static DANGLING_RULE: NoDangling = NoDangling;
@@ -599,6 +924,50 @@ mod tests {
     }
 
     #[test]
+    fn a_generic_data_directory_in_prose_is_not_a_bundle_promise() {
+        // Regression for https://github.com/MaximeGaudin/slint/issues/76: data/ is not one of the
+        // Agent Skills optional directories (scripts/, references/, assets/), so a prose mention
+        // of the user's own data/... is not a promise to ship that file.
+        let skill = skill_with_body(
+            "\n## Steps\n\n1. Read the data/sales.csv the user provides and merge it with data/inventory.csv.\n",
+        );
+
+        assert!(
+            check(&DANGLING_RULE, &skill).is_empty(),
+            "a generic data/ mention must not dangle"
+        );
+    }
+
+    #[test]
+    fn a_dangling_path_in_a_spec_directory_is_still_an_error() {
+        for path in [
+            "scripts/cull.py",
+            "references/formats.md",
+            "assets/logo.png",
+        ] {
+            let skill =
+                skill_with_body(&format!("\n## Culling\n\nRun {path} when you are done.\n"));
+            let messages = check(&DANGLING_RULE, &skill);
+
+            assert_eq!(messages.len(), 1, "for {path}");
+            assert!(messages[0].message.contains(path), "for {path}");
+        }
+    }
+
+    #[test]
+    fn a_bundled_data_file_referenced_in_the_body_is_not_unused() {
+        let mut skill = skill_with_body(
+            "\n## Culling\n\nRun scripts/cull.py, which reads data/defaults.json.\n",
+        );
+        skill
+            .files
+            .push(file("scripts/cull.py", "print(1)\n", true));
+        skill.files.push(file("data/defaults.json", "{}\n", false));
+
+        assert!(check(&UNUSED_RULE, &skill).is_empty());
+    }
+
+    #[test]
     fn a_dangling_path_is_reported_on_the_line_that_names_it() {
         let skill = skill_with_body("\n## Culling\n\n1. Import.\n2. Run scripts/cull.py.\n");
         let messages = check(&DANGLING_RULE, &skill);
@@ -630,6 +999,21 @@ mod tests {
         assert!(messages[0].message.contains("Nothing refers to"));
         // Never fixable: deleting a file in a batch is how a fixed path loses the file it points at.
         assert!(messages[0].fix.is_none());
+    }
+
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/78 —
+    /// `**scripts/cull.py**: description` is the exact bullet-list style shown in Anthropic's
+    /// own best-practices documentation, so a bold reference must count as a reference.
+    #[test]
+    fn a_file_referenced_in_markdown_bold_counts_as_used() {
+        let mut skill = skill_with_body(
+            "\n## Utility scripts\n\n**scripts/cull.py**: Culls the shoot and writes the selects to disk.\n",
+        );
+        skill
+            .files
+            .push(file("scripts/cull.py", "print(\"cull\")\n", false));
+
+        assert!(check(&UNUSED_RULE, &skill).is_empty());
     }
 
     /// Regression for https://github.com/MaximeGaudin/slint/issues/1 —
@@ -772,6 +1156,137 @@ mod tests {
     }
 
     #[test]
+    fn a_crlf_file_gets_its_contents_list_written_in_crlf() {
+        // Reproduces https://github.com/MaximeGaudin/slint/issues/72: the fix used to join with
+        // "\n" whatever the file's own convention, rewriting every line ending in the file.
+        let mut text = String::from("# Formats\r\n\r\n");
+        for index in 0..40 {
+            text.push_str(&format!(
+                "## Section {index}\r\n\r\nWords about it.\r\n\r\n"
+            ));
+        }
+
+        let mut skill = skill_with_body("\n## Culling\n\nRead references/formats.md.\n");
+        skill
+            .files
+            .push(file("references/formats.md", &text, false));
+
+        let messages = check(&CONTENTS_RULE, &skill);
+        assert_eq!(messages.len(), 1);
+
+        let fixed = &messages[0].fix.as_ref().unwrap().replacement;
+
+        assert!(
+            fixed.ends_with("\r\n"),
+            "the trailing newline keeps its return"
+        );
+        assert_eq!(
+            fixed.matches('\n').count(),
+            fixed.matches("\r\n").count(),
+            "no bare LF may appear where the file uses CRLF"
+        );
+        assert!(fixed.contains("## Contents\r\n\r\n"));
+        assert!(fixed.contains("- Section 0\r\n"));
+    }
+
+    /// Reproduces https://github.com/MaximeGaudin/slint/issues/90 — a `## ` line inside a fenced
+    /// code block is code, not a section heading.
+    #[test]
+    fn a_heading_inside_a_fenced_block_is_not_a_section() {
+        let mut text = String::from(
+            "# Formats\n\n## Real Section\n\nWords.\n\n```bash\n## this is a bash comment, not a heading\necho hi\n```\n\n",
+        );
+        for index in 0..40 {
+            text.push_str(&format!("## Section {index}\n\nWords.\n\n"));
+        }
+
+        let mut skill = skill_with_body("\n## Culling\n\nRead references/formats.md.\n");
+        skill
+            .files
+            .push(file("references/formats.md", &text, false));
+
+        let messages = check(&CONTENTS_RULE, &skill);
+        assert_eq!(messages.len(), 1);
+
+        let fixed = &messages[0].fix.as_ref().unwrap().replacement;
+        assert!(fixed.contains("- Real Section"));
+        assert!(
+            !fixed.contains("- this is a bash comment"),
+            "a comment inside a fence is not a section:\n{}",
+            &fixed[..fixed.find("- Section 0").unwrap()]
+        );
+    }
+
+    #[test]
+    fn a_heading_inside_a_tilde_fence_is_not_a_section_either() {
+        let mut text = String::from(
+            "# Formats\n\n~~~\n## this belongs to the fenced example, not the contents\n~~~\n\n",
+        );
+        for index in 0..40 {
+            text.push_str(&format!("## Section {index}\n\nWords.\n\n"));
+        }
+
+        let mut skill = skill_with_body("\n## Culling\n\nRead references/formats.md.\n");
+        skill
+            .files
+            .push(file("references/formats.md", &text, false));
+
+        let messages = check(&CONTENTS_RULE, &skill);
+        assert_eq!(messages.len(), 1);
+
+        let fixed = &messages[0].fix.as_ref().unwrap().replacement;
+        assert!(
+            !fixed.contains("- this belongs to the fenced example"),
+            "a ~~~ fence hides its lines too:\n{fixed}"
+        );
+    }
+
+    #[test]
+    fn a_heading_after_the_fence_closes_is_still_a_section() {
+        let mut text = String::from("```bash\n## comment\n```\n\n");
+        for index in 0..40 {
+            text.push_str(&format!("## Section {index}\n\nWords.\n\n"));
+        }
+
+        let mut skill = skill_with_body("\n## Culling\n\nRead references/formats.md.\n");
+        skill
+            .files
+            .push(file("references/formats.md", &text, false));
+
+        let messages = check(&CONTENTS_RULE, &skill);
+        assert_eq!(messages.len(), 1);
+
+        let fixed = &messages[0].fix.as_ref().unwrap().replacement;
+        assert!(fixed.contains("- Section 0"), "the fence ended:\n{fixed}");
+    }
+
+    #[test]
+    fn a_comment_line_inside_a_fence_does_not_become_the_title() {
+        let mut text =
+            String::from("```bash\n# a comment, not a title\n```\n\n## Alpha\n\nWords.\n\n");
+        for index in 0..40 {
+            text.push_str(&format!("## Section {index}\n\nWords.\n\n"));
+        }
+
+        let mut skill = skill_with_body("\n## Culling\n\nRead references/formats.md.\n");
+        skill
+            .files
+            .push(file("references/formats.md", &text, false));
+
+        let messages = check(&CONTENTS_RULE, &skill);
+        assert_eq!(messages.len(), 1);
+
+        // No title outside a fence, so the contents list goes at the top of the file — never
+        // inside the fenced block it was misread from.
+        let fixed = &messages[0].fix.as_ref().unwrap().replacement;
+        assert!(
+            fixed.trim_start().starts_with("## Contents"),
+            "the list must not be inserted inside the fence:\n{fixed}"
+        );
+        assert!(fixed.contains("- Alpha"));
+    }
+
+    #[test]
     fn an_undeclared_import_is_reported() {
         let mut skill = skill_with_body("\n## Culling\n\nRun scripts/cull.py.\n");
         skill.files.push(file(
@@ -784,6 +1299,37 @@ mod tests {
 
         assert_eq!(messages.len(), 1, "the standard library does not count");
         assert!(messages[0].message.contains("rawpy"));
+    }
+
+    #[test]
+    fn standard_library_modules_outside_the_old_allowlist_pass() {
+        // Regression for https://github.com/MaximeGaudin/slint/issues/75: these ship with every
+        // CPython install, so none of them needs an install instruction.
+        for module in [
+            "asyncio",
+            "secrets",
+            "threading",
+            "multiprocessing",
+            "socket",
+            "queue",
+            "decimal",
+            "contextlib",
+            "inspect",
+            "pickle",
+            "ssl",
+            "platform",
+            "tomllib",
+            "ipaddress",
+        ] {
+            let mut skill = skill_with_body("\n## Culling\n\nRun scripts/fetch.py.\n");
+            skill.files.push(file(
+                "scripts/fetch.py",
+                &format!("import {module}\n\nprint({module})\n"),
+                true,
+            ));
+
+            assert!(check(&DEPENDENCIES_RULE, &skill).is_empty(), "for {module}");
+        }
     }
 
     #[test]
@@ -833,6 +1379,13 @@ mod tests {
             "expected one prerequisites finding, got {messages:?}"
         );
         assert_eq!(messages[0].severity, Severity::Warning);
+        // https://github.com/MaximeGaudin/slint/issues/77 — the specification never
+        // mentions a Prerequisites section; the section convention is slint's own.
+        assert_eq!(
+            messages[0].reference.url, "https://slint.dev/rules",
+            "the citation must own the convention instead of attributing it to the specification: {:?}",
+            messages[0].reference
+        );
         assert!(
             messages[0]
                 .message
