@@ -45,6 +45,10 @@ pub struct Skill {
     pub frontmatter_lines: usize,
     /// Whether a frontmatter block was found at all.
     pub has_frontmatter: bool,
+    /// Whether the frontmatter declared `name:` at all. The directory-name fallback in
+    /// [`read`] is display text for messages, not a declaration, and the name rules must not
+    /// mistake one for the other.
+    pub name_declared: bool,
     pub name: String,
     pub description: String,
     /// The instructions, without the frontmatter.
@@ -205,9 +209,10 @@ pub fn read(directory: &Path) -> Result<Skill> {
     skill.directory = directory.to_path_buf();
     skill.document = document_path.display().to_string();
 
-    if skill.name.is_empty() {
+    if !skill.name_declared && skill.name.is_empty() {
         // The directory name is what an agent would see if the frontmatter is silent, and it makes
-        // every message about the skill say which skill.
+        // every message about the skill say which skill. It is display text only: the name rules
+        // still report the declaration the frontmatter never made.
         skill.name = directory
             .file_name()
             .and_then(|name| name.to_str())
@@ -308,6 +313,7 @@ pub fn parse(source: &str) -> Skill {
         source: source.to_string(),
         frontmatter_lines: 0,
         has_frontmatter: false,
+        name_declared: false,
         name: String::new(),
         description: String::new(),
         body: source.to_string(),
@@ -406,6 +412,9 @@ fn read_frontmatter(skill: &mut Skill, document: Option<&Yaml>) {
 
         match key {
             "name" => {
+                // Declared is not the same as present: an empty or mistyped value stays the
+                // author's problem, reported by the rules, not papered over here.
+                skill.name_declared = true;
                 if let Some(text) = scalar_string(value) {
                     skill.name = text;
                 }
