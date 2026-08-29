@@ -12,6 +12,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
+use yaml_rust2::{Yaml, YamlEmitter, YamlLoader};
 
 /// The document an agent is handed.
 pub const SKILL_FILE: &str = "SKILL.md";
@@ -48,6 +49,9 @@ pub struct Skill {
     pub body_offset: usize,
     /// Frontmatter keys other than name and description, in the order they were written.
     pub metadata: BTreeMap<String, String>,
+    /// The YAML type each top-level frontmatter key parsed as, so a rule can tell a
+    /// `description: true` was not written as a string.
+    pub scalar_types: BTreeMap<String, String>,
     pub files: Vec<BundledFile>,
     /// What could not be read, said out loud rather than dropped.
     pub notes: Vec<String>,
@@ -247,9 +251,11 @@ fn is_executable(_path: &Path) -> bool {
 
 /// Splits a `SKILL.md` into frontmatter and body.
 ///
-/// The frontmatter parse handles the subset the format actually uses — `key: value`, one per line —
-/// rather than pulling in a YAML implementation. Anything nested is kept as raw text under its key,
-/// so a rule can still see it and no value is silently lost.
+/// The frontmatter is read with a real YAML parser (yaml-rust2), so block scalars, quoted
+/// values, lists, and nested maps behave the way a conforming Agent Skills loader reads them.
+/// The parse stays forgiving — anything unparseable becomes a note on the skill rather than an
+/// error — and no value is silently dropped: non-scalar values are kept as YAML text under
+/// their key.
 pub fn parse(source: &str) -> Skill {
     let mut skill = Skill {
         directory: PathBuf::new(),
@@ -262,6 +268,7 @@ pub fn parse(source: &str) -> Skill {
         body: source.to_string(),
         body_offset: 0,
         metadata: BTreeMap::new(),
+        scalar_types: BTreeMap::new(),
         files: Vec::new(),
         notes: Vec::new(),
     };
@@ -279,7 +286,7 @@ pub fn parse(source: &str) -> Skill {
 
     let mut consumed = 1;
     let mut closed = false;
-    let mut pending: Option<String> = None;
+    let mut frontmatter = String::new();
 
     for line in lines {
         consumed += 1;
@@ -289,52 +296,8 @@ pub fn parse(source: &str) -> Skill {
             break;
         }
 
-        // A continuation of the previous key: an indented line under `description:`, or a list item.
-        if line.starts_with(' ') || line.starts_with('\t') {
-            if let Some(key) = &pending {
-                let extra = line.trim();
-                match key.as_str() {
-                    "description" => {
-                        if !skill.description.is_empty() {
-                            skill.description.push(' ');
-                        }
-                        skill.description.push_str(extra);
-                    }
-                    other => {
-                        let entry = skill.metadata.entry(other.to_string()).or_default();
-                        if !entry.is_empty() {
-                            entry.push(' ');
-                        }
-                        entry.push_str(extra);
-                    }
-                }
-            }
-            continue;
-        }
-
-        let Some((key, value)) = line.split_once(':') else {
-            continue;
-        };
-
-        let key = key.trim().to_string();
-        let value = value
-            .trim()
-            .trim_matches(|c| c == '"' || c == '\'')
-            .to_string();
-        pending = Some(key.clone());
-
-        match key.as_str() {
-            "name" => skill.name = value,
-            "description" => skill.description = value,
-            "allowed-tools" => {
-                skill
-                    .metadata
-                    .insert(key, parse_flow_sequence(&value).unwrap_or(value));
-            }
-            _ => {
-                skill.metadata.insert(key, value);
-            }
-        }
+        frontmatter.push_str(line);
+        frontmatter.push('\n');
     }
 
     if !closed {
@@ -347,6 +310,13 @@ pub fn parse(source: &str) -> Skill {
     skill.has_frontmatter = true;
     skill.frontmatter_lines = consumed;
 
+    match YamlLoader::load_from_str(&frontmatter) {
+        Ok(documents) => read_frontmatter(&mut skill, documents.first()),
+        Err(error) => skill
+            .notes
+            .push(format!("The frontmatter is not valid YAML: {error}")),
+    }
+
     let offset = byte_offset_of_line(normalised, consumed);
     skill.body_offset = offset;
     skill.body = normalised[offset..].to_string();
@@ -354,21 +324,125 @@ pub fn parse(source: &str) -> Skill {
     skill
 }
 
-/// Normalize a YAML flow sequence (`[a, b]`) to a space-separated string of
-/// items, so membership checks on the stored value work for either form.
-/// Returns `None` when the value is not a flow sequence.
-fn parse_flow_sequence(value: &str) -> Option<String> {
-    let value = value.trim();
-    let inner = value.strip_prefix('[')?.strip_suffix(']')?;
-    let items = inner
-        .split(',')
-        .map(|item| item.trim().trim_matches(|c| c == '"' || c == '\''))
-        .filter(|item| !item.is_empty())
-        .collect::<Vec<_>>();
-    if items.is_empty() {
-        return None;
+/// Reads one parsed YAML document into the skill's fields.
+fn read_frontmatter(skill: &mut Skill, document: Option<&Yaml>) {
+    let Some(Yaml::Hash(mapping)) = document else {
+        if document.is_some() {
+            skill
+                .notes
+                .push("The frontmatter is not a YAML mapping of keys to values.".into());
+        }
+        return;
+    };
+
+    for (key, value) in mapping {
+        let Some(key) = key.as_str() else {
+            skill
+                .notes
+                .push("Frontmatter keys must be strings; a non-string key was skipped.".into());
+            continue;
+        };
+
+        skill
+            .scalar_types
+            .insert(key.to_string(), yaml_type(value).to_string());
+
+        match key {
+            "name" => {
+                if let Some(text) = scalar_string(value) {
+                    skill.name = text;
+                }
+            }
+            "description" => {
+                if let Some(text) = scalar_string(value) {
+                    skill.description = text;
+                }
+            }
+            "metadata" => flatten_map("metadata", value, &mut skill.metadata),
+            other => {
+                let rendered = scalar_string(value)
+                    .or_else(|| tool_list(value))
+                    .unwrap_or_else(|| rendered_yaml(value));
+                skill.metadata.insert(other.to_string(), rendered);
+            }
+        }
     }
-    Some(items.join(" "))
+}
+
+/// The text a conforming loader hands out for a scalar, or `None` when the value is not one.
+/// A null reads as empty, and a number or boolean keeps the text an author wrote.
+fn scalar_string(value: &Yaml) -> Option<String> {
+    match value {
+        Yaml::String(text) => Some(text.clone()),
+        Yaml::Integer(number) => Some(number.to_string()),
+        Yaml::Real(number) => Some(number.clone()),
+        Yaml::Boolean(flag) => Some(flag.to_string()),
+        Yaml::Null => Some(String::new()),
+        _ => None,
+    }
+}
+
+/// The YAML type a value parsed as, in the words a rule reports to an author.
+fn yaml_type(value: &Yaml) -> &'static str {
+    match value {
+        Yaml::String(_) => "string",
+        Yaml::Integer(_) | Yaml::Real(_) => "number",
+        Yaml::Boolean(_) => "boolean",
+        Yaml::Null => "null",
+        Yaml::Array(_) => "sequence",
+        Yaml::Hash(_) => "mapping",
+        _ => "invalid",
+    }
+}
+
+/// Flattens a nested YAML mapping into dotted keys (`metadata.author`), so every pair stays
+/// visible to the rules that read frontmatter keys.
+fn flatten_map(prefix: &str, value: &Yaml, into: &mut BTreeMap<String, String>) {
+    match value {
+        Yaml::Hash(mapping) => {
+            for (key, nested) in mapping {
+                if let Some(key) = key.as_str() {
+                    flatten_map(&format!("{prefix}.{key}"), nested, into);
+                }
+            }
+        }
+        scalar => {
+            let rendered = scalar_string(scalar).unwrap_or_else(|| rendered_yaml(scalar));
+            into.insert(prefix.to_string(), rendered);
+        }
+    }
+}
+
+/// Tool lists are sequences of tool names; whether an author writes a flow sequence or a block
+/// list, the rules check membership in a space-separated list.
+fn tool_list(value: &Yaml) -> Option<String> {
+    let items = match value {
+        Yaml::Array(items) => items
+            .iter()
+            .map(scalar_string)
+            .collect::<Option<Vec<_>>>()?,
+        Yaml::String(text) => vec![text.clone()],
+        _ => return None,
+    };
+
+    Some(
+        items
+            .into_iter()
+            .filter(|item| !item.is_empty())
+            .collect::<Vec<_>>()
+            .join(" "),
+    )
+}
+
+/// Values that are not scalars stay visible as YAML text rather than being dropped.
+fn rendered_yaml(value: &Yaml) -> String {
+    let mut text = String::new();
+
+    if YamlEmitter::new(&mut text).dump(value).is_err() {
+        return String::new();
+    }
+
+    text
 }
 
 /// The byte offset where the given 0-based line index starts.
@@ -431,14 +505,94 @@ mod tests {
     }
 
     #[test]
-    fn a_folded_description_is_joined_rather_than_truncated() {
+    fn a_folded_description_is_folded_like_a_real_yaml_parser() {
         let skill = parse(
             "---\nname: a\ndescription: >-\n  First half of the sentence,\n  and the rest of it.\n---\n\nBody.\n",
         );
 
         assert_eq!(
             skill.description,
-            ">- First half of the sentence, and the rest of it."
+            "First half of the sentence, and the rest of it."
+        );
+    }
+
+    #[test]
+    fn a_folded_block_scalar_indicator_does_not_leak_into_the_description() {
+        // Regression for #64: `>` and `|` are YAML block-scalar indicators, not text. A real YAML
+        // parser folds the lines that follow and never keeps the indicator character.
+        let skill = parse(
+            "---\nname: demo-skill\ndescription: >\n  Analyzes call transcripts and flags compliance issues.\n  Use when reviewing support calls for compliance keywords.\n---\n\nBody.\n",
+        );
+
+        assert_eq!(
+            skill.description,
+            "Analyzes call transcripts and flags compliance issues. Use when reviewing support calls for compliance keywords.\n"
+        );
+    }
+
+    #[test]
+    fn a_literal_block_scalar_keeps_its_line_breaks() {
+        let skill = parse("---\nname: a\ndescription: |\n  Line one.\n  Line two.\n---\n\nBody.\n");
+
+        assert_eq!(skill.description, "Line one.\nLine two.\n");
+    }
+
+    #[test]
+    fn a_nested_metadata_map_is_parsed_into_pairs() {
+        // Regression for #123: `metadata` is a YAML mapping of key-value pairs, not a text blob.
+        let skill = parse(
+            "---\nname: a\ndescription: b\nmetadata:\n  author: X\n  version: 1.0\n---\n\nBody.\n",
+        );
+
+        assert_eq!(
+            skill.metadata.get("metadata.author"),
+            Some(&"X".to_string())
+        );
+        assert_eq!(
+            skill.metadata.get("metadata.version"),
+            Some(&"1.0".to_string())
+        );
+    }
+
+    #[test]
+    fn a_boolean_description_is_recorded_with_its_type() {
+        // Regression for #94: the parser must not quietly stringify a non-string scalar.
+        let skill = parse("---\nname: a\ndescription: true\n---\n\nBody.\n");
+
+        assert_eq!(skill.description, "true");
+        assert_eq!(
+            skill.scalar_types.get("description"),
+            Some(&"boolean".to_string())
+        );
+    }
+
+    #[test]
+    fn a_number_name_is_recorded_with_its_type() {
+        let skill = parse("---\nname: 12345\ndescription: b\n---\n\nBody.\n");
+
+        assert_eq!(skill.name, "12345");
+        assert_eq!(skill.scalar_types.get("name"), Some(&"number".to_string()));
+    }
+
+    #[test]
+    fn a_sequence_description_is_recorded_as_a_sequence() {
+        let skill = parse("---\nname: a\ndescription:\n  - first\n  - second\n---\n\nBody.\n");
+
+        assert_eq!(skill.description, "");
+        assert_eq!(
+            skill.scalar_types.get("description"),
+            Some(&"sequence".to_string())
+        );
+    }
+
+    #[test]
+    fn string_values_record_their_type_as_string() {
+        let skill = parse(DOCUMENT);
+
+        assert_eq!(skill.scalar_types.get("name"), Some(&"string".to_string()));
+        assert_eq!(
+            skill.scalar_types.get("description"),
+            Some(&"string".to_string())
         );
     }
 

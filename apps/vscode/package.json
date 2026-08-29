@@ -421,6 +421,17 @@
               "default": "error",
               "description": "SKILL.md must start with a YAML frontmatter block (--- ... ---). (default: error)."
             },
+            "frontmatter/type-error": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "error",
+              "description": "name and description must be YAML strings. (default: error)."
+            },
             "frontmatter/unknown-field": {
               "type": "string",
               "enum": [
@@ -430,7 +441,7 @@
                 "info"
               ],
               "default": "warning",
-              "description": "Top-level frontmatter keys must be agentskills.io fields (or live under metadata). (default: warning)."
+              "description": "Top-level frontmatter keys must be agentskills.io fields, Claude Code extensions, or live under metadata. (default: warning)."
             },
             "llm/consistent-terminology": {
               "type": "string",
