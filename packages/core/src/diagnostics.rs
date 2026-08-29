@@ -7,6 +7,19 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+/// Strips terminal control characters from text written outside this tool.
+///
+/// A finding's text is arbitrary: a model wrote it, a plugin wrote it, or it was captured from the
+/// very document being linted — and a reporter prints it to a terminal that will obey its escapes.
+/// So the C0/C1 control range (ESC starts an ANSI sequence, CR can reset the cursor) has to come
+/// out before the text is stored. Tab and newline are kept: they are the author's own paragraphing
+/// and are inert on the terminal.
+pub(crate) fn strip_control(text: &str) -> String {
+    text.chars()
+        .filter(|character| !character.is_control() || *character == '\t' || *character == '\n')
+        .collect::<String>()
+}
+
 /// How much a finding matters. Ordered worst-first, so a sort is a sort.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
