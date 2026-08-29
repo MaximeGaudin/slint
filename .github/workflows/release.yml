@@ -188,9 +188,11 @@ jobs:
           fi
 
   vscode:
-    name: Publish VS Code extension
+    name: Package and publish VS Code extension
     needs: release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
@@ -210,6 +212,17 @@ jobs:
 
       - name: Build extension
         run: pnpm exec turbo run build --filter=slint-vscode
+
+      - name: Package extension
+        run: pnpm --filter slint-vscode package
+
+      - name: Attach .vsix to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VSIX=$(ls apps/vscode/*.vsix)
+          echo "Packaged: ${VSIX}"
+          gh release upload "${{ inputs.tag }}" "${VSIX}" --clobber
 
       - name: Publish to the VS Code Marketplace
         env:
