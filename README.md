@@ -76,21 +76,28 @@ skills/helper  1 error, 2 warnings
 Exit codes match the convention other skill linters settled on, so a CI script written for one works here: `0` clean, `1` errors, `2` warnings only, `3` slint itself failed, `4` nothing was linted (no `SKILL.md` was found under the given path — check the path before trusting a green run). Running `slint init` when a config already exists is an idempotent no-op and exits `0`; nothing is overwritten.
 
 
-| Flag                | What it does                                        |
-| ------------------- | --------------------------------------------------- |
-| `--fix`             | Apply every computed fix, then lint again.          |
-| `--format`          | `stylish` (default), `json`, `github`, `sarif`, `compact`. |
-| `--stdin`           | Lint the document on stdin (`--stdin-filename` names it). |
-| `--print-config`    | Print the resolved config as JSON and stop.         |
-| `--explain RULE`    | Print one rule's catalogue entry and stop.          |
-| `--ignore-path F`   | Extra ignore patterns, one glob per line.           |
-| `--no-ignore`       | Lint everything, even what the config ignores.      |
-| `--rule name=level` | Override one rule (`off`, `info`, `warn`, `error`). |
-| `--max-warnings N`  | Fail when there are more warnings than this.        |
-| `--llm`             | Run the rules that need a model. Off by default.    |
-| `--no-plugins`      | Skip plugins, whatever the config says.             |
-| `--quiet`           | Errors only.                                        |
-| `-v` / `--verbose`  | Say which config and how many plugins, on stderr.   |
+| Flag                    | What it does                                                       |
+| ----------------------- | ------------------------------------------------------------------ |
+| `--fix`                 | Apply every computed fix, then lint again.                         |
+| `--format`              | `stylish` (default), `json`, `github`, `sarif`, `compact`.         |
+| `--stdin`               | Lint the document on stdin (static rules only).                    |
+| `--stdin-filename PATH` | The name to report for the stdin document.                         |
+| `--print-config`        | Print the resolved config as JSON and stop.                        |
+| `--explain RULE`        | Print one rule's catalogue entry and stop.                         |
+| `--config CONFIG`       | Use this config rather than looking for one.                       |
+| `--ignore-path F`       | Extra ignore patterns, one glob per line.                          |
+| `--no-ignore`           | Lint everything, even what the config ignores.                     |
+| `--rule name=level`     | Override one rule (`off`, `info`, `warn`, `error`).                |
+| `--max-warnings N`      | Fail when there are more warnings than this.                       |
+| `--llm`                 | Run the rules that need a model. Off by default.                   |
+| `--llm-provider NAME`   | Override `[llm].provider` from the config.                         |
+| `--llm-model ID`        | Override `[llm].model` from the config.                            |
+| `--llm-base-url URL`    | Override `[llm].base_url` from the config.                         |
+| `--llm-api-key-env VAR` | Override `[llm].api_key_env` from the config.                      |
+| `--no-plugins`          | Skip plugins, whatever the config says.                            |
+| `--quiet`               | Errors only.                                                       |
+| `-v` / `--verbose`      | Say which config and how many plugins, on stderr.                  |
+| `--no-color`            | Never colour the output.                                           |
 
 
 
