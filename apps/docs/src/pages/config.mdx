@@ -164,9 +164,15 @@ OpenAI-compatible service that is none of the five:
 [llm]
 provider = "openai"
 model = "qwen3-30b"
-base_url = "http://gateway.internal/v1"
+base_url = "https://gateway.internal/v1"
 api_key_env = "GATEWAY_TOKEN"
 ```
+
+The address must be `https`, with one exception: a model on this machine may be plain `http` to a
+loopback address (`localhost`, `127.0.0.1`). Anything else would carry your key and the documents
+being linted somewhere the config file chose — and a config found in the repository you are linting
+is not something you wrote — so when a `base_url` that came from the config (not from
+`--llm-base-url`) points off this machine, slint says so on stderr before it sends anything.
 
 A local Ollama needs no key at all. With `provider = "none"`, or with no `[llm]` block, nothing is
 ever sent anywhere and the report names the rules that did not run.
@@ -176,7 +182,7 @@ ever sent anywhere and the report names the rules that did not run.
 | `provider` | `none` | Which service answers the model rules. |
 | `model` | — | Any model id the provider understands. No default is invented. |
 | `api_key_env` | — | The environment variable holding the key. |
-| `base_url` | — | Sends the same wire format somewhere else. |
+| `base_url` | — | Sends the same wire format somewhere else. `https`, or `http` to loopback. |
 | `timeout_seconds` | `90` | Before a request is abandoned. |
 | `max_input_bytes` | `65536` | Bodies over this are cut at a heading, and the report says so. |
 | `max_tokens` | unset | Cap on the tokens a model may spend on its reply. |
