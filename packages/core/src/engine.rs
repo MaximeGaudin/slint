@@ -341,6 +341,12 @@ pub fn lint_project(skills: &[Skill], config: &Config) -> Vec<Message> {
     messages
 }
 
+/// What the model pass does for one skill, and the seam its tests swap a fake in through. The
+/// shared client is resolved by the caller, so a run pays for one client (and one runtime) no
+/// matter how many skills it reviews.
+type ModelReview<'a> =
+    dyn Fn(&Skill, &Config) -> Result<(Vec<Message>, Vec<String>)> + Send + Sync + 'a;
+
 /// Reads, lints and reports on every skill under the given paths.
 pub fn run(
     paths: &[PathBuf],
@@ -348,8 +354,34 @@ pub fn run(
     plugins: &[Plugin],
     passes: Passes,
 ) -> Result<Report> {
+    // One client, one runtime, one limiter for the whole pass: a client per skill pays a fresh
+    // TLS handshake per request and answers to no one about how many of them run at once.
+    let shared = llm::GenAiChat::new(&config.llm);
+    match &shared {
+        Ok(client) => run_with_reviewer(paths, config, plugins, passes, &|skill, cfg| {
+            llm::review_shared(client, skill, cfg)
+        }),
+        Err(failure) => {
+            let message = format!("{failure:#}");
+            run_with_reviewer(paths, config, plugins, passes, &move |_skill, _cfg| {
+                Err(anyhow::anyhow!("{message}"))
+            })
+        }
+    }
+}
+
+/// The same, with the model pass injectable — which is how its degradation behaviour is tested
+/// without a network.
+pub fn run_with_reviewer(
+    paths: &[PathBuf],
+    config: &Config,
+    plugins: &[Plugin],
+    passes: Passes,
+    review: &ModelReview<'_>,
+) -> Result<Report> {
     let ignore = skill::build_ignore(&config.ignore)?;
-    let directories = skill::discover(paths, &ignore)?;
+    let discovery = skill::discover(paths, &ignore)?;
+    let directories = discovery.directories;
 
     let mut skills = Vec::new();
     let mut unreadable = Vec::new();
@@ -396,9 +428,9 @@ pub fn run(
     // The model pass, last and optional. One request per skill, in parallel: the skills do not
     // share state, and waiting on them one after another is how a workspace review feels broken.
     // A provider that is unreachable leaves a note on that skill rather than an error on the run —
-    // the static half already produced something worth reading. An unparseable reply after retry,
-    // when the model pass was explicitly requested, hard-fails the run instead of silently
-    // dropping every finding.
+    // the static half already produced something worth reading. The same holds when a reply never
+    // parses after retry: the failure becomes a note on that skill, and the report — with every
+    // static finding and the JSON envelope a `--format json` caller is promised — survives (#65).
     if passes.model && config.llm.is_configured() {
         enum ModelOutcome {
             Ok(Vec<Message>, Vec<String>),
@@ -408,7 +440,7 @@ pub fn run(
 
         let outcomes: Vec<ModelOutcome> = skills
             .par_iter()
-            .map(|one| match llm::review(one, config) {
+            .map(|one| match review(one, config) {
                 Ok((messages, notes)) => ModelOutcome::Ok(messages, notes),
                 Err(failure) if llm::is_unparseable_findings(&failure) => {
                     ModelOutcome::Hard(failure)
@@ -419,7 +451,6 @@ pub fn run(
             })
             .collect();
 
-        let mut hard_fail = None;
         for (report, outcome) in per_skill.iter_mut().zip(outcomes) {
             match outcome {
                 ModelOutcome::Ok(messages, notes) => {
@@ -428,14 +459,11 @@ pub fn run(
                 }
                 ModelOutcome::Soft(note) => report.notes.push(note),
                 ModelOutcome::Hard(failure) => {
-                    report.notes.push(model_failure(&config.llm, &failure));
-                    hard_fail = Some(failure);
+                    report.notes.push(format!(
+                        "The model pass degraded for this skill — only the static rules ran. {failure:#}"
+                    ));
                 }
             }
-        }
-
-        if let Some(failure) = hard_fail {
-            return Err(failure);
         }
     } else if passes.model && !config.llm.is_configured() {
         // Asked for, and impossible: say exactly what is missing and where it goes.
@@ -497,6 +525,7 @@ pub fn run(
     Ok(Report {
         skills: per_skill,
         fixed: 0,
+        notes: discovery.skipped,
     }
     .sorted())
 }
@@ -553,6 +582,67 @@ mod tests {
         let suppressions = Suppressions::read(&source);
 
         assert!(suppressions.file.contains("body/posix-paths"));
+    }
+
+    #[test]
+    fn the_model_pass_runs_one_bounded_request_per_skill() {
+        use crate::llm::mock::MockServer;
+        use std::sync::atomic::Ordering;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let server = MockServer::start(MockServer::ollama_reply(), false);
+        let temporary = tempfile::tempdir().unwrap();
+        // A salt keeps this run's prompts out of the reply cache earlier runs may have warmed:
+        // every request here must really reach the mock, not an entry on disk.
+        let salt = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        for index in 0..6 {
+            let body = GOOD
+                .replace("photo-culling", &format!("skill-{index}"))
+                .replace(
+                    "Import the RAW files.",
+                    &format!("Import shoot {salt}-{index}."),
+                );
+            write_skill(temporary.path(), &format!("skill-{index}"), &body);
+        }
+
+        let mut config = Config::default();
+        config.llm.provider = crate::config::Provider::Ollama;
+        config.llm.model = "llama3.2".into();
+        config.llm.base_url = Some(format!("http://{}/v1", server.address));
+        config.llm.max_concurrent_requests = 2;
+
+        let report = run(
+            &[temporary.path().to_path_buf()],
+            &config,
+            &[],
+            Passes {
+                plugins: false,
+                model: true,
+            },
+        )
+        .expect("every skill reviews clean against the mock provider");
+
+        assert_eq!(server.requests.load(Ordering::SeqCst), 6);
+        let observed = server.max_in_flight.load(Ordering::SeqCst);
+        assert!(
+            observed <= 2,
+            "the model pass must hold requests back, not let {observed} run at once"
+        );
+        assert!(
+            report
+                .skills
+                .iter()
+                .all(|one| !one.notes.iter().any(|note| note.contains("asking"))),
+            "no skill may carry a provider failure note: {:?}",
+            report
+                .skills
+                .iter()
+                .flat_map(|one| &one.notes)
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -833,6 +923,86 @@ mod tests {
         assert!(note.contains("is set, so check the model id"), "{note}");
 
         unsafe { std::env::remove_var("SLINT_TEST_PRESENT_KEY") };
+    }
+
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/65 — a model reply that never
+    /// parses after retry degrades to a note on that skill; the static findings of every skill and
+    /// the report itself (which the JSON format turns into the envelope) must survive.
+    #[test]
+    fn an_unparseable_model_reply_degrades_to_a_note_and_keeps_every_static_finding() {
+        let temporary = tempfile::tempdir().unwrap();
+        write_skill(
+            temporary.path(),
+            "hardfail",
+            "---\nname: hardfail\ndescription: Culls a photo shoot in Lightroom by flagging the keepers and rejecting the rest. Use when triaging RAW files after a session.\n---\n\n## Culling\n\nRead scripts\\notes.md.\n",
+        );
+        write_skill(temporary.path(), "clean", GOOD);
+
+        let mut config = Config::default();
+        config.llm = crate::config::LlmConfig {
+            provider: crate::config::Provider::Openai,
+            model: "gpt-mock".into(),
+            api_key_env: Some("SLINT_TEST_MOCK_KEY".into()),
+            ..crate::config::LlmConfig::default()
+        };
+
+        let report = run_with_reviewer(
+            &[temporary.path().to_path_buf()],
+            &config,
+            &[],
+            Passes {
+                plugins: false,
+                model: true,
+            },
+            &|skill, _config| {
+                if skill.name == "hardfail" {
+                    Err(crate::llm::UnparseableFindings {
+                        detail: "The model reply was not valid findings JSON after one retry."
+                            .into(),
+                    }
+                    .into())
+                } else {
+                    Ok((Vec::new(), Vec::new()))
+                }
+            },
+        )
+        .expect("a model-pass failure must not discard a fully computed report");
+
+        assert_eq!(report.skills.len(), 2, "every skill stays in the report");
+
+        let hardfail = report
+            .skills
+            .iter()
+            .find(|one| one.name == "hardfail")
+            .unwrap();
+
+        assert!(
+            hardfail
+                .messages
+                .iter()
+                .any(|one| one.rule == "body/posix-paths"),
+            "the static finding computed before the model failed must survive: {:?}",
+            hardfail.messages
+        );
+
+        let note = hardfail.notes.join(" ");
+        assert!(note.contains("degraded"), "{note}");
+        assert!(
+            note.contains("not valid findings JSON"),
+            "the note must say why the model pass produced nothing: {note}"
+        );
+
+        let clean = report
+            .skills
+            .iter()
+            .find(|one| one.path.ends_with("clean"))
+            .unwrap();
+
+        assert!(
+            clean.notes.is_empty(),
+            "one skill's model failure must not leak onto the others: {:?}",
+            clean.notes
+        );
     }
 
     #[test]
