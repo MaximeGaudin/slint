@@ -357,6 +357,14 @@ mod tests {
     use crate::diagnostics::Severity;
     use crate::rules::testing::{good_skill, skill_with_body};
     use std::fs;
+    use std::sync::Mutex;
+
+    /// Serializes tests that mutate the process environment.
+    ///
+    /// `std::env::set_var` and `remove_var` change state for the whole process, and the default
+    /// test harness runs tests in parallel (one thread per core). Any test that touches the
+    /// environment must hold this lock for its entire body (issue #114).
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn write_skill(root: &std::path::Path, name: &str, document: &str) -> PathBuf {
         let directory = root.join(name);
@@ -617,33 +625,15 @@ mod tests {
     }
 
     #[test]
-    fn unguarded_env_mutation_races_with_concurrent_readers() {
-        // Reproduction of #114: std::env::set_var and remove_var mutate state for the whole
-        // process, and the default test harness runs tests in parallel. While the writer below
-        // hammers the variable, a reader runs concurrently and observes the mutation — the same
-        // exposure every other test in this binary has while the real test below mutates
-        // SLINT_TEST_PRESENT_KEY without a lock.
-        let writer = std::thread::spawn(|| {
-            for _ in 0..250 {
-                unsafe { std::env::set_var("SLINT_TEST_RACE_PROBE", "set") };
-                std::thread::sleep(std::time::Duration::from_millis(1));
-                unsafe { std::env::remove_var("SLINT_TEST_RACE_PROBE") };
-                std::thread::sleep(std::time::Duration::from_millis(1));
-            }
-        });
-
-        while !writer.is_finished() {
-            if std::env::var("SLINT_TEST_RACE_PROBE").is_ok() {
-                panic!("a concurrent reader observed an unguarded environment mutation");
-            }
-        }
-
-        writer.join().unwrap();
-    }
-
-    #[test]
     fn a_failure_with_the_key_present_points_at_the_model_id_instead() {
-        // SAFETY: single-threaded within this test, and the variable is only read by this call.
+        // Issue #114: the test harness runs tests in parallel, so any test that mutates the
+        // process environment must hold ENV_LOCK for its entire body — without the lock another
+        // test could observe the environment mid-mutation, and the libc calls would race.
+        let _environment = ENV_LOCK.lock().unwrap();
+
+        // SAFETY: ENV_LOCK serializes every environment mutation in this test binary, so no
+        // other test thread is mutating the environment concurrently. The variable has a name
+        // unique to this test and is read only by the model_failure call below.
         unsafe { std::env::set_var("SLINT_TEST_PRESENT_KEY", "value") };
 
         let llm = crate::config::LlmConfig {
