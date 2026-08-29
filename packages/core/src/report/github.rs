@@ -78,6 +78,50 @@ mod tests {
     }
 
     #[test]
+    fn a_comma_in_a_file_path_cannot_split_the_property_list() {
+        let mut report = sample();
+        report.skills[0].messages[0].file = "/tmp/f/skill, oddly named/SKILL.md".into();
+
+        let text = render(&report);
+
+        assert!(text.contains("file=/tmp/f/skill%2C oddly named/SKILL.md"));
+        assert!(!text.contains("file=/tmp/f/skill, oddly named"));
+    }
+
+    #[test]
+    fn a_colon_in_a_file_path_is_encoded_for_the_property_parser() {
+        let mut report = sample();
+        report.skills[0].messages[0].file = "/tmp/weird:name/SKILL.md".into();
+
+        let text = render(&report);
+
+        assert!(text.contains("file=/tmp/weird%3Aname/SKILL.md"));
+    }
+
+    #[test]
+    fn a_literal_percent_sequence_in_user_text_is_never_reinterpreted() {
+        let mut report = sample();
+        report.skills[0].messages[0].message =
+            "\"helper%0Adiscount\" has characters outside a-z".into();
+
+        let text = render(&report);
+
+        assert!(text.contains("helper%250Adiscount"));
+        assert!(!text.contains("helper%0Adiscount"));
+    }
+
+    #[test]
+    fn a_carriage_return_is_encoded_rather_than_deleted() {
+        let mut report = sample();
+        report.skills[0].messages[0].message = "first\rsecond".into();
+
+        let text = render(&report);
+
+        assert!(text.contains("first%0Dsecond"));
+        assert_eq!(text.lines().count(), 2, "still one line per finding");
+    }
+
+    #[test]
     fn a_clean_report_prints_nothing_at_all() {
         let empty = Report {
             skills: vec![],
