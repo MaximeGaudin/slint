@@ -827,4 +827,136 @@ reference = { title = "House style", url = "https://example.com/style" }
             .is_err()
         );
     }
+
+    // Regression tests for the audit findings in #85 and #111: a pack's captured text and a
+    // plugin's freeform strings reach a terminal renderer, and a rule id that collides with a
+    // built-in makes one config switch control two unrelated rules.
+
+    const ANSI_PROBE_PACK: &str = r#"
+[[rules]]
+name = "house/ansi"
+severity = "warning"
+summary = "ANSI injection probe.\u001B[2J"
+rationale = "Checking whether captured text is stripped before it hits the renderer."
+advice = "Remove the marker.\u001B[31m"
+pattern = "MARK.*MARK"
+target = "body"
+message = "found: {match}\u001B[7m"
+reference = { title = "PoC\u001B[0m", url = "https://example.com/poc" }
+"#;
+
+    #[test]
+    fn captured_text_a_pack_echoes_is_stripped_of_control_characters() {
+        let (_temporary, plugin) = pack(ANSI_PROBE_PACK);
+        let skill =
+            skill_with_body("\nMARK\u{1b}[31mFAKE ERROR\u{1b}[0m\u{1b}[2JMARK\n");
+
+        let (messages, _) = run(&[plugin], &skill, &Config::default());
+
+        assert_eq!(messages.len(), 1);
+        assert!(
+            !messages[0].message.contains('\u{1b}'),
+            "captured text must be stripped before interpolation, got: {:?}",
+            messages[0].message
+        );
+        assert!(messages[0].message.contains("found: MARKFAKE ERRORMARK"));
+    }
+
+    #[test]
+    fn the_strings_a_pack_author_wrote_are_stripped_of_control_characters() {
+        let (_temporary, plugin) = pack(ANSI_PROBE_PACK);
+        let skill = skill_with_body("\nMARKcleanMARK\n");
+
+        let (messages, _) = run(&[plugin], &skill, &Config::default());
+
+        assert_eq!(messages.len(), 1);
+        let finding = &messages[0];
+        for field in [
+            ("summary", finding.message.clone()),
+            ("advice", finding.advice.clone()),
+            ("reference title", finding.reference.title.clone()),
+        ] {
+            assert!(
+                !field.1.contains('\u{1b}'),
+                "{} must be stripped of control characters, got: {:?}",
+                field.0,
+                field.1
+            );
+        }
+    }
+
+    #[test]
+    fn text_a_wasm_plugin_reports_is_stripped_of_control_characters() {
+        let parsed: PluginOutput = serde_json::from_str(
+            r#"{"messages":[{"rule":"team/needs-review","message":"\u001b[2J\u001b[H PWNED","advice":"\u001b[31mrun this\u001b[0m","file":"\u001b[1mSKILL.md","reference":{"title":"Handbook\u001b[5m","url":"https://example.com"}}]}"#,
+        )
+        .unwrap();
+
+        let messages = into_messages(parsed, &good_skill(), &Config::default()).unwrap();
+
+        assert_eq!(messages.len(), 1);
+        let finding = &messages[0];
+        for field in [
+            ("message", finding.message.as_str()),
+            ("advice", finding.advice.as_str()),
+            ("file", finding.file.as_str()),
+            ("reference title", finding.reference.title.as_str()),
+        ] {
+            assert!(
+                !field.1.contains('\u{1b}'),
+                "{} must be stripped of control characters, got: {:?}",
+                field.0,
+                field.1
+            );
+        }
+    }
+
+    #[test]
+    fn a_pack_rule_named_after_a_builtin_is_refused_at_load() {
+        let temporary = tempfile::tempdir().unwrap();
+        fs::write(
+            temporary.path().join("pack.toml"),
+            r#"
+[[rules]]
+name = "body/posix-paths"
+summary = "Collides with a built-in rule id."
+rationale = "Two unrelated rules would share one on/off switch in the config."
+advice = "Namespace it under your own house."
+pattern = "collide"
+reference = { title = "House style", url = "https://example.com/style" }
+"#,
+        )
+        .unwrap();
+
+        let failure = load(
+            &PluginRef {
+                path: "pack.toml".into(),
+            },
+            temporary.path(),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(
+            failure.contains("body/posix-paths") && failure.contains("built-in"),
+            "the load must fail naming the colliding id, got: {failure}"
+        );
+    }
+
+    #[test]
+    fn a_wasm_plugin_cannot_report_under_a_builtin_rule_id() {
+        let parsed: PluginOutput = serde_json::from_str(
+            r#"{"messages":[{"rule":"body/posix-paths","message":"A thing.","reference":{"title":"Handbook","url":"https://example.com"}}]}"#,
+        )
+        .unwrap();
+
+        let failure = into_messages(parsed, &good_skill(), &Config::default())
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            failure.contains("body/posix-paths") && failure.contains("built-in"),
+            "reporting under a built-in id must fail naming it, got: {failure}"
+        );
+    }
 }
