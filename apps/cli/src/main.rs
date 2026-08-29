@@ -430,23 +430,60 @@ mod tests {
         assert!(failure.contains("stylish"));
     }
 
+    /// A throwaway project directory with its own slint.toml.
+    ///
+    /// The config walk-up starts at the anchor named on the command line, so pointing the anchor
+    /// at a fixture keeps resolution inside a tree the test owns: nothing above it on the machine
+    /// — in particular not the repository's own apps/cli/slint.toml, which these tests used to
+    /// load by accident (issue #89) — can take part. Every test gets its own tree, so the
+    /// parallel harness never shares state.
+    fn fixture_project(marker: &str) -> (tempfile::TempDir, PathBuf) {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("project");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("slint.toml"),
+            format!(
+                "ignore = [\"**/from-fixture/**\"]\n\n\
+                 [rules]\n\
+                 \"name/not-generic\" = \"off\"\n\n\
+                 [llm]\n\
+                 provider = \"openai\"\n\
+                 model = \"fixture/{marker}\"\n\
+                 base_url = \"https://fixture.example/v1/\"\n\
+                 api_key_env = \"FIXTURE_API_KEY\"\n\
+                 timeout_seconds = 7\n"
+            ),
+        )
+        .unwrap();
+
+        (temporary, root)
+    }
+
     #[test]
-    fn config_resolution_must_not_read_the_repositorys_own_config() {
-        // Reproduction of #89: with no --config and the default path, resolve_config walks up
-        // from the process CWD (apps/cli under cargo test) and loads the repository's own
-        // apps/cli/slint.toml — which configures provider "openrouter" and a deepseek model —
-        // so a test for flag merging starts from state an ancestor directory controls.
-        let cli = Cli::try_parse_from(["slint"]).unwrap();
+    fn config_resolution_uses_the_nearest_config_and_nothing_above_it() {
+        // Issue #89: the walk-up used to start at the process CWD, so under cargo test it
+        // discovered the repository's own apps/cli/slint.toml. Anchored at the fixture, it
+        // stops at the nearest config and never looks above it.
+        let (_temporary, root) = fixture_project("nearest");
+        let cli = Cli::try_parse_from(["slint", root.to_str().unwrap()]).unwrap();
         let config = resolve_config(&cli).unwrap();
 
-        assert_eq!(config.llm.provider, slint::config::Provider::None);
-        assert_eq!(config.llm.model, "");
+        let expected = root.join("slint.toml");
+        assert_eq!(config.source.as_deref(), Some(expected.as_path()));
+        assert_eq!(config.llm.model, "fixture/nearest");
     }
 
     #[test]
     fn no_llm_turns_every_model_rule_off_in_the_resolved_config() {
-        let cli = Cli::try_parse_from(["slint", "--no-llm"]).unwrap();
+        let (_temporary, root) = fixture_project("no-llm");
+        let cli = Cli::try_parse_from(["slint", "--no-llm", root.to_str().unwrap()]).unwrap();
         let config = resolve_config(&cli).unwrap();
+
+        // The values that reach this test are the fixture's, never the repository's own config.
+        let expected = root.join("slint.toml");
+        assert_eq!(config.source.as_deref(), Some(expected.as_path()));
+        assert_eq!(config.ignore, vec!["**/from-fixture/**".to_string()]);
 
         for meta in slint::llm::rules::all() {
             assert_eq!(config.rules.get(meta.name), Some(&RuleSetting::Off));
@@ -455,9 +492,19 @@ mod tests {
 
     #[test]
     fn a_rule_override_from_the_command_line_reaches_the_config() {
-        let cli = Cli::try_parse_from(["slint", "--rule", "name/not-generic=error"]).unwrap();
+        let (_temporary, root) = fixture_project("override");
+        let cli = Cli::try_parse_from([
+            "slint",
+            "--rule",
+            "name/not-generic=error",
+            root.to_str().unwrap(),
+        ])
+        .unwrap();
         let config = resolve_config(&cli).unwrap();
 
+        // The fixture turns the rule off; the command line turns it into an error and wins.
+        let expected = root.join("slint.toml");
+        assert_eq!(config.source.as_deref(), Some(expected.as_path()));
         assert_eq!(
             config.rules.get("name/not-generic"),
             Some(&RuleSetting::On(Severity::Error))
@@ -466,6 +513,7 @@ mod tests {
 
     #[test]
     fn llm_flags_override_the_file_so_an_editor_can_supply_them() {
+        let (_temporary, root) = fixture_project("llm-flags");
         let cli = Cli::try_parse_from([
             "slint",
             "--llm",
@@ -477,6 +525,7 @@ mod tests {
             "https://openrouter.ai/api/",
             "--llm-api-key-env",
             "SLINT_EDITOR_API_KEY",
+            root.to_str().unwrap(),
         ])
         .unwrap();
 
@@ -492,6 +541,9 @@ mod tests {
             config.llm.api_key_env.as_deref(),
             Some("SLINT_EDITOR_API_KEY")
         );
+        // A field the flags do not mention still comes from the file — proof the fixture, not
+        // some ancestor directory's config, was loaded and merged.
+        assert_eq!(config.llm.timeout_seconds, 7);
     }
 
     #[test]
