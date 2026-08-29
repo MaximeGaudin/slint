@@ -375,12 +375,7 @@ mod tests {
             .iter()
             .flat_map(|one| one.messages.iter())
             .filter(|message| message.severity == Severity::Error)
-            .map(|message| {
-                format!(
-                    "{}: {} ({})",
-                    message.file, message.rule, message.message
-                )
-            })
+            .map(|message| format!("{}: {} ({})", message.file, message.rule, message.message))
             .collect();
 
         assert!(
