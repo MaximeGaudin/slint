@@ -39,13 +39,13 @@ static FORMAT: RuleMeta = RuleMeta {
 static RESERVED_WORD: RuleMeta = RuleMeta {
     name: "name/no-reserved-word",
     summary: "Do not put reserved vendor words (like anthropic or claude) in the skill name.",
-    rationale: "Those words are reserved by the specification. A skill that uses them can be rejected on upload.",
+    rationale: "Claude's skill guidelines reserve those words; a skill that uses them can be rejected on upload.",
     advice: "Remove the reserved word from the name. Name the skill after what it does instead.",
     default_severity: Severity::Error,
     fixable: false,
     needs_model: false,
-    reference_title: sources::SPECIFICATION.0,
-    reference_url: sources::SPECIFICATION.1,
+    reference_title: sources::BEST_PRACTICES.0,
+    reference_url: sources::BEST_PRACTICES.1,
 };
 
 static GENERIC_NAME: RuleMeta = RuleMeta {
@@ -258,6 +258,14 @@ mod tests {
         let messages = check(&RESERVED_RULE, &skill_named("claude-helper"));
         assert_eq!(messages.len(), 1);
         assert!(messages[0].message.contains("claude"));
+        // https://github.com/MaximeGaudin/slint/issues/84 — the reserved-word
+        // restriction comes from the Claude docs, not the vendor-neutral spec.
+        assert_eq!(
+            messages[0].reference.url,
+            "https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices",
+            "the citation must name the doc that states the restriction: {:?}",
+            messages[0].reference
+        );
     }
 
     #[test]

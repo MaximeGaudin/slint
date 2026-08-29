@@ -134,7 +134,7 @@ static MIN_LENGTH: RuleMeta = RuleMeta {
     name: "description/min-length",
     summary: "The description must be long enough to explain what the skill does and when to use it.",
     rationale: "The agent chooses among all available skills using this text alone. A few words cannot carry both the purpose and the trigger.",
-    advice: "Expand to roughly 150–300 characters: what it does, then when to use it, in the words a request would use.",
+    advice: "Expand to at least 80 characters — what it does, then when to use it, in the words a request would use.",
     default_severity: Severity::Warning,
     fixable: false,
     needs_model: false,
@@ -537,6 +537,23 @@ mod tests {
         );
 
         assert!(check_with(&MIN_LENGTH_RULE, &skill, &config).is_empty());
+    }
+
+    /// https://github.com/MaximeGaudin/slint/issues/79 — the advice used to say
+    /// "roughly 150–300 characters" while the rule only fires below 80, and no
+    /// source states 150–300. The advice must match the shipped default.
+    #[test]
+    fn the_min_length_advice_matches_the_configured_default() {
+        assert!(
+            MIN_LENGTH.advice.contains("80"),
+            "advice must name the shipped default of 80: {}",
+            MIN_LENGTH.advice
+        );
+        assert!(
+            !MIN_LENGTH.advice.contains("150"),
+            "advice must not advertise a range no source states: {}",
+            MIN_LENGTH.advice
+        );
     }
 
     #[test]

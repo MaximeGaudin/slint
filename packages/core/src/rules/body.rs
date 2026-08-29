@@ -109,13 +109,13 @@ static MAX_LINES: RuleMeta = RuleMeta {
 static TOKEN_BUDGET: RuleMeta = RuleMeta {
     name: "body/token-budget",
     summary: "Keep the body within a reasonable token budget (~5000 tokens).",
-    rationale: "The whole body is loaded when the skill is selected, on top of the conversation and tools. Oversized bodies crowd out useful context.",
+    rationale: "The whole body is loaded when the skill is activated, on top of the conversation and tools — the specification recommends keeping it under 5000 tokens. Oversized bodies crowd out useful context.",
     advice: "Move detail into referenced files that load only when needed, instead of on every activation.",
     default_severity: Severity::Warning,
     fixable: false,
     needs_model: false,
-    reference_title: sources::BEST_PRACTICES.0,
-    reference_url: sources::BEST_PRACTICES.1,
+    reference_title: sources::SPECIFICATION.0,
+    reference_url: sources::SPECIFICATION.1,
 };
 
 static POSIX_PATHS: RuleMeta = RuleMeta {
@@ -764,6 +764,12 @@ mod tests {
         let skill = skill_with_body(&body);
 
         assert_eq!(check(&TOKEN_RULE, &skill).len(), 1);
+        // https://github.com/MaximeGaudin/slint/issues/99 — the ~5000-token figure
+        // comes from the specification, not the best-practices doc it cited.
+        assert_eq!(
+            TOKEN_BUDGET.reference_url, "https://agentskills.io/specification",
+            "the 5000-token figure belongs to the specification's progressive-disclosure section"
+        );
 
         let mut config = Config::default();
         config.rules.insert(

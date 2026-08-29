@@ -153,8 +153,8 @@ static SCRIPT_PREREQUISITES: RuleMeta = RuleMeta {
     default_severity: Severity::Warning,
     fixable: false,
     needs_model: false,
-    reference_title: sources::SPECIFICATION.0,
-    reference_url: sources::SPECIFICATION.1,
+    reference_title: sources::PROJECT_CONVENTIONS.0,
+    reference_url: sources::PROJECT_CONVENTIONS.1,
 };
 
 fn paths_in(text: &str) -> BTreeSet<String> {
@@ -1007,6 +1007,13 @@ mod tests {
             "expected one prerequisites finding, got {messages:?}"
         );
         assert_eq!(messages[0].severity, Severity::Warning);
+        // https://github.com/MaximeGaudin/slint/issues/77 — the specification never
+        // mentions a Prerequisites section; the section convention is slint's own.
+        assert_eq!(
+            messages[0].reference.url, "https://slint.dev/rules",
+            "the citation must own the convention instead of attributing it to the specification: {:?}",
+            messages[0].reference
+        );
         assert!(
             messages[0]
                 .message
