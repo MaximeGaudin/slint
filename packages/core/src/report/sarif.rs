@@ -156,4 +156,61 @@ mod tests {
 
         assert_eq!(parsed["runs"][0]["results"][0]["level"], "note");
     }
+
+    // https://github.com/MaximeGaudin/slint/issues/133: a SARIF consumer reads the rules the
+    // driver declares, not the results — the catalogue is what makes the log browsable and what
+    // carries the citation GitHub's code scanning UI links to.
+    #[test]
+    fn the_driver_declares_the_rule_catalogue_and_each_result_cites_it_by_index() {
+        let parsed: Value = serde_json::from_str(&render(&report())).unwrap();
+        let rules = parsed["runs"][0]["tool"]["driver"]["rules"]
+            .as_array()
+            .expect("the driver declares its rules");
+
+        let declared = rules
+            .iter()
+            .find(|rule| rule["id"] == "name/not-generic")
+            .expect("the sample's rule is in the catalogue");
+
+        assert!(
+            !declared["shortDescription"]["text"]
+                .as_str()
+                .unwrap()
+                .is_empty(),
+            "each rule says what it checks: {declared}"
+        );
+        assert!(
+            declared["helpUri"].as_str().unwrap().starts_with("https://"),
+            "the citation is the rule's helpUri: {declared}"
+        );
+
+        let result = &parsed["runs"][0]["results"][0];
+        let index = result["ruleIndex"].as_u64().unwrap() as usize;
+        assert_eq!(rules[index]["id"], result["ruleId"]);
+    }
+
+    #[test]
+    fn a_rule_outside_the_catalogue_is_declared_from_the_finding_itself() {
+        let mut report = report();
+        report.skills[0].messages[0].rule = "house/no-todo".into();
+
+        let parsed: Value = serde_json::from_str(&render(&report)).unwrap();
+        let rules = parsed["runs"][0]["tool"]["driver"]["rules"]
+            .as_array()
+            .unwrap();
+
+        let declared = rules
+            .iter()
+            .find(|rule| rule["id"] == "house/no-todo")
+            .expect("a plugin's rule is declared too");
+
+        assert!(
+            declared["helpUri"].as_str().unwrap().starts_with("https://"),
+            "the finding's citation becomes the helpUri: {declared}"
+        );
+
+        let result = &parsed["runs"][0]["results"][0];
+        let index = result["ruleIndex"].as_u64().unwrap() as usize;
+        assert_eq!(rules[index]["id"], "house/no-todo");
+    }
 }
