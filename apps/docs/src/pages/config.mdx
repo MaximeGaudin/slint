@@ -74,6 +74,10 @@ ignore = ["**/fixtures/**", "**/vendor/**"]
 Directories that are never a skill — `.git`, `node_modules`, `target`, `dist`, `.venv` — are
 skipped without being configured, because nobody has ever wanted them linted.
 
+A `!` prefix takes a path back out of the list, the way `.gitignore` does: with
+`ignore = ["**/fixtures/**", "!**/fixtures/keep-me/**"]`, every fixtures folder is skipped
+except `keep-me`. A negated pattern wins over the plain ones whatever their order.
+
 To point at a different ignore file without editing the config:
 
 ```bash

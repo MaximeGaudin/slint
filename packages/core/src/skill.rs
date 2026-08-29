@@ -104,7 +104,7 @@ pub struct Discovery {
 /// configured, because nobody has ever wanted them linted; naming one yourself is the opt-in. A
 /// file argument that is not a `SKILL.md` is not an error, but it is reported back so the run can
 /// say it linted nothing rather than everything.
-pub fn discover(paths: &[PathBuf], ignore: &GlobSet) -> Result<Discovery> {
+pub fn discover(paths: &[PathBuf], ignore: &Ignore) -> Result<Discovery> {
     let mut discovery = Discovery::default();
 
     for path in paths {
@@ -152,7 +152,7 @@ pub fn discover(paths: &[PathBuf], ignore: &GlobSet) -> Result<Discovery> {
 
     discovery
         .directories
-        .retain(|directory| !ignore.is_match(directory));
+        .retain(|directory| !ignore.is_ignored(directory));
     discovery.directories.sort();
     discovery.directories.dedup();
 
@@ -188,14 +188,54 @@ fn is_never_a_skill(path: &Path) -> bool {
     name.starts_with('.') || matches!(name, "node_modules" | "target" | "dist" | "__pycache__")
 }
 
-pub fn build_ignore(patterns: &[String]) -> Result<GlobSet> {
-    let mut builder = GlobSetBuilder::new();
+/// A compiled `ignore` list: what is skipped, and the `!`-prefixed patterns that take a path
+/// back, the way `.gitignore` and `.eslintignore` do.
+///
+/// A negated pattern wins over every plain one, whatever their order in the file: the list is a
+/// set of exclusions with a set of exceptions, not a program with a last word. A negated pattern
+/// names a directory and excepts the directory itself as well as everything beneath it.
+pub struct Ignore {
+    excluded: GlobSet,
+    excepted: GlobSet,
+}
 
-    for pattern in patterns {
-        builder.add(Glob::new(pattern).with_context(|| format!("bad ignore pattern: {pattern}"))?);
+impl Ignore {
+    pub fn empty() -> Self {
+        Ignore {
+            excluded: GlobSet::empty(),
+            excepted: GlobSet::empty(),
+        }
     }
 
-    builder.build().context("building the ignore set")
+    pub fn is_ignored(&self, directory: &Path) -> bool {
+        self.excluded.is_match(directory) && !self.excepted.is_match(directory)
+    }
+}
+
+pub fn build_ignore(patterns: &[String]) -> Result<Ignore> {
+    let (mut excluded, mut excepted) = (GlobSetBuilder::new(), GlobSetBuilder::new());
+
+    for pattern in patterns {
+        let glob = |text: &str| -> Result<Glob> {
+            Glob::new(text).with_context(|| format!("bad ignore pattern: {pattern}"))
+        };
+
+        if let Some(negated) = pattern.strip_prefix('!') {
+            excepted.add(glob(negated)?);
+            // A trailing `/**` is how a directory is named in these lists, and a skill sits in
+            // the directory itself, so the named directory has to be excepted as well.
+            if let Some(directory) = negated.strip_suffix("/**") {
+                excepted.add(glob(directory)?);
+            }
+        } else {
+            excluded.add(glob(pattern)?);
+        }
+    }
+
+    Ok(Ignore {
+        excluded: excluded.build().context("building the ignore set")?,
+        excepted: excepted.build().context("building the ignore set")?,
+    })
 }
 
 /// Reads one skill directory.
@@ -733,7 +773,7 @@ mod tests {
         fs::create_dir_all(&skill).unwrap();
         fs::write(skill.join(SKILL_FILE), DOCUMENT).unwrap();
 
-        let discovery = discover(std::slice::from_ref(&skill), &GlobSet::empty()).unwrap();
+        let discovery = discover(std::slice::from_ref(&skill), &Ignore::empty()).unwrap();
         assert_eq!(discovery.directories, vec![skill]);
         assert!(discovery.skipped.is_empty());
     }
@@ -753,7 +793,7 @@ mod tests {
         fs::create_dir_all(&hidden).unwrap();
         fs::write(hidden.join(SKILL_FILE), DOCUMENT).unwrap();
 
-        let discovery = discover(&[root.to_path_buf()], &GlobSet::empty()).unwrap();
+        let discovery = discover(&[root.to_path_buf()], &Ignore::empty()).unwrap();
 
         assert_eq!(discovery.directories.len(), 2);
         assert!(
@@ -787,11 +827,11 @@ mod tests {
             fs::write(directory.join(SKILL_FILE), DOCUMENT).unwrap();
         }
 
-        let discovery = discover(&[root.to_path_buf()], &GlobSet::empty()).unwrap();
+        let discovery = discover(&[root.to_path_buf()], &Ignore::empty()).unwrap();
         assert_eq!(discovery.directories, vec![visible]);
 
         // Naming a dot-directory yourself is the opt-in: it is walked like any other argument.
-        let explicit = discover(&[root.join(".mystuff")], &GlobSet::empty()).unwrap();
+        let explicit = discover(&[root.join(".mystuff")], &Ignore::empty()).unwrap();
         assert_eq!(
             explicit.directories,
             vec![root.join(".mystuff").join("nested-skill")]
@@ -816,6 +856,40 @@ mod tests {
         assert!(discovery.directories[0].ends_with("kept"));
     }
 
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/39 —
+    /// `!pattern` takes a path back from the list, in whatever order the two were written.
+    #[test]
+    fn a_negated_pattern_takes_a_path_back_from_the_ignore_list() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path();
+
+        let keep = root.join("fixtures").join("keep-me");
+        let drop = root.join("fixtures").join("drop-me");
+        fs::create_dir_all(&keep).unwrap();
+        fs::create_dir_all(&drop).unwrap();
+        fs::write(keep.join(SKILL_FILE), DOCUMENT).unwrap();
+        fs::write(drop.join(SKILL_FILE), DOCUMENT).unwrap();
+
+        for patterns in [
+            vec!["**/fixtures/**", "!**/fixtures/keep-me/**"],
+            vec!["!**/fixtures/keep-me/**", "**/fixtures/**"],
+        ] {
+            let patterns: Vec<String> = patterns.iter().map(|one| one.to_string()).collect();
+            let ignore = build_ignore(&patterns).unwrap();
+            let discovery = discover(&[root.to_path_buf()], &ignore).unwrap();
+            assert_eq!(
+                discovery.directories,
+                vec![keep.clone()],
+                "for {patterns:?}"
+            );
+        }
+
+        // A negation with nothing to negate changes nothing.
+        let ignore = build_ignore(&["!**/fixtures/keep-me/**".to_string()]).unwrap();
+        let discovery = discover(&[root.to_path_buf()], &ignore).unwrap();
+        assert_eq!(discovery.directories.len(), 2);
+    }
+
     #[test]
     fn a_malformed_ignore_glob_names_the_pattern_and_fails() {
         let failure = match build_ignore(&["[invalid-glob".to_string()]) {
@@ -835,7 +909,7 @@ mod tests {
         let document = directory.join(SKILL_FILE);
         fs::write(&document, DOCUMENT).unwrap();
 
-        let discovery = discover(&[document], &GlobSet::empty()).unwrap();
+        let discovery = discover(&[document], &Ignore::empty()).unwrap();
         assert_eq!(discovery.directories, vec![directory]);
         assert!(discovery.skipped.is_empty());
     }
@@ -848,7 +922,7 @@ mod tests {
         let file = temporary.path().join("random.txt");
         fs::write(&file, "hello\n").unwrap();
 
-        let discovery = discover(std::slice::from_ref(&file), &GlobSet::empty()).unwrap();
+        let discovery = discover(std::slice::from_ref(&file), &Ignore::empty()).unwrap();
 
         assert!(discovery.directories.is_empty());
         assert_eq!(
@@ -929,14 +1003,14 @@ mod tests {
             fs::create_dir_all(&path).unwrap();
             fs::write(path.join(file), DOCUMENT).unwrap();
 
-            let walked = discover(&[temporary.path().to_path_buf()], &GlobSet::empty()).unwrap();
+            let walked = discover(&[temporary.path().to_path_buf()], &Ignore::empty()).unwrap();
             assert!(
                 walked.directories.contains(&path),
                 "walking must find {file}: {:?}",
                 walked.directories
             );
 
-            let taken = discover(std::slice::from_ref(&path), &GlobSet::empty()).unwrap();
+            let taken = discover(std::slice::from_ref(&path), &Ignore::empty()).unwrap();
             assert_eq!(taken.directories, vec![path.clone()], "for {file}");
 
             // The file is read and parsed whatever the case. The leaf inside `document` follows what
