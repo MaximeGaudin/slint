@@ -46,6 +46,12 @@ pub mod sources {
         "The AgentSkill specification",
         "https://agentskills.io/specification",
     );
+    /// slint's own authoring conventions, for rules the project asserts on its own
+    /// authority rather than attributing to an external document.
+    pub const PROJECT_CONVENTIONS: (&str, &str) = (
+        "slint's own authoring conventions",
+        "https://slint.dev/rules",
+    );
     pub const OPTIONAL_DIRECTORIES: (&str, &str) = (
         "The AgentSkill specification — Optional directories",
         "https://agentskills.io/specification#optional-directories",
