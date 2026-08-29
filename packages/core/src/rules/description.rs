@@ -599,6 +599,18 @@ mod tests {
         assert_eq!(check(&NOT_JUST_NAME_RULE, &skill).len(), 1);
     }
 
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/241 — the first word was
+    /// skipped unconditionally, so a description whose only concrete anchor opens it was
+    /// reported as naming nothing specific.
+    #[test]
+    fn a_leading_acronym_counts_as_a_concrete_noun() {
+        let skill = skill_described(
+            "PDF conversion for scanned documents into contact sheets for client review; use when a client requests proofs from a shoot.",
+        );
+
+        assert!(check(&CONCRETE_NOUN_RULE, &skill).is_empty());
+    }
+
     #[test]
     fn a_description_with_no_concrete_noun_is_reported() {
         let skill = skill_described(
