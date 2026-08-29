@@ -706,8 +706,10 @@ impl Rule for HardcodedRepoPath {
             .expect("the backtick consumer path pattern compiles")
         });
         static BARE_PATH: LazyLock<Regex> = LazyLock::new(|| {
-            Regex::new(r"(?i)\b((?:docs|src|app|packages|scripts|references|assets|templates)/[\w./-]+)")
-                .expect("the bare consumer path pattern compiles")
+            Regex::new(
+                r"(?i)\b((?:docs|src|app|packages|scripts|references|assets|templates)/[\w./-]+)",
+            )
+            .expect("the bare consumer path pattern compiles")
         });
 
         let body = context.skill.body.as_str();
@@ -1344,9 +1346,8 @@ If `docs/01 - Briefs/` does not exist, ask the user where briefs live, or stop a
     /// mention stays a bundle reference and is not a hardcoded consumer-repo path.
     #[test]
     fn a_bundle_prefix_path_that_ships_with_the_skill_is_exempt() {
-        let mut skill = skill_with_body(
-            "\n## Culling\n\n1. Run `scripts/deploy.sh` exactly as written.\n",
-        );
+        let mut skill =
+            skill_with_body("\n## Culling\n\n1. Run `scripts/deploy.sh` exactly as written.\n");
         skill.files.push(crate::skill::BundledFile {
             path: "scripts/deploy.sh".into(),
             bytes: 20,
@@ -1494,7 +1495,10 @@ You might want to start by looking through the briefs folder.\n\
         ] {
             let skill = skill_with_body(&format!("\n## Steps\n\n{line}\n"));
 
-            assert!(check(&UNDECLARED_TOOL_RULE, &skill).is_empty(), "for {line}");
+            assert!(
+                check(&UNDECLARED_TOOL_RULE, &skill).is_empty(),
+                "for {line}"
+            );
         }
     }
 
