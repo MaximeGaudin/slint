@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Suppression comments** — A `slint-disable` comment is scoped to the document it is written in: it no longer silences findings on the files bundled beside `SKILL.md`.
+- **Suppression comments** — A directive inside a fenced code block is documentation of the syntax, not a live directive, so showing an example no longer silences the rest of the document.
+- **Suppression comments** — A directive that suppressed nothing (for example a misspelled rule name) is now reported as a `suppression/unused` warning, the way ESLint reports unused disable directives. The warning counts toward `--max-warnings` and can be retuned or turned off in config.
+
 ## [0.2.0] - 2026-08-20
 
 ### Added

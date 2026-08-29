@@ -54,8 +54,18 @@ skipped without being configured, because nobody has ever wanted them linted.
 <!-- slint-disable-next-line body/posix-paths -->
 ```
 
-The first turns a rule off for the whole file; the second for the line beneath it. Both take
+The first turns a rule off for the whole document; the second for the line beneath it. Both take
 several rule names, separated by commas.
+
+Three things to know:
+
+- A comment is scoped to the document it is written in. A `slint-disable` in `SKILL.md` says nothing
+  about findings on the files bundled beside it — silence those in the bundled file itself, or with
+  a config setting.
+- A comment inside a fenced code block is an example, not a directive, so documenting the syntax
+  does not silence anything.
+- A comment that silenced nothing is reported as a `suppression/unused` warning — a typo'd rule name
+  suppresses nothing, and the author has to hear about it.
 
 ## A model, for the rules that need one
 
