@@ -25,7 +25,7 @@
   --info: #0284c7;
   --text: var(--ink);
   --text-secondary: #3d4f5c;
-  --text-muted: #6b7f8e;
+  --text-muted: #576874;
   --border: color-mix(in srgb, var(--ink) 12%, transparent);
   --border-strong: color-mix(in srgb, var(--ink) 22%, transparent);
 
