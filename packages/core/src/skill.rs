@@ -903,6 +903,26 @@ mod tests {
     }
 
     #[test]
+    fn a_nested_manifest_is_not_bundle_content_of_the_enclosing_skill() {
+        // Regression for #269: inner/SKILL.md belongs to the inner skill. Counting it as a file
+        // the outer skill ships produces nonsensical advice about moving another skill's document
+        // into scripts/ or references/.
+        let temporary = tempfile::tempdir().unwrap();
+        let outer = temporary.path().join("outer");
+        fs::create_dir_all(outer.join("inner")).unwrap();
+        fs::write(outer.join(SKILL_FILE), DOCUMENT).unwrap();
+        fs::write(outer.join("inner").join(SKILL_FILE), DOCUMENT).unwrap();
+
+        let skill = read(&outer).unwrap();
+
+        assert!(
+            skill.files.iter().all(|file| !file.path.ends_with(SKILL_FILE)),
+            "no manifest belongs to the outer bundle: {:?}",
+            skill.files
+        );
+    }
+
+    #[test]
     fn a_skill_with_no_name_in_its_frontmatter_is_named_after_its_directory() {
         let temporary = tempfile::tempdir().unwrap();
         let directory = temporary.path().join("named-by-folder");
