@@ -52,6 +52,12 @@ jobs:
       - name: Test
         run: cargo test --workspace --locked
 
+      # Guards the README promise that the docs site and the binary never
+      # disagree about the rule catalogue (#127).
+      - name: Verify rules.json matches the binary
+        if: runner.os == 'Linux'
+        run: ./scripts/check-rules-json.sh
+
   js:
     name: JS lint
     needs: fmt
@@ -98,7 +104,6 @@ jobs:
     name: Coverage
     needs: fmt
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -115,3 +120,4 @@ jobs:
         run: >
           cargo llvm-cov --workspace --locked --summary-only
           --ignore-filename-regex='/.cargo/|/rustc/'
+          --fail-under-lines 92
