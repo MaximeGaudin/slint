@@ -222,6 +222,12 @@ pub struct Config {
     pub source: Option<PathBuf>,
     pub rules: BTreeMap<String, RuleSetting>,
     pub ignore: Vec<String>,
+    /// The `--ignore-path` file, after reading: its own directory first — the anchor its
+    /// patterns are relative to — then the patterns it named. Not a config-file field, so it
+    /// only appears when a file was given; its patterns are kept apart from `ignore` because
+    /// they are anchored to a different directory than the config's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ignore_path: Option<(PathBuf, Vec<String>)>,
     pub llm: LlmConfig,
     pub plugins: Vec<PluginRef>,
 }
@@ -239,7 +245,9 @@ struct RawConfig {
     /// Which rules to change, keyed by rule name (`area/thing`).
     #[serde(default)]
     rules: BTreeMap<String, serde_json::Value>,
-    /// Glob patterns for directories that should never be linted.
+    /// Glob patterns for directories that should never be linted, anchored to the directory of
+    /// this config file: `fixtures/**` is the fixtures folder beside it, and a pattern with no
+    /// `/` matches that name at any depth below it. A `!` prefix takes a path back.
     #[serde(default)]
     ignore: Vec<String>,
     /// Which model answers the rules a regular expression cannot.
@@ -270,6 +278,7 @@ impl PartialEq for Config {
     fn eq(&self, other: &Self) -> bool {
         self.rules == other.rules
             && self.ignore == other.ignore
+            && self.ignore_path == other.ignore_path
             && self.llm == other.llm
             && self.plugins == other.plugins
     }
@@ -421,6 +430,7 @@ pub fn load(path: &Path) -> Result<Config> {
         source: Some(path.to_path_buf()),
         rules: BTreeMap::new(),
         ignore: raw.ignore,
+        ignore_path: None,
         llm: raw.llm,
         plugins: raw.plugins,
     };

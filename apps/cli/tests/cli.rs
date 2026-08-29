@@ -185,10 +185,7 @@ fn a_subdirectory_config_ignores_only_what_sits_beneath_it() {
     );
     write(root.join("kept").as_path(), "photo-culling", GOOD);
 
-    let output = slint_in(
-        root,
-        &["--no-llm", "--config", "sub/slint.toml", "."],
-    );
+    let output = slint_in(root, &["--no-llm", "--config", "sub/slint.toml", "."]);
 
     let stdout = stdout(&output);
     assert_eq!(
@@ -213,7 +210,11 @@ fn an_ignore_path_file_ignores_relative_to_itself() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path();
 
-    write(root, "helper", &BROKEN.replace("name: helper", "name: top-helper"));
+    write(
+        root,
+        "helper",
+        &BROKEN.replace("name: helper", "name: top-helper"),
+    );
     write(
         root.join("tools").as_path(),
         "helper",

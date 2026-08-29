@@ -218,28 +218,68 @@ impl Ignore {
         }
     }
 
+    /// A directory is ignored when either view of it matches: the path as the walk reported it,
+    /// or the path resolved. Anchored patterns are built from resolved anchors, and the walk
+    /// reports the paths it was given — relative, dotted, or behind a symlink — so a run that
+    /// reaches the same directory through a different spelling of it still sees the same list.
     pub fn is_ignored(&self, directory: &Path) -> bool {
-        self.excluded.is_match(directory) && !self.excepted.is_match(directory)
+        let view = |path: &Path| self.excluded.is_match(path) && !self.excepted.is_match(path);
+
+        if view(directory) {
+            return true;
+        }
+
+        fs::canonicalize(directory).is_ok_and(|resolved| view(&resolved))
     }
 }
 
-pub fn build_ignore(patterns: &[String]) -> Result<Ignore> {
+/// One source of ignore patterns: the patterns, and the directory they are written relative to.
+///
+/// The anchor is the directory of the file that named the patterns — the project config, the
+/// user-global one, or an `--ignore-path` file — so a pattern always means the same place no
+/// matter where the run started. `None` keeps the patterns as written, for a run that found no
+/// config at all.
+pub struct IgnoreSource<'a> {
+    pub anchor: Option<&'a Path>,
+    pub patterns: &'a [String],
+}
+
+pub fn build_ignore(sources: &[IgnoreSource<'_>]) -> Result<Ignore> {
     let (mut excluded, mut excepted) = (GlobSetBuilder::new(), GlobSetBuilder::new());
 
-    for pattern in patterns {
-        let glob = |text: &str| -> Result<Glob> {
-            Glob::new(text).with_context(|| format!("bad ignore pattern: {pattern}"))
-        };
+    for source in sources {
+        // Resolved once per source: the config may have been reached through a relative or
+        // symlinked path, and the anchored globs have to name the same directory the walk does.
+        let anchor = source.anchor.map(anchor_directory);
 
-        if let Some(negated) = pattern.strip_prefix('!') {
-            excepted.add(glob(negated)?);
-            // A trailing `/**` is how a directory is named in these lists, and a skill sits in
-            // the directory itself, so the named directory has to be excepted as well.
-            if let Some(directory) = negated.strip_suffix("/**") {
-                excepted.add(glob(directory)?);
+        for pattern in source.patterns {
+            let glob = |text: &str| -> Result<Glob> {
+                Glob::new(text).with_context(|| format!("bad ignore pattern: {pattern}"))
+            };
+
+            let (negated, body) = match pattern.strip_prefix('!') {
+                Some(rest) => (true, rest),
+                None => (false, pattern.as_str()),
+            };
+
+            for anchored in anchored_patterns(body, anchor.as_deref()) {
+                if negated {
+                    excepted.add(glob(&anchored)?);
+                    // A trailing `/**` is how a directory is named in these lists, and a skill
+                    // sits in the directory itself, so the named directory is excepted as well.
+                    if let Some(directory) = anchored.strip_suffix("/**") {
+                        excepted.add(glob(directory)?);
+                    }
+                } else {
+                    excluded.add(glob(&anchored)?);
+                    // The same shape excludes the directory itself: `fixtures/**` is written to
+                    // mean "nothing in the fixtures tree", and a skill sitting directly in the
+                    // fixtures folder is as much inside that tree as anything below it.
+                    if let Some(directory) = anchored.strip_suffix("/**") {
+                        excluded.add(glob(directory)?);
+                    }
+                }
             }
-        } else {
-            excluded.add(glob(pattern)?);
         }
     }
 
@@ -247,6 +287,47 @@ pub fn build_ignore(patterns: &[String]) -> Result<Ignore> {
         excluded: excluded.build().context("building the ignore set")?,
         excepted: excepted.build().context("building the ignore set")?,
     })
+}
+
+/// The directory the patterns are written relative to, resolved.
+///
+/// The resolution is what makes the anchor mean one directory on every run: a config reached as
+/// `./slint.toml`, or from behind a symlinked temporary directory, still names its own tree.
+fn anchor_directory(directory: &Path) -> String {
+    // A file named on its own — `--ignore-path .gitignore` — has an empty parent, and that
+    // parent is the directory the run started in.
+    let directory = if directory.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        directory
+    };
+
+    let resolved = fs::canonicalize(directory).unwrap_or_else(|_| directory.to_path_buf());
+    let text = resolved.to_string_lossy().replace('\\', "/");
+    // A config at the filesystem root would otherwise anchor to `//…`.
+    text.trim_end_matches('/').to_string()
+}
+
+/// One pattern, anchored the way `.gitignore` anchors one.
+///
+/// A pattern with a `/` in it names a path below the anchor: `fixtures/**` is the fixtures
+/// folder beside the config file, and a leading `/` says the same thing again. A bare pattern
+/// matches at any depth below the anchor, the way a bare name does in `.gitignore`; both
+/// spellings are added, so the anchor directory itself is covered whatever the glob engine
+/// makes of a `**` between slashes. With no anchor at all — no config was found — a bare
+/// pattern matches at any depth everywhere, which is the only reading of a name with no home.
+fn anchored_patterns(pattern: &str, anchor: Option<&str>) -> Vec<String> {
+    match (anchor, pattern.contains('/')) {
+        (Some(root), true) => {
+            let relative = pattern.strip_prefix('/').unwrap_or(pattern);
+            vec![format!("{root}/{relative}")]
+        }
+        (Some(root), false) => {
+            vec![format!("{root}/{pattern}"), format!("{root}/**/{pattern}")]
+        }
+        (None, true) => vec![pattern.strip_prefix('/').unwrap_or(pattern).to_string()],
+        (None, false) => vec![format!("**/{pattern}")],
+    }
 }
 
 /// Reads one skill directory.
@@ -593,6 +674,16 @@ mod tests {
 
     const DOCUMENT: &str = "---\nname: photo-culling\ndescription: Culls a shoot. Use when triaging RAW files.\nlicense: MIT\n---\n\n## Culling\n\n1. Import.\n";
 
+    /// One source's patterns, compiled the way the engine hands them over.
+    fn ignore_for(anchor: Option<&Path>, patterns: &[&str]) -> Ignore {
+        let owned: Vec<String> = patterns.iter().map(|one| one.to_string()).collect();
+        build_ignore(&[IgnoreSource {
+            anchor,
+            patterns: &owned,
+        }])
+        .unwrap()
+    }
+
     #[test]
     fn reads_the_frontmatter_an_agent_selects_on() {
         let skill = parse(DOCUMENT);
@@ -860,15 +951,73 @@ mod tests {
             fs::write(directory.join(SKILL_FILE), DOCUMENT).unwrap();
         }
 
-        let ignore = build_ignore(&["**/fixtures".to_string()]).unwrap();
+        let ignore = ignore_for(None, &["**/fixtures"]);
         let discovery = discover(&[root.to_path_buf()], &ignore).unwrap();
 
         assert_eq!(discovery.directories.len(), 1);
         assert!(discovery.directories[0].ends_with("kept"));
     }
 
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/25 —
+    /// `fixtures/**` means the fixtures folder next to the config file, not "fixtures wherever
+    /// the paths on the command line happen to lead". A leading `/` anchors the same way, and a
+    /// dotted spelling of the very same run still matches.
+    #[test]
+    fn an_anchored_pattern_names_the_folder_beside_the_anchor() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path();
+
+        fs::create_dir_all(root.join("fixtures").join("one")).unwrap();
+        fs::create_dir_all(root.join("skills").join("fixtures").join("two")).unwrap();
+        fs::write(root.join("fixtures").join("one").join(SKILL_FILE), DOCUMENT).unwrap();
+        fs::write(
+            root.join("skills")
+                .join("fixtures")
+                .join("two")
+                .join(SKILL_FILE),
+            DOCUMENT,
+        )
+        .unwrap();
+
+        for pattern in ["fixtures/**", "/fixtures/**"] {
+            let ignore = ignore_for(Some(root), &[pattern]);
+            let found = discover(&[root.to_path_buf()], &ignore).unwrap();
+            assert_eq!(
+                found.directories,
+                vec![root.join("skills").join("fixtures").join("two")],
+                "for {pattern}"
+            );
+        }
+
+        // The same run reached through a non-canonical path string is the same run.
+        let ignore = ignore_for(Some(root), &["fixtures/**"]);
+        let found = discover(&[root.join(".")], &ignore).unwrap();
+        assert_eq!(found.directories.len(), 1);
+        assert!(found.directories[0].ends_with("skills/fixtures/two"));
+    }
+
+    /// A pattern with no `/` is a name, not a path: it matches the anchor directory and at any
+    /// depth below it, the way a bare name does in `.gitignore`.
+    #[test]
+    fn a_bare_name_matches_at_any_depth_below_the_anchor() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path();
+
+        for directory in ["fixtures", "deep/nest/fixtures", "kept"] {
+            let path = root.join(directory);
+            fs::create_dir_all(&path).unwrap();
+            fs::write(path.join(SKILL_FILE), DOCUMENT).unwrap();
+        }
+
+        let ignore = ignore_for(Some(root), &["fixtures"]);
+        let found = discover(&[root.to_path_buf()], &ignore).unwrap();
+
+        assert_eq!(found.directories, vec![root.join("kept")]);
+    }
+
     /// Regression for https://github.com/MaximeGaudin/slint/issues/39 —
-    /// `!pattern` takes a path back from the list, in whatever order the two were written.
+    /// `!pattern` takes a path back from the list, in whatever order the two were written — and
+    /// with anchoring in the picture, both halves are anchored to the same directory.
     #[test]
     fn a_negated_pattern_takes_a_path_back_from_the_ignore_list() {
         let temporary = tempfile::tempdir().unwrap();
@@ -882,11 +1031,12 @@ mod tests {
         fs::write(drop.join(SKILL_FILE), DOCUMENT).unwrap();
 
         for patterns in [
-            vec!["**/fixtures/**", "!**/fixtures/keep-me/**"],
-            vec!["!**/fixtures/keep-me/**", "**/fixtures/**"],
+            &["**/fixtures/**", "!**/fixtures/keep-me/**"][..],
+            &["!**/fixtures/keep-me/**", "**/fixtures/**"][..],
+            &["fixtures/**", "!fixtures/keep-me/**"][..],
+            &["!fixtures/keep-me/**", "fixtures/**"][..],
         ] {
-            let patterns: Vec<String> = patterns.iter().map(|one| one.to_string()).collect();
-            let ignore = build_ignore(&patterns).unwrap();
+            let ignore = ignore_for(Some(root), patterns);
             let discovery = discover(&[root.to_path_buf()], &ignore).unwrap();
             assert_eq!(
                 discovery.directories,
@@ -896,14 +1046,18 @@ mod tests {
         }
 
         // A negation with nothing to negate changes nothing.
-        let ignore = build_ignore(&["!**/fixtures/keep-me/**".to_string()]).unwrap();
+        let ignore = ignore_for(None, &["!**/fixtures/keep-me/**"]);
         let discovery = discover(&[root.to_path_buf()], &ignore).unwrap();
         assert_eq!(discovery.directories.len(), 2);
     }
 
     #[test]
     fn a_malformed_ignore_glob_names_the_pattern_and_fails() {
-        let failure = match build_ignore(&["[invalid-glob".to_string()]) {
+        let patterns = ["[invalid-glob".to_string()];
+        let failure = match build_ignore(&[IgnoreSource {
+            anchor: None,
+            patterns: &patterns,
+        }]) {
             Err(failure) => failure.to_string(),
             Ok(_) => panic!("a malformed glob has to be an error"),
         };

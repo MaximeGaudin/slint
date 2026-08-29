@@ -610,7 +610,20 @@ pub fn run_with_reviewer(
     passes: Passes,
     review: &ModelReview<'_>,
 ) -> Result<Report> {
-    let ignore = skill::build_ignore(&config.ignore)?;
+    // Every pattern is anchored to the directory of the file that named it — the config file's
+    // directory, and the `--ignore-path` file's — so `fixtures/**` means the fixtures folder
+    // beside the file that wrote it, however the run was invoked.
+    let mut sources = vec![skill::IgnoreSource {
+        anchor: config.source.as_deref().and_then(Path::parent),
+        patterns: &config.ignore,
+    }];
+    if let Some((anchor, patterns)) = &config.ignore_path {
+        sources.push(skill::IgnoreSource {
+            anchor: Some(anchor),
+            patterns,
+        });
+    }
+    let ignore = skill::build_ignore(&sources)?;
     let discovery = skill::discover(paths, &ignore)?;
     let directories = discovery.directories;
 
@@ -802,10 +815,11 @@ mod tests {
 
     /// A config whose `ignore` list was read from `source`, the way the CLI assembles one.
     fn config_ignoring(source: Option<&Path>, patterns: &[&str]) -> Config {
-        let mut config = Config::default();
-        config.source = source.map(Path::to_path_buf);
-        config.ignore = patterns.iter().map(|one| one.to_string()).collect();
-        config
+        Config {
+            source: source.map(Path::to_path_buf),
+            ignore: patterns.iter().map(|one| one.to_string()).collect(),
+            ..Config::default()
+        }
     }
 
     /// The names of every skill a run over `paths` would lint.
@@ -819,7 +833,6 @@ mod tests {
         .map(|one| one.name)
         .collect()
     }
-
 
     /// Regression for https://github.com/MaximeGaudin/slint/issues/122 —
     /// dogfooding: the skills slint ships in its own repository must pass slint
@@ -865,7 +878,11 @@ mod tests {
         let root = temporary.path();
         fs::write(root.join("slint.toml"), "ignore = [\"fixtures/**\"]\n").unwrap();
         write_skill(root, "fixtures", &document_named("top-fixture"));
-        write_skill(&root.join("skills"), "fixtures", &document_named("nested-fixture"));
+        write_skill(
+            &root.join("skills"),
+            "fixtures",
+            &document_named("nested-fixture"),
+        );
         write_skill(root, "kept", &document_named("kept"));
 
         for patterns in [["fixtures/**"], ["/fixtures/**"]] {
@@ -903,14 +920,19 @@ mod tests {
         let root = temporary.path();
         fs::write(root.join("slint.toml"), "ignore = [\"fixtures\"]\n").unwrap();
         write_skill(root, "fixtures", &document_named("top-fixture"));
-        write_skill(&root.join("deep").join("nest"), "fixtures", &document_named("deep-fixture"));
+        write_skill(
+            &root.join("deep").join("nest"),
+            "fixtures",
+            &document_named("deep-fixture"),
+        );
         write_skill(root, "kept", &document_named("kept"));
 
         let config = config_ignoring(Some(&root.join("slint.toml")), &["fixtures"]);
         let names = linted_names(&[root.to_path_buf()], &config);
 
         assert!(
-            !names.contains(&"top-fixture".to_string()) && !names.contains(&"deep-fixture".to_string()),
+            !names.contains(&"top-fixture".to_string())
+                && !names.contains(&"deep-fixture".to_string()),
             "a bare name matches at any depth below the config file: {names:?}"
         );
         assert!(
@@ -993,8 +1015,16 @@ mod tests {
     fn a_negated_pattern_takes_an_anchored_path_back() {
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path();
-        write_skill(&root.join("fixtures"), "keep-me", &document_named("keep-me"));
-        write_skill(&root.join("fixtures"), "drop-me", &document_named("drop-me"));
+        write_skill(
+            &root.join("fixtures"),
+            "keep-me",
+            &document_named("keep-me"),
+        );
+        write_skill(
+            &root.join("fixtures"),
+            "drop-me",
+            &document_named("drop-me"),
+        );
         write_skill(root, "kept", &document_named("kept"));
 
         for patterns in [
@@ -1018,7 +1048,6 @@ mod tests {
             );
         }
     }
-
 
     const GOOD: &str = "---\nname: photo-culling\ndescription: Culls a photo shoot in Lightroom by flagging the keepers and rejecting the rest. Use when triaging RAW files after a session.\n---\n\n## Culling\n\n1. Import the RAW files.\n2. Flag keepers with P.\n";
 
