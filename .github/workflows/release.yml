@@ -46,6 +46,7 @@ jobs:
     permissions:
       contents: read
       actions: write
+      id-token: write
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -63,6 +64,12 @@ jobs:
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             artifact: slint-linux-arm64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            artifact: slint-linux-amd64-musl
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            artifact: slint-linux-arm64-musl
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact: slint-windows-amd64
@@ -79,6 +86,10 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
         with:
           key: ${{ matrix.target }}
+
+      - name: Install musl tools
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       - name: Build
         run: cargo build --release --locked -p slint-cli --target ${{ matrix.target }}
@@ -109,6 +120,22 @@ jobs:
         run: |
           $hash = (Get-FileHash -Algorithm SHA256 "${{ matrix.artifact }}.zip").Hash.ToLower()
           Set-Content -Path "${{ matrix.artifact }}.zip.sha256" -Value "$hash  ${{ matrix.artifact }}.zip"
+
+      - uses: sigstore/cosign-installer@ba7bc0a3fef59531c69a25acd34668d6d3fe6f22  # v4.1.0
+
+      - name: Sign artifact (keyless Sigstore)
+        env:
+          ARTIFACT: ${{ matrix.artifact }}
+        run: |
+          case "$ARTIFACT" in
+            *.zip) FILE="$ARTIFACT.zip" ;;
+            *)     FILE="$ARTIFACT.tar.gz" ;;
+          esac
+          cosign sign-blob --yes \
+            --output-signature "$FILE.sig" \
+            --output-certificate "$FILE.cert" \
+            --bundle "$FILE.bundle" \
+            "$FILE"
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
@@ -161,9 +188,11 @@ jobs:
           fi
 
   vscode:
-    name: Publish VS Code extension
+    name: Package and publish VS Code extension
     needs: release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
@@ -183,6 +212,17 @@ jobs:
 
       - name: Build extension
         run: pnpm exec turbo run build --filter=slint-vscode
+
+      - name: Package extension
+        run: pnpm --filter slint-vscode package
+
+      - name: Attach .vsix to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VSIX=$(ls apps/vscode/*.vsix)
+          echo "Packaged: ${VSIX}"
+          gh release upload "${{ inputs.tag }}" "${VSIX}" --clobber
 
       - name: Publish to the VS Code Marketplace
         env:
@@ -224,14 +264,19 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${TAP_DEPLOY_KEY:-}" ]; then
-            echo "::warning::HOMEBREW_TAP_DEPLOY_KEY not set — skipping Homebrew tap update."
-            exit 0
+            echo "::error::HOMEBREW_TAP_DEPLOY_KEY is not set — the Homebrew tap update cannot run. Add a read/write deploy key for MaximeGaudin/homebrew-tap as the HOMEBREW_TAP_DEPLOY_KEY secret, or remove the homebrew job from release.yml."
+            exit 1
           fi
 
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           printf '%s\n' "$TAP_DEPLOY_KEY" > ~/.ssh/tap_key
           chmod 600 ~/.ssh/tap_key
           export GIT_SSH_COMMAND="ssh -i ~/.ssh/tap_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+
+          if ! git ls-remote git@github.com:MaximeGaudin/homebrew-tap.git HEAD &>/dev/null; then
+            echo "::error::Could not reach MaximeGaudin/homebrew-tap over SSH. Check that the repo exists and that HOMEBREW_TAP_DEPLOY_KEY grants read/write access."
+            exit 1
+          fi
 
           TAG="${{ inputs.tag }}"
           VERSION="${TAG#v}"
@@ -289,5 +334,16 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Formula/slint.rb
-          git commit -m "slint ${VERSION}" || { echo "no formula change"; exit 0; }
-          git push
+          if git diff --cached --quiet; then
+            echo "Formula/slint.rb already at version ${VERSION} — nothing to push."
+          else
+            git commit -m "slint ${VERSION}"
+            git push
+          fi
+
+          git clone --depth 1 git@github.com:MaximeGaudin/homebrew-tap.git tap-verify
+          if ! grep -q "version \"${VERSION}\"" tap-verify/Formula/slint.rb; then
+            echo "::error::Formula/slint.rb on MaximeGaudin/homebrew-tap does not advertise version ${VERSION} after push."
+            exit 1
+          fi
+          echo "Verified: Formula/slint.rb on MaximeGaudin/homebrew-tap is at version ${VERSION}."

@@ -119,7 +119,7 @@
   "properties": {
     "ignore": {
       "default": [],
-      "description": "Glob patterns for directories that should never be linted.",
+      "description": "Glob patterns for directories that should never be linted, anchored to the directory of\nthis config file: `fixtures/**` is the fixtures folder beside it, and a pattern with no\n`/` matches that name at any depth below it. A `!` prefix takes a path back.",
       "items": {
         "type": "string"
       },

@@ -5,7 +5,7 @@
 //! Data goes to stdout and everything else to stderr, so `slint --format json | jq` is always safe.
 
 use anyhow::{Context, Result, bail};
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
@@ -163,14 +163,31 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Print the config file format as JSON Schema, for editor autocomplete.
-    Schema,
+    /// Print a JSON Schema for one of the formats this tool speaks — the config file format, the
+    /// `--format json` report envelope, or the WebAssembly plugin wire format — so an editor or a
+    /// consumer can validate against the same description the binary is generated from.
+    Schema {
+        /// Which format to describe.
+        #[arg(value_enum, default_value_t = SchemaTarget::Config)]
+        target: SchemaTarget,
+    },
     /// Write shell completions for the given shell to stdout.
     Completions {
         /// The shell whose completions to write.
         #[arg(value_enum)]
         shell: clap_complete::Shell,
     },
+}
+
+/// Which of the wire formats `slint schema` describes.
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum SchemaTarget {
+    /// The config file format (`slint.toml`, `slint.config.json`).
+    Config,
+    /// The `--format json` report envelope.
+    Report,
+    /// The WebAssembly plugin wire format, request and response.
+    PluginAbi,
 }
 
 fn main() -> ExitCode {
@@ -191,11 +208,13 @@ fn run(cli: &Cli) -> Result<u8> {
         Some(Command::Init) => return init(),
         Some(Command::InitPlugin) => return init_plugin(),
         Some(Command::Rules { json }) => return print_rules(*json),
-        Some(Command::Schema) => {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&config::config_json_schema())?
-            );
+        Some(Command::Schema { target }) => {
+            let schema = match target {
+                SchemaTarget::Config => config::config_json_schema(),
+                SchemaTarget::Report => report::json::report_json_schema(),
+                SchemaTarget::PluginAbi => plugin::plugin_abi_json_schema(),
+            };
+            println!("{}", serde_json::to_string_pretty(&schema)?);
             return Ok(code::CLEAN);
         }
         Some(Command::Completions { shell }) => return print_completions(*shell),
@@ -209,11 +228,18 @@ fn run(cli: &Cli) -> Result<u8> {
     let mut config = resolve_config(cli)?;
 
     if let Some(path) = &cli.ignore_path {
-        config.ignore.extend(read_ignore_file(path)?);
+        // The file's own directory anchors its patterns, the same way the config file's
+        // directory anchors `ignore` — so `--ignore-path tools/my-ignores` speaks for `tools/`.
+        let anchor = path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        config.ignore_path = Some((anchor, read_ignore_file(path)?));
     }
 
     if cli.no_ignore {
         config.ignore.clear();
+        config.ignore_path = None;
     }
 
     if cli.print_config {

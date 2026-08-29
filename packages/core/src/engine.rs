@@ -612,7 +612,20 @@ pub fn run_with_reviewer(
     passes: Passes,
     review: &ModelReview<'_>,
 ) -> Result<Report> {
-    let ignore = skill::build_ignore(&config.ignore)?;
+    // Every pattern is anchored to the directory of the file that named it — the config file's
+    // directory, and the `--ignore-path` file's — so `fixtures/**` means the fixtures folder
+    // beside the file that wrote it, however the run was invoked.
+    let mut sources = vec![skill::IgnoreSource {
+        anchor: config.source.as_deref().and_then(Path::parent),
+        patterns: &config.ignore,
+    }];
+    if let Some((anchor, patterns)) = &config.ignore_path {
+        sources.push(skill::IgnoreSource {
+            anchor: Some(anchor),
+            patterns,
+        });
+    }
+    let ignore = skill::build_ignore(&sources)?;
     let discovery = skill::discover(paths, &ignore)?;
     let directories = discovery.directories;
 
@@ -823,6 +836,32 @@ mod tests {
     /// environment must hold this lock for its entire body (issue #114).
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    /// A document whose skill is named `name`, so reports can be told apart by name alone.
+    fn document_named(name: &str) -> String {
+        GOOD.replace("photo-culling", name)
+    }
+
+    /// A config whose `ignore` list was read from `source`, the way the CLI assembles one.
+    fn config_ignoring(source: Option<&Path>, patterns: &[&str]) -> Config {
+        Config {
+            source: source.map(Path::to_path_buf),
+            ignore: patterns.iter().map(|one| one.to_string()).collect(),
+            ..Config::default()
+        }
+    }
+
+    /// The names of every skill a run over `paths` would lint.
+    fn linted_names(paths: &[PathBuf], config: &Config) -> Vec<String> {
+        run_with_reviewer(paths, config, &[], Passes::default(), &|_skill, _config| {
+            Ok((Vec::new(), Vec::new()))
+        })
+        .unwrap()
+        .skills
+        .into_iter()
+        .map(|one| one.name)
+        .collect()
+    }
+
     /// Regression for https://github.com/MaximeGaudin/slint/issues/122 —
     /// dogfooding: the skills slint ships in its own repository must pass slint
     /// itself at error severity, because any error finding makes a run exit 1.
@@ -854,6 +893,188 @@ mod tests {
         fs::create_dir_all(&directory).unwrap();
         fs::write(directory.join("SKILL.md"), document).unwrap();
         directory
+    }
+
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/25 —
+    /// `ignore = ["fixtures/**"]` read like a `.gitignore` entry but matched like text typed on
+    /// the command line, so the pattern named the fixtures folder wherever the invocation's paths
+    /// happened to place it — which is to say, nowhere. A pattern is anchored to the config
+    /// file's directory, and a leading `/` says the same thing again.
+    #[test]
+    fn an_anchored_pattern_names_the_directory_beside_the_config_file() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path();
+        fs::write(root.join("slint.toml"), "ignore = [\"fixtures/**\"]\n").unwrap();
+        write_skill(root, "fixtures", &document_named("top-fixture"));
+        write_skill(
+            &root.join("skills"),
+            "fixtures",
+            &document_named("nested-fixture"),
+        );
+        write_skill(root, "kept", &document_named("kept"));
+
+        for patterns in [["fixtures/**"], ["/fixtures/**"]] {
+            let config = config_ignoring(Some(&root.join("slint.toml")), &patterns);
+            let names = linted_names(&[root.to_path_buf()], &config);
+
+            assert!(
+                !names.contains(&"top-fixture".to_string()),
+                "{patterns:?} must ignore the fixtures folder beside the config file: {names:?}"
+            );
+            assert!(
+                names.contains(&"nested-fixture".to_string()),
+                "{patterns:?} must not reach past the config file's directory: {names:?}"
+            );
+            assert!(
+                names.contains(&"kept".to_string()),
+                "{patterns:?} must leave everything else alone: {names:?}"
+            );
+        }
+
+        // The same run reached through a non-canonical path string is the same run.
+        let config = config_ignoring(Some(&root.join("slint.toml")), &["fixtures/**"]);
+        let names = linted_names(&[root.join(".")], &config);
+        assert!(
+            !names.contains(&"top-fixture".to_string()),
+            "anchoring must survive a dotted invocation path: {names:?}"
+        );
+    }
+
+    /// A pattern with no `/` in it is a name, not a path: it matches at any depth below the
+    /// config file's directory, the way a bare name does in `.gitignore`.
+    #[test]
+    fn a_bare_ignore_name_matches_at_any_depth_below_the_config() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path();
+        fs::write(root.join("slint.toml"), "ignore = [\"fixtures\"]\n").unwrap();
+        write_skill(root, "fixtures", &document_named("top-fixture"));
+        write_skill(
+            &root.join("deep").join("nest"),
+            "fixtures",
+            &document_named("deep-fixture"),
+        );
+        write_skill(root, "kept", &document_named("kept"));
+
+        let config = config_ignoring(Some(&root.join("slint.toml")), &["fixtures"]);
+        let names = linted_names(&[root.to_path_buf()], &config);
+
+        assert!(
+            !names.contains(&"top-fixture".to_string())
+                && !names.contains(&"deep-fixture".to_string()),
+            "a bare name matches at any depth below the config file: {names:?}"
+        );
+        assert!(
+            names.contains(&"kept".to_string()),
+            "a bare name ignores nothing else: {names:?}"
+        );
+    }
+
+    /// The config found for a run is the one whose directory anchors the patterns: a config in a
+    /// subdirectory of the scanned tree — named with `--config`, or the one `find` walked to —
+    /// must not ignore anything above itself.
+    #[test]
+    fn a_subdirectory_config_ignores_do_not_reach_above_the_config_file() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path();
+        let sub = root.join("sub");
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(sub.join("slint.toml"), "ignore = [\"**/fixtures/**\"]\n").unwrap();
+        write_skill(root, "fixtures", &document_named("above-fixture"));
+        write_skill(&sub, "fixtures", &document_named("below-fixture"));
+        write_skill(root, "kept", &document_named("kept"));
+
+        let config = config_ignoring(Some(&sub.join("slint.toml")), &["**/fixtures/**"]);
+        let names = linted_names(&[root.to_path_buf()], &config);
+
+        assert!(
+            names.contains(&"above-fixture".to_string()),
+            "a subdirectory config's ignores must not leak above its own directory: {names:?}"
+        );
+        assert!(
+            !names.contains(&"below-fixture".to_string()),
+            "the subdirectory's own fixtures are still ignored: {names:?}"
+        );
+        assert!(
+            names.contains(&"kept".to_string()),
+            "everything else is untouched: {names:?}"
+        );
+    }
+
+    /// The user-global config is a config file like any other: its patterns are anchored to its
+    /// own directory, so a personal `ignore` follows the user's own tree around and says nothing
+    /// about the projects being linted.
+    #[test]
+    fn the_user_config_ignores_are_anchored_to_the_user_config_directory() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path();
+        let user = root.join("home").join(".config").join("slint");
+        fs::create_dir_all(&user).unwrap();
+        fs::write(user.join("config.toml"), "ignore = [\"fixtures/**\"]\n").unwrap();
+
+        let project = root.join("project");
+        write_skill(&project, "fixtures", &document_named("project-fixture"));
+        write_skill(&project, "kept", &document_named("kept"));
+
+        let config = config_ignoring(Some(&user.join("config.toml")), &["fixtures/**"]);
+
+        let names = linted_names(&[project], &config);
+        assert!(
+            names.contains(&"project-fixture".to_string()) && names.contains(&"kept".to_string()),
+            "the user config's patterns are not about the project's tree: {names:?}"
+        );
+
+        // Where the user config lives, its pattern does its work.
+        write_skill(&user, "fixtures", &document_named("home-fixture"));
+        write_skill(&user, "kept", &document_named("home-kept"));
+        let names = linted_names(&[user], &config);
+        assert!(
+            !names.contains(&"home-fixture".to_string()),
+            "the user config's own fixtures folder is ignored: {names:?}"
+        );
+        assert!(
+            names.contains(&"home-kept".to_string()),
+            "and nothing else there is: {names:?}"
+        );
+    }
+
+    /// `!` keeps working on anchored patterns, in whatever order the two were written: the list
+    /// stays a set of exclusions with a set of exceptions, anchored to the same directory.
+    #[test]
+    fn a_negated_pattern_takes_an_anchored_path_back() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path();
+        write_skill(
+            &root.join("fixtures"),
+            "keep-me",
+            &document_named("keep-me"),
+        );
+        write_skill(
+            &root.join("fixtures"),
+            "drop-me",
+            &document_named("drop-me"),
+        );
+        write_skill(root, "kept", &document_named("kept"));
+
+        for patterns in [
+            ["fixtures/**", "!fixtures/keep-me/**"],
+            ["!fixtures/keep-me/**", "fixtures/**"],
+        ] {
+            let config = config_ignoring(Some(&root.join("slint.toml")), &patterns);
+            let names = linted_names(&[root.to_path_buf()], &config);
+
+            assert!(
+                names.contains(&"keep-me".to_string()),
+                "the negated pattern must take its folder back, for {patterns:?}: {names:?}"
+            );
+            assert!(
+                !names.contains(&"drop-me".to_string()),
+                "the plain pattern must still ignore its folder, for {patterns:?}: {names:?}"
+            );
+            assert!(
+                names.contains(&"kept".to_string()),
+                "everything else is untouched, for {patterns:?}: {names:?}"
+            );
+        }
     }
 
     const GOOD: &str = "---\nname: photo-culling\ndescription: Culls a photo shoot in Lightroom by flagging the keepers and rejecting the rest. Use when triaging RAW files after a session.\n---\n\n## Culling\n\n1. Import the RAW files.\n2. Flag keepers with P.\n";

@@ -6,13 +6,14 @@
 
 pub mod github;
 pub mod json;
+pub mod junit;
 pub mod sarif;
 pub mod stylish;
 
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
-use crate::diagnostics::Report;
+use crate::diagnostics::{Report, Severity};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -26,6 +27,8 @@ pub enum Format {
     Github,
     /// For scanners and quality dashboards: SARIF 2.1.0, one result per finding.
     Sarif,
+    /// For CI test reports: JUnit XML, one testcase per finding.
+    Junit,
     /// One line per finding, for grep and for editors that expect a compiler.
     Compact,
 }
@@ -39,9 +42,10 @@ impl FromStr for Format {
             "json" => Ok(Format::Json),
             "github" => Ok(Format::Github),
             "sarif" => Ok(Format::Sarif),
+            "junit" => Ok(Format::Junit),
             "compact" => Ok(Format::Compact),
             other => Err(format!(
-                "unknown format \"{other}\" — try stylish, json, github, sarif or compact"
+                "unknown format \"{other}\" — try stylish, json, github, sarif, junit or compact"
             )),
         }
     }
@@ -55,6 +59,7 @@ pub fn render(report: &Report, format: Format, colour: bool, max_warnings: i64) 
         Format::Json => json::render(report, max_warnings),
         Format::Github => github::render(report),
         Format::Sarif => sarif::render(report),
+        Format::Junit => junit::render(report),
         Format::Compact => compact(report),
     }
 }
@@ -64,19 +69,41 @@ fn compact(report: &Report) -> String {
 
     for skill in &report.skills {
         for message in &skill.messages {
+            // The ESLint compact convention, which the name promises: the position in prose,
+            // a capitalised severity, and the rule in brackets at the end of the line.
             lines.push(format!(
-                "{}:{}:{}: {} [{}] {}",
+                "{}: line {}, col {}, {} - {} ({})",
                 message.file,
                 message.location.line,
                 message.location.column,
-                message.severity,
-                message.rule,
-                message.message
+                severity_word(message.severity),
+                message.message,
+                message.rule
             ));
+        }
+
+        // A note is not a finding, but it is the only record that a pass did not run, so it
+        // prints under the skill's path rather than being read out of the JSON alone.
+        for note in &skill.notes {
+            lines.push(format!("{}: note: {}", skill.path, note));
         }
     }
 
+    for note in &report.notes {
+        lines.push(format!("note: {note}"));
+    }
+
     lines.join("\n")
+}
+
+/// ESLint's compact format capitalises the severity; an `info` is a `note` here, the word every
+/// other format uses for a judgement call.
+fn severity_word(severity: Severity) -> &'static str {
+    match severity {
+        Severity::Error => "Error",
+        Severity::Warning => "Warning",
+        Severity::Info => "Note",
+    }
 }
 
 #[cfg(test)]
@@ -138,6 +165,7 @@ mod tests {
         assert_eq!("json".parse::<Format>().unwrap(), Format::Json);
         assert_eq!("github".parse::<Format>().unwrap(), Format::Github);
         assert_eq!("sarif".parse::<Format>().unwrap(), Format::Sarif);
+        assert_eq!("junit".parse::<Format>().unwrap(), Format::Junit);
         assert_eq!("compact".parse::<Format>().unwrap(), Format::Compact);
 
         let failure = "yaml".parse::<Format>().unwrap_err();
@@ -147,13 +175,54 @@ mod tests {
         );
     }
 
+    // https://github.com/MaximeGaudin/slint/issues/177: the name "compact" is ESLint's, and the
+    // shape has to be ESLint's too: `path: line X, col Y, Severity - message (rule)`.
     #[test]
     fn compact_prints_one_grep_friendly_line_per_finding() {
-        let text = compact(&sample());
+        let mut report = sample();
+        report.skills[0].notes.clear();
+        let text = compact(&report);
         let lines: Vec<&str> = text.lines().collect();
 
         assert_eq!(lines.len(), 2);
-        assert!(lines[0].starts_with("skills/helper/SKILL.md:2:1: warning [name/not-generic]"));
+        assert_eq!(
+            lines[0],
+            "skills/helper/SKILL.md: line 2, col 1, Warning - \"helper\" says nothing about what this does (name/not-generic)"
+        );
+        assert_eq!(
+            lines[1],
+            "skills/helper/SKILL.md: line 9, col 1, Error - The instructions name scripts/cull.py, which is not in the bundle (bundle/no-dangling-path)"
+        );
+    }
+
+    #[test]
+    fn an_info_finding_reads_as_a_note_in_compact() {
+        let mut report = sample();
+        report.skills[0].notes.clear();
+        report.skills[0].messages[0].severity = Severity::Info;
+
+        let text = compact(&report);
+
+        assert!(text.contains(", Note - "), "{text}");
+    }
+
+    // https://github.com/MaximeGaudin/slint/issues/134: a note says a pass did not run, and a
+    // format that drops it makes a partial run read as a complete one.
+    #[test]
+    fn notes_survive_into_compact_so_a_skipped_pass_stays_visible() {
+        let mut report = sample();
+        report.notes = vec!["1 argument was not a skill and was skipped.".into()];
+
+        let text = compact(&report);
+
+        assert!(
+            text.contains("skills/helper: note: 8 rules need a model and none is configured."),
+            "the skill's own notes print under its path: {text}"
+        );
+        assert!(
+            text.contains("note: 1 argument was not a skill and was skipped."),
+            "the run's notes print without a path: {text}"
+        );
     }
 
     #[test]
@@ -162,7 +231,9 @@ mod tests {
 
         assert!(render(&report, Format::Json, false, -1).starts_with('{'));
         assert!(render(&report, Format::Github, false, -1).starts_with("::"));
-        assert!(render(&report, Format::Compact, false, -1).contains("SKILL.md:2:1"));
+        assert!(render(&report, Format::Sarif, false, -1).starts_with('{'));
+        assert!(render(&report, Format::Junit, false, -1).starts_with("<?xml"));
+        assert!(render(&report, Format::Compact, false, -1).contains("SKILL.md: line 2, col 1"));
         assert!(render(&report, Format::Stylish, false, -1).contains("helper"));
     }
 }

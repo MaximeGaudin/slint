@@ -133,6 +133,114 @@ fn a_negated_pattern_takes_a_path_back_from_the_ignore_list() {
     );
 }
 
+/// Regression for https://github.com/MaximeGaudin/slint/issues/25 —
+/// `ignore = ["fixtures/**"]` read like a `.gitignore` entry but matched like text typed on the
+/// command line, so the pattern matched nothing unless it was spelled `**/fixtures/**`. Patterns
+/// are anchored to the config file's directory.
+#[test]
+fn an_ignore_pattern_is_anchored_to_the_config_file_not_the_invocation() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+
+    write(root.join("fixtures").as_path(), "helper", BROKEN);
+    write(root.join("kept").as_path(), "photo-culling", GOOD);
+    fs::write(root.join("slint.toml"), "ignore = [\"fixtures/**\"]\n").unwrap();
+
+    let output = slint(&[root.to_str().unwrap(), "--no-llm"]);
+
+    let stdout = stdout(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "only the kept skill is linted: {stdout}"
+    );
+    assert!(
+        !stdout.contains("helper"),
+        "the pattern read next to the config file must ignore its folder: {stdout}"
+    );
+}
+
+/// A config in a subdirectory of the scanned tree — named with `--config` — anchors its patterns
+/// to its own directory: it says nothing about the tree above it.
+#[test]
+fn a_subdirectory_config_ignores_only_what_sits_beneath_it() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+
+    fs::create_dir_all(root.join("sub")).unwrap();
+    fs::write(
+        root.join("sub").join("slint.toml"),
+        "ignore = [\"**/fixtures/**\"]\n",
+    )
+    .unwrap();
+    write(
+        root.join("fixtures").as_path(),
+        "above",
+        &BROKEN.replace("name: helper", "name: above-fixture"),
+    );
+    write(
+        root.join("sub").join("fixtures").as_path(),
+        "below",
+        &BROKEN.replace("name: helper", "name: below-fixture"),
+    );
+    write(root.join("kept").as_path(), "photo-culling", GOOD);
+
+    let output = slint_in(root, &["--no-llm", "--config", "sub/slint.toml", "."]);
+
+    let stdout = stdout(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "the fixtures folder above the config is still linted: {stdout}"
+    );
+    assert!(
+        stdout.contains("above-fixture"),
+        "the tree above the config file must be linted: {stdout}"
+    );
+    assert!(
+        !stdout.contains("below-fixture"),
+        "the config's own fixtures folder must be ignored: {stdout}"
+    );
+}
+
+/// `--ignore-path` reads a file beside the config, so its patterns are anchored to that file's
+/// own directory, the same way the config's are.
+#[test]
+fn an_ignore_path_file_ignores_relative_to_itself() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+
+    write(
+        root,
+        "helper",
+        &BROKEN.replace("name: helper", "name: top-helper"),
+    );
+    write(
+        root.join("tools").as_path(),
+        "helper",
+        &BROKEN.replace("name: helper", "name: tool-helper"),
+    );
+    write(root, "photo-culling", GOOD);
+    fs::write(root.join("tools").join("my-ignores"), "helper\n").unwrap();
+
+    let output = slint_in(root, &["--no-llm", "--ignore-path", "tools/my-ignores"]);
+
+    let stdout = stdout(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "the helper above the ignore file is still linted: {stdout}"
+    );
+    assert!(
+        stdout.contains("top-helper"),
+        "a pattern in the ignore file says nothing about the tree above it: {stdout}"
+    );
+    assert!(
+        !stdout.contains("tool-helper"),
+        "the bare name ignores the helper beside the ignore file: {stdout}"
+    );
+}
+
 /// Regression for https://github.com/MaximeGaudin/slint/issues/29 —
 /// the first path's config governed every path, so a later path's own config was read by
 /// nobody and said nothing.
@@ -1408,6 +1516,56 @@ fn the_sarif_format_is_a_valid_sarif_log() {
     );
 }
 
+// https://github.com/MaximeGaudin/slint/issues/172: CI systems that render test reports —
+// Jenkins, GitLab — read JUnit XML, not annotations.
+#[test]
+fn the_junit_format_is_xml_a_ci_can_ingest() {
+    let temporary = tempfile::tempdir().unwrap();
+    write(temporary.path(), "helper", BROKEN);
+
+    let output = slint(&[
+        temporary.path().to_str().unwrap(),
+        "--no-llm",
+        "--format",
+        "junit",
+    ]);
+
+    let text = stdout(&output);
+
+    assert!(
+        text.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"),
+        "{text}"
+    );
+    assert!(text.contains("<testsuites name=\"slint\""), "{text}");
+    assert!(text.contains("<testsuite name="), "{text}");
+    assert!(
+        text.contains("<error message=") || text.contains("<failure message="),
+        "the dangling path is at least one failed testcase:\n{text}"
+    );
+    assert!(text.contains("bundle/no-dangling-path"), "{text}");
+}
+
+#[test]
+fn the_junit_format_reports_a_clean_run_as_a_passing_testcase() {
+    let temporary = tempfile::tempdir().unwrap();
+    write(temporary.path(), "photo-culling", GOOD);
+
+    let output = slint(&[
+        temporary.path().to_str().unwrap(),
+        "--no-llm",
+        "--format",
+        "junit",
+    ]);
+
+    let text = stdout(&output);
+
+    assert!(text.contains("failures=\"0\" errors=\"0\""), "{text}");
+    assert!(
+        text.contains("<testcase"),
+        "at least one testcase exists: {text}"
+    );
+}
+
 // Colour is decided by more than the `--no-color` flag: the standard environment conventions
 // (https://no-color.org and https://bixense.com/clicolors/) apply as well. These tests run the
 // binary with stdout piped, which is never a terminal, so anything coloured must have been forced.
@@ -1543,6 +1701,48 @@ fn the_committed_schema_is_the_one_the_binary_prints() {
 
     let generated: serde_json::Value =
         serde_json::from_str(&stdout(&slint(&["schema"]))).expect("schema prints valid JSON");
+
+    assert_eq!(generated, committed);
+}
+
+#[test]
+fn the_committed_report_schema_is_the_one_the_binary_prints() {
+    // The file the docs site publishes for `--format json` has to be the schema this binary would
+    // print, or a consumer would validate a report against a shape slint does not emit.
+    // Regenerate it with `slint schema report > apps/docs/public/schemas/report.json`.
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../docs/public/schemas/report.json"
+    );
+    let committed: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(path)
+            .expect("the committed report schema exists; regenerate it with `slint schema report`"),
+    )
+    .expect("the committed report schema is valid JSON");
+
+    let generated: serde_json::Value = serde_json::from_str(&stdout(&slint(&["schema", "report"])))
+        .expect("schema prints valid JSON");
+
+    assert_eq!(generated, committed);
+}
+
+#[test]
+fn the_committed_plugin_abi_schema_is_the_one_the_binary_prints() {
+    // The file the plugin ABI page publishes has to be the schema this binary would print, or a
+    // plugin author would validate the wire format against a shape slint does not speak.
+    // Regenerate it with `slint schema plugin-abi > apps/docs/public/schemas/plugin-abi.json`.
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../docs/public/schemas/plugin-abi.json"
+    );
+    let committed: serde_json::Value = serde_json::from_str(&fs::read_to_string(path).expect(
+        "the committed plugin ABI schema exists; regenerate it with `slint schema plugin-abi`",
+    ))
+    .expect("the committed plugin ABI schema is valid JSON");
+
+    let generated: serde_json::Value =
+        serde_json::from_str(&stdout(&slint(&["schema", "plugin-abi"])))
+            .expect("schema prints valid JSON");
 
     assert_eq!(generated, committed);
 }

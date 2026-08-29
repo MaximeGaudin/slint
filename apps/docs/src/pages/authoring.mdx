@@ -1,0 +1,226 @@
+---
+layout: ../layouts/Page.astro
+title: Authoring rules
+description: How a rule is written, what it can see, and what the catalogue holds every rule to — packs, plugins, and the built-ins themselves.
+section: authoring
+---
+
+<div class="page-intro">
+
+# Authoring rules
+
+<p class="lead">
+  {'Every rule — built-in, packed, or plugged in — is the same three sentences and a citation: what it checks, what it costs an agent when it is broken, and what to do about it. This page is how those sentences get written.'}
+</p>
+
+</div>
+
+A rule exists in one of three ways, and all three end up in the same report:
+
+- **A built-in rule** is Rust that ships with the binary, in
+  `packages/core/src/rules/`. It is what the [catalogue](/rules/) is made of.
+- **A rule pack** is a TOML (or JSON) file of patterns your project or house
+  style wants enforced — data, no build step.
+- **A WebAssembly plugin** is code, for the checks a regular expression cannot
+  answer. Its wire contract is on the [plugin ABI](/plugin-abi/) page.
+
+Whatever the kind, a rule id is namespaced (`area/thing`, or `house/thing` for
+a pack), and a config can retune or silence it by name.
+
+## What every rule is made of
+
+The catalogue holds itself to four sentences, and a pack rule has to match:
+
+| Field | What it is |
+| --- | --- |
+| `summary` | What the rule checks, in plain English. One line. |
+| `rationale` | What goes wrong *for the agent* if you ignore it. Not for the reader of the skill — for the run. |
+| `advice` | The concrete edit that fixes it. |
+| `reference` | `title` and an `http(s)` `url`. Not optional. |
+
+The copy guide the built-ins use, worth copying: no metaphors, no riddles, and
+the advice is something a person can do in one edit. A rule without a citation
+does not get in — "the linter says so" is the failure this tool exists to
+avoid, and it does not stop being one because the rule came from you.
+
+## A rule pack, field by field
+
+```bash
+slint init-plugin
+```
+
+writes a starter pack. The full field list, with types and defaults:
+
+| Field | Type | Default | What it is |
+| --- | --- | --- | --- |
+| `name` | string | — | **Required.** Namespaced: `house/no-todo`. A name without `/` is refused, and so is one a built-in already owns — one config switch must never control two unrelated rules. |
+| `pattern` | string | — | **Required.** A [regular expression](#the-regex-flavor). A match is a finding. |
+| `summary` | string | — | **Required.** Becomes the message when `message` is absent. |
+| `rationale` | string | — | **Required.** |
+| `advice` | string | — | **Required.** |
+| `reference` | table | — | **Required.** `{ title = "…", url = "…" }`; the `url` must start with `http://` or `https://`. |
+| `severity` | string | `"warning"` | `error`, `warning` or `info`. A config can still override it. |
+| `target` | string | `"body"` | `body`, `description`, `name` or `files`. |
+| `message` | string | *the summary* | The finding's text. `{'{match}'}`, `{'{name}'}` and `{'{text}'}` are substituted. |
+| `required` | boolean | `false` | Inverts the rule: a finding when the pattern is **not** found. |
+
+Everything a pack author writes is untrusted text headed for a terminal, so
+control characters come out of all of it before anything is kept.
+
+### The targets
+
+| Target | What it scans | Where a finding lands |
+| --- | --- | --- |
+| `body` | `SKILL.md` after the frontmatter, one line at a time. | The line in the file the match is on. A `required` rule that finds nothing fires once, on line 1. |
+| `description` | The frontmatter `description` value. | The line the value is written on. Fires once either way. |
+| `name` | The frontmatter `name` value. | Same as the description. |
+| `files` | Every bundled file that reads as text (UTF-8, 1 MiB or less); images and bigger files are counted, not read. | The bundled file's own path and line, so the finding points where the reader has to go. |
+
+A `required` rule over `body` or `files` asks its question per text: the
+pattern must appear *somewhere* in the body, or in each bundled file. Over
+`name` or `description` it asks it once: the value has to match, not contain.
+
+### The regex flavor
+
+Patterns are the [`regex`](https://docs.rs/regex) crate's syntax — RE2-style:
+no backreferences, no lookahead or lookbehind. `(?i)` makes a pattern
+case-insensitive, which is how the starter pack's `owner:` check works. A
+pattern that does not compile refuses the whole pack at load, with the reason,
+so a typo cannot ship as a rule that silently matches nothing.
+
+### What load refuses
+
+A pack is validated before any rule in it runs, and a refusal is an error that
+names the rule, not a quiet skip: a name without a namespace, a name a
+built-in already owns, a citation that is not `http(s)`, a severity that is
+not one, a pattern that does not compile.
+
+## A worked pack
+
+Two rules and one inversion, the shape a house style usually takes:
+
+```toml
+[[rules]]
+name = "house/no-todo"
+severity = "warning"
+summary = "Instructions carry no TODO markers."
+rationale = "An agent follows what is written. A TODO is a note to a human that reads as an instruction to a machine."
+advice = "Finish the step, or take the line out until it is ready."
+pattern = "TODO|FIXME|XXX"
+target = "body"
+message = "\"{match}\" is a note to a person, in a document a machine follows."
+reference = { title = "Skill authoring best practices", url = "https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices" }
+
+[[rules]]
+name = "house/no-shouting"
+summary = "Descriptions do not shout."
+rationale = "A description is read as part of a system prompt, where emphasis is noise."
+advice = "Write it in a normal voice."
+pattern = "!!"
+target = "description"
+reference = { title = "House style", url = "https://example.com/style" }
+
+[[rules]]
+name = "house/names-the-owner"
+severity = "info"
+summary = "Every skill says who owns it."
+rationale = "A skill nobody owns is a skill nobody updates when the tool it drives changes."
+advice = "Add an Owner line naming a team."
+pattern = "(?i)owner:"
+target = "body"
+required = true
+reference = { title = "Skill authoring best practices", url = "https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices" }
+```
+
+Point at it from the config, and it runs with `--plugins`:
+
+```toml
+[[plugins]]
+path = "./slint-house-rules.toml"
+```
+
+Its findings report `source: "plugin"`, and its rules are ordinary rules from
+then on: `house/no-todo = "off"` in the config silences one, a
+`slint-disable` comment silences one for a document, exactly as the
+[catalogue's own](/config/) behave.
+
+## When a regular expression is not enough
+
+Write a program. A plugin is one exported `lint` function that takes the
+parsed skill as JSON and answers with messages — sandboxed, no filesystem, no
+network, written in any language that compiles to WebAssembly. The exact
+contract, field by field, is on the [plugin ABI](/plugin-abi/) page.
+
+## Inside the catalogue
+
+A built-in rule is a struct with two methods:
+
+```rust
+pub trait Rule: Sync + Send {
+    fn meta(&self) -> &'static RuleMeta;
+    fn check(&self, context: &mut RuleContext<'_>);
+}
+```
+
+`RuleMeta` is the four sentences plus what the catalogue needs to list it:
+`name`, `summary`, `rationale`, `advice`, `default_severity`, whether it is
+`fixable`, whether it `needs_model`, and its `reference_title`/`reference_url`.
+Citations come from the named constants in `rules::sources`, so a link that
+moves is one edit.
+
+`RuleContext` is what a rule reads and reports into:
+
+| What | What it does |
+| --- | --- |
+| `context.skill` | The parsed skill: `body`, `name`, `description`, `source`, `files`, `metadata`, and the line-mapping helpers. |
+| `context.config` | The resolved config, for a rule that needs to look beyond its own options. |
+| `context.option::<T>()` | The rule's options, deserialized into `T` with defaults when the config said nothing. Every rule that takes options is also listed in `validate_rule_options`, so a misspelt or negative option is refused at load instead of silently ignored. |
+| `context.report(message, location)` | A finding against `SKILL.md`. |
+| `context.report_fixable(…, fix)` | The same, plus a computed fix. |
+| `context.report_in_file(path, …)` | A finding against a bundled file. |
+| `context.report_in_file_with(…, advice, reference)` | The same, with finding-specific advice and citation. |
+| `context.finish()` | Collects the messages once `check` is done. |
+
+Locations are 1-based, as every editor reports them:
+`Location::at(line, column)` for a point, `Location::span(line, column,
+length)` for a range (the end is exclusive), `Location::whole_file()` for a
+finding about the document as a whole. A rule that knows only the line says
+only the line rather than inventing a span that would underline the wrong
+words. A `Fix` is byte offsets into `skill.source` — start inclusive, end
+exclusive — plus the `replacement` text and a one-sentence `description`.
+
+### Static, model, project
+
+- **Static rules** read text that is already parsed and answer instantly. They
+  live in `packages/core/src/rules/<area>.rs` — `naming`, `description`,
+  `body`, `bundle`, `metadata` — and register in `rules::registry()`.
+- **Model rules** are metadata only: `llm/rules.rs` declares their `RuleMeta`
+  and nothing runs them until `--llm`. The model answers once per skill, for
+  all of them at once, because the interesting ones need the whole document
+  rather than a rule's worth of it.
+- **Project rules** see every skill in the run at once — two descriptions that
+  compete are not visible from inside either of them. They implement
+  `ProjectRule::check(skills, config, severity)` and register in
+  `project_registry()`.
+
+## How the catalogue tests itself
+
+Every rule carries its tests beside it, and the helpers in `rules::testing`
+make that cheap: `good_skill()` is a skill that passes everything, and
+`skill_with_body(…)`, `skill_named(…)` and `skill_described(…)` each break one
+thing — built by rewriting the document, so a rule that produces a fix has
+real byte offsets to point at. A rule is a pure function of a parsed skill, so
+a test needs no files and no config: build the skill, run the rule, read the
+messages.
+
+Two more tests hold the whole catalogue in place: one refuses a `RuleMeta`
+with no citation, and the dogfood run lints slint's own bundled skills, so a
+change that breaks the linter's own house fails the build it shipped in.
+
+## Getting a rule seen
+
+The docs site's [catalogue](/rules/) is generated from the binary —
+`pnpm sync:docs` regenerates it, and CI fails if it is stale — so a rule
+cannot exist in one and not the other. A rule change ships with a CHANGELOG
+entry, and what that entry has to say for each kind of change is the
+[versioning policy](/config/#versioning-policy).

@@ -44,7 +44,7 @@ slint --help
 
 Building from source requires **Rust 1.95+** (the workspace MSRV, pinned in `Cargo.toml` and enforced by CI). MSRV bumps are not treated as breaking changes.
 
-Release binaries (latest release: [v0.2.0](https://github.com/MaximeGaudin/slint/releases/tag/0.2.0); macOS (Apple Silicon, Intel), Linux (x86_64, arm64), and Windows (`slint-windows-amd64.zip`) assets are published for each release):
+Release binaries (latest release: [v0.2.0](https://github.com/MaximeGaudin/slint/releases/tag/0.2.0); macOS (Apple Silicon, Intel), Linux (x86_64, arm64; glibc and static musl builds), and Windows (`slint-windows-amd64.zip`) assets are published for each release):
 
 Each release publishes a `<artifact>.sha256` file next to its tarball. Download the tarball and its checksum, verify the checksum, and only then extract as root:
 
@@ -60,6 +60,12 @@ curl -fsSLO https://github.com/MaximeGaudin/slint/releases/latest/download/slint
 curl -fsSLO https://github.com/MaximeGaudin/slint/releases/latest/download/slint-linux-amd64.tar.gz.sha256
 sha256sum -c slint-linux-amd64.tar.gz.sha256
 sudo tar xz -C /usr/local/bin slint-linux-amd64.tar.gz
+
+# Linux (x86_64, static musl build — Alpine/minimal containers)
+curl -fsSLO https://github.com/MaximeGaudin/slint/releases/latest/download/slint-linux-amd64-musl.tar.gz
+curl -fsSLO https://github.com/MaximeGaudin/slint/releases/latest/download/slint-linux-amd64-musl.tar.gz.sha256
+sha256sum -c slint-linux-amd64-musl.tar.gz.sha256
+sudo tar xz -C /usr/local/bin slint-linux-amd64-musl.tar.gz
 ```
 
 
@@ -105,7 +111,7 @@ Exit codes: `0` clean, `1` errors, `2` warnings only, `3` slint itself failed, `
 | Flag                    | What it does                                                       |
 | ----------------------- | ------------------------------------------------------------------ |
 | `--fix`                 | Apply every computed fix, then lint again.                         |
-| `--format`              | `stylish` (default), `json`, `github`, `sarif`, `compact`.         |
+| `--format`              | `stylish` (default), `json`, `github`, `sarif`, `junit`, `compact`. |
 | `--stdin`               | Lint the document on stdin (static rules only).                    |
 | `--stdin-filename PATH` | The name to report for the stdin document.                         |
 | `--print-config`        | Print the resolved config as JSON and stop.                        |
@@ -143,7 +149,7 @@ Exit codes: `0` clean, `1` errors, `2` warnings only, `3` slint itself failed, `
 `slint init` writes a starter `slint.toml`. Every rule is already on; the file is for the ones you disagree with. `--no-config` skips the lookup entirely, for one-off runs and CI jobs that want the built-in defaults and the command line only.
 
 ```toml
-ignore = ["**/fixtures/**", "!**/fixtures/keep-me/**"] # a ! takes a path back
+ignore = ["fixtures/**", "!fixtures/keep-me/**"] # anchored to the config file; a ! takes a path back
 
 [rules]
 "description/says-when" = "error"          # raise one
@@ -169,6 +175,8 @@ For editor autocomplete over the JSON shapes, point `$schema` at the published s
   "rules": { "description/says-when": "error" }
 }
 ```
+
+The other two machine contracts are published the same way: `https://slint.dev/schemas/report.json` describes what `--format json` prints, and `https://slint.dev/schemas/plugin-abi.json` describes the WebAssembly plugin wire format. `slint schema`, `slint schema report` and `slint schema plugin-abi` print exactly what those URLs serve, and each is generated from the code that reads or writes the format, so none of them can drift from what slint actually does.
 
 A document can also opt out of a rule for itself:
 

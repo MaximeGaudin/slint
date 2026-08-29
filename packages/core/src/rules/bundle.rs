@@ -4,7 +4,7 @@
 //! exists, and whether a file that exists is one anything reads.
 
 use regex::Regex;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
 
 use crate::diagnostics::{Fix, Location, Reference, Severity};
@@ -373,8 +373,12 @@ static UNUSED_FILE: RuleMeta = RuleMeta {
     // normalised in the same run can make this very file referenced.
     fixable: false,
     needs_model: false,
-    reference_title: sources::PAPER.0,
-    reference_url: sources::PAPER.1,
+    // The best-practices guide's "Observe how Claude navigates Skills" section covers exactly
+    // this: "Ignored content: if Claude never accesses a bundled file, it might be unnecessary
+    // or poorly signaled in the main instructions". The paper previously cited here never
+    // discusses unreferenced bundle files.
+    reference_title: sources::BEST_PRACTICES.0,
+    reference_url: sources::BEST_PRACTICES.1,
 };
 
 static EXECUTABLE: RuleMeta = RuleMeta {
@@ -501,26 +505,42 @@ impl Rule for NoDangling {
             .collect();
         let body = context.skill.body.clone();
 
-        for path in paths_in(&body) {
-            // data/, templates/ and reference/ are slint extras, not spec directories: a prose
-            // mention of them usually names the user's own files, not a file to be shipped.
-            if !is_in_spec_directory(&path) {
+        // A fenced block illustrates a path rather than naming one — the same way
+        // body/posix-paths reads fences — so nothing inside ``` or ~~~ is a promise to
+        // ship a file.
+        let mut in_fence = false;
+        let mut dangling: BTreeMap<String, usize> = BTreeMap::new();
+
+        for (index, line) in body.lines().enumerate() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+                in_fence = !in_fence;
+                continue;
+            }
+            if in_fence {
                 continue;
             }
 
-            if bundled.contains(&path) {
-                continue;
+            for path in paths_in(line) {
+                // data/, templates/ and reference/ are slint extras, not spec directories: a
+                // prose mention of them usually names the user's own files, not a file to
+                // be shipped.
+                if !is_in_spec_directory(&path) {
+                    continue;
+                }
+
+                if bundled.contains(&path) {
+                    continue;
+                }
+
+                dangling.entry(path).or_insert(index);
             }
+        }
 
-            let line = body
-                .lines()
-                .position(|line| line.contains(&path))
-                .map(|index| context.skill.document_line(index + 1))
-                .unwrap_or(1);
-
+        for (path, index) in dangling {
             context.report(
                 format!("The instructions name {path}, which is not in the bundle"),
-                Location::at(line, 1),
+                Location::at(context.skill.document_line(index + 1), 1),
             );
         }
     }
@@ -923,6 +943,22 @@ mod tests {
         }
     }
 
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/101 — a path in a fenced
+    /// example illustrates a convention; it is not a promise to ship a file.
+    #[test]
+    fn an_illustrative_path_inside_a_fenced_block_is_not_a_bundle_promise() {
+        for (open, close) in [("```text", "```"), ("~~~", "~~~")] {
+            let skill = skill_with_body(&format!(
+                "\n## Steps\n\n1. Run the conversion.\n\n{open}\nBefore: scripts\\legacy\\run.bat\nAfter: scripts/legacy/run.py\n{close}\n",
+            ));
+
+            assert!(
+                check(&DANGLING_RULE, &skill).is_empty(),
+                "for {open}{close}"
+            );
+        }
+    }
+
     #[test]
     fn a_path_that_is_not_in_the_bundle_is_an_error() {
         let skill = skill_with_body("\n## Culling\n\nRun scripts/cull.py when you are done.\n");
@@ -993,6 +1029,15 @@ mod tests {
             .push(file("scripts/cull.py", "#!/usr/bin/env python3\n", true));
 
         assert!(check(&DANGLING_RULE, &skill).is_empty());
+    }
+
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/243 — the citation has to
+    /// substantiate the rule's claim, and the paper never discusses unreferenced bundle
+    /// files. The best-practices guide does: "Ignored content: if Claude never accesses a
+    /// bundled file, it might be unnecessary or poorly signaled in the main instructions".
+    #[test]
+    fn the_unused_file_rule_cites_a_source_about_ignored_bundle_files() {
+        assert_eq!(UNUSED_FILE.reference_url, sources::BEST_PRACTICES.1);
     }
 
     #[test]

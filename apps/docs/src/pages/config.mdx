@@ -74,8 +74,14 @@ ignore = ["**/fixtures/**", "**/vendor/**"]
 Directories that are never a skill — `.git`, `node_modules`, `target`, `dist`, `.venv` — are
 skipped without being configured, because nobody has ever wanted them linted.
 
+Patterns are resolved against the directory of the file that named them — `slint.toml`'s, or the
+user-global config's — the way `.gitignore` entries are. A pattern with a `/` in it is a path
+from there: `fixtures/**` is the fixtures folder beside the config file, however the run was
+invoked, and a leading `/` says the same thing again. A pattern with no `/` is a name, and
+matches at any depth below that directory.
+
 A `!` prefix takes a path back out of the list, the way `.gitignore` does: with
-`ignore = ["**/fixtures/**", "!**/fixtures/keep-me/**"]`, every fixtures folder is skipped
+`ignore = ["fixtures/**", "!fixtures/keep-me/**"]`, the config's fixtures folder is skipped
 except `keep-me`. A negated pattern wins over the plain ones whatever their order.
 
 To point at a different ignore file without editing the config:
@@ -84,7 +90,8 @@ To point at a different ignore file without editing the config:
 slint --ignore-path .gitignore
 ```
 
-It reads one glob per line, `#` comments allowed, and adds them to whatever the config already says.
+It reads one glob per line, `#` comments allowed, and adds them to whatever the config already
+says — anchored to that file's own directory, the same way the config's are.
 `--no-ignore` goes the other way: lint everything, even what the config would skip.
 
 ## Your own defaults
@@ -206,3 +213,40 @@ reply cap — so a save that does not change a skill does not re-issue a billed 
 `--format github` turns each finding into an annotation on the diff, where the person who caused it
 will read it. `--max-warnings` decides whether warnings fail the build; without it, warnings exit
 `2` and errors exit `1`, so a script can tell them apart.
+
+## Versioning policy
+
+The changelog adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/). For slint's own surface, that means:
+
+**Rule ids are config keys.** Everything a config can name — `body/max-lines`, a pack's
+`house/no-todo`, a plugin's `team/needs-review` — is a contract. Renaming or removing a rule id is
+breaking: it is announced under **Changed** or **Removed** in the CHANGELOG with the replacement
+written next to it, and it never happens silently.
+
+**Adding a rule is not breaking.** Even a default-on rule that starts failing previously-clean
+skills is a minor bump, not a major one: every rule can be turned off by name or by namespace
+(`body/*`), and the rule that changed your run is announced under **Added** with what it checks, so
+a CI job that goes red names the rule that did it. Fixes, message wording, advice and rationale
+edits are not breaking either — they are the catalogue getting better at saying the same thing.
+
+**Rule options grow, they do not move.** A new option in a rule's object is not breaking; removing
+one or reinterpreting one is. slint refuses options a rule does not read instead of ignoring them,
+so an old binary given a new config fails loudly and names the rule — it never quietly lints with
+settings nobody read.
+
+**Config keys behave the same way.** A new optional key (`[llm]`, `ignore`, `plugins`) is not
+breaking; removing or reinterpreting one is. The config reader refuses unknown fields on purpose,
+so a misspelt section or a retired one errors and names itself rather than the run continuing as if
+the file were empty. `slint schema` prints the config format as JSON Schema, generated from the
+code that reads it, so an editor can catch drift before a run does.
+
+**The machine contracts version themselves.** The `--format json` envelope carries
+`schemaVersion` and the plugin wire format carries `version`, each bumped only when a field is
+removed or reinterpreted — their promises are on the [JSON](/json/) and [plugin ABI](/plugin-abi/)
+pages, and a bump is changelog news.
+
+**Deprecation takes a release.** A key or rule id headed for removal is announced in the
+CHANGELOG under **Unreleased** first and keeps working for at least one release — with a warning
+where one can be said — before it goes. Anything breaking is written down where the upgrade can be
+read in the same place the change is announced: the [CHANGELOG](https://github.com/MaximeGaudin/slint/blob/main/CHANGELOG.md).
