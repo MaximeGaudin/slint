@@ -690,6 +690,81 @@ fn a_fix_that_cannot_write_one_file_still_reports_the_rest() {
     assert!(locked_document.contains('\\'), "{locked_document}");
 }
 
+/// Reproduces https://github.com/MaximeGaudin/slint/issues/277 — a read-only SKILL.md is the
+/// file --fix is most likely to meet in the wild, and nothing pinned how the run treats it.
+/// Two facts live here: a read-only file is still fixable, because replacing a file asks the
+/// directory for room rather than the file for permission; and when the replacement is
+/// impossible, the run reports the failure and the other files still get fixed.
+#[test]
+#[cfg(unix)]
+fn a_read_only_file_is_fixed_by_replacement_and_reported_when_it_cannot_be() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let document = |name: &str| {
+        format!(
+            "---\nname: {name}\ndescription: Culls a photo shoot in Lightroom by flagging the keepers and rejecting the rest. Use when triaging RAW files after a session.\n---\n\n## Culling\n\n1. Read references\\formats.md.\n"
+        )
+    };
+
+    /// The skill's fixable finding points at a file that exists, so the only finding is the
+    /// one with the fix.
+    fn with_reference(root: &Path, name: &str, document: &str) {
+        write(root, name, document);
+        fs::create_dir_all(root.join(name).join("references")).unwrap();
+        fs::write(root.join(name).join("references/formats.md"), "# Formats\n").unwrap();
+    }
+
+    let temporary = tempfile::tempdir().unwrap();
+
+    // A read-only file beside a writable directory.
+    with_reference(temporary.path(), "read-only", &document("read-only"));
+    let read_only = temporary.path().join("read-only/SKILL.md");
+    fs::set_permissions(&read_only, fs::Permissions::from_mode(0o444)).unwrap();
+
+    let output = slint(&[temporary.path().to_str().unwrap(), "--no-llm", "--fix"]);
+
+    assert_eq!(output.status.code(), Some(0), "{:?}", stdout(&output));
+    let fixed = fs::read_to_string(&read_only).unwrap();
+    assert!(!fixed.contains('\\'), "{fixed}");
+    assert_eq!(
+        fs::metadata(&read_only).unwrap().permissions().mode() & 0o777,
+        0o444,
+        "the replacement keeps the file's mode"
+    );
+
+    // The same read-only file, in a directory that refuses new files too: now the fix cannot
+    // land. The run says which file it could not write, and the writable skill is fixed anyway.
+    with_reference(temporary.path(), "a-locked", &document("a-locked"));
+    let locked = temporary.path().join("a-locked");
+    fs::set_permissions(
+        locked.join("SKILL.md").as_path(),
+        fs::Permissions::from_mode(0o444),
+    )
+    .unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o555)).unwrap();
+    with_reference(temporary.path(), "b-open", &document("b-open"));
+
+    let output = slint(&[temporary.path().to_str().unwrap(), "--no-llm", "--fix"]);
+
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "slint failed at its one write job: {:?}",
+        stdout(&output)
+    );
+
+    let text = stdout(&output);
+    assert!(text.contains("a-locked/SKILL.md"), "{text}");
+    assert!(text.contains("failed"), "{text}");
+
+    let untouched = fs::read_to_string(locked.join("SKILL.md")).unwrap();
+    assert!(untouched.contains('\\'), "{untouched}");
+    let open = fs::read_to_string(temporary.path().join("b-open/SKILL.md")).unwrap();
+    assert!(!open.contains('\\'), "{open}");
+}
+
 #[test]
 fn the_json_format_is_an_envelope_a_caller_can_branch_on() {
     let temporary = tempfile::tempdir().unwrap();
