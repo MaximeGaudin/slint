@@ -639,12 +639,17 @@ impl Rule for HardcodedRepoPath {
     }
 
     fn check(&self, context: &mut RuleContext<'_>) {
+        // Bundle-directory prefixes are matched too, because a hardcoded scripts/ path can name
+        // the consumer's repository just as well as the skill's own bundle; which one it is is
+        // decided below, against what the skill actually ships.
         static BACKTICK_PATH: LazyLock<Regex> = LazyLock::new(|| {
-            Regex::new(r"(?i)`((?:docs|src|app|packages)/[^`]+)`")
-                .expect("the backtick consumer path pattern compiles")
+            Regex::new(
+                r"(?i)`((?:docs|src|app|packages|scripts|references|assets|templates)/[^`]+)`",
+            )
+            .expect("the backtick consumer path pattern compiles")
         });
         static BARE_PATH: LazyLock<Regex> = LazyLock::new(|| {
-            Regex::new(r"(?i)\b((?:docs|src|app|packages)/[\w./-]+)")
+            Regex::new(r"(?i)\b((?:docs|src|app|packages|scripts|references|assets|templates)/[\w./-]+)")
                 .expect("the bare consumer path pattern compiles")
         });
 
@@ -662,6 +667,16 @@ impl Rule for HardcodedRepoPath {
         if has_fallback {
             return;
         }
+
+        // A path is only the skill's own bundle when the file actually ships with it — the
+        // spelling is the bundle's, the same convention the file reader reports paths in.
+        // Everything else, whatever directory it starts with, is a consumer-repo path.
+        let bundled: Vec<String> = context
+            .skill
+            .files
+            .iter()
+            .map(|file| file.path.clone())
+            .collect();
 
         let mut reported: Vec<String> = Vec::new();
 
@@ -687,12 +702,7 @@ impl Rule for HardcodedRepoPath {
             }
 
             for (start, path) in matches {
-                let lower = path.to_ascii_lowercase();
-                if lower.starts_with("scripts/")
-                    || lower.starts_with("references/")
-                    || lower.starts_with("assets/")
-                    || lower.starts_with("templates/")
-                {
+                if bundled.contains(&path) {
                     continue;
                 }
 
@@ -1252,9 +1262,40 @@ If `docs/01 - Briefs/` does not exist, ask the user where briefs live, or stop a
 
     #[test]
     fn skill_bundle_paths_are_not_consumer_repo_paths() {
-        let skill = skill_with_body(
+        // The exemption is bundle-resolved (#240): these are the skill's own files only
+        // because the skill actually ships them.
+        let mut skill = skill_with_body(
             "\n## Culling\n\n1. Read `scripts/cull.py`.\n2. Follow `references/formats.md`.\n3. Copy `assets/template.md`.\n",
         );
+        for (path, text) in [
+            ("scripts/cull.py", "print(1)\n"),
+            ("references/formats.md", "# Formats\n"),
+            ("assets/template.md", "# Template\n"),
+        ] {
+            skill.files.push(crate::skill::BundledFile {
+                path: path.into(),
+                bytes: text.len(),
+                executable: false,
+                text: Some(text.into()),
+            });
+        }
+
+        assert!(check(&HARDCODED_REPO_PATH_RULE, &skill).is_empty());
+    }
+
+    /// The other half of #240: when the skill does ship the file, a bundle-directory
+    /// mention stays a bundle reference and is not a hardcoded consumer-repo path.
+    #[test]
+    fn a_bundle_prefix_path_that_ships_with_the_skill_is_exempt() {
+        let mut skill = skill_with_body(
+            "\n## Culling\n\n1. Run `scripts/deploy.sh` exactly as written.\n",
+        );
+        skill.files.push(crate::skill::BundledFile {
+            path: "scripts/deploy.sh".into(),
+            bytes: 20,
+            executable: true,
+            text: Some("#!/usr/bin/env bash\n".into()),
+        });
 
         assert!(check(&HARDCODED_REPO_PATH_RULE, &skill).is_empty());
     }
