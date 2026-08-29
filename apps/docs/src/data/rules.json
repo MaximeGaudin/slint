@@ -183,8 +183,8 @@
     "default_severity": "warning",
     "fixable": false,
     "needs_model": false,
-    "reference_title": "Authoring Agent Skills: a software-engineering approach",
-    "reference_url": "https://arxiv.org/html/2607.25032v1"
+    "reference_title": "Skill authoring best practices — Claude Docs",
+    "reference_url": "https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices"
   },
   {
     "name": "description/concrete-noun",

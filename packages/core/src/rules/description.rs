@@ -313,27 +313,52 @@ impl Rule for SaysWhen {
     }
 }
 
+/// The crude stem a word-form collapses to: "culls", "culling" and "cull" compare equal, so a
+/// description cannot slip the name past the removal by inflecting it. Only endings that
+/// regularly mark an inflection are stripped, and only when what remains is still a word —
+/// "using" stays whole, "culling" collapses to "cull".
+fn stem(word: &str) -> &str {
+    for (suffix, minimum) in [("ing", 4), ("ed", 4), ("es", 4), ("s", 4)] {
+        if let Some(stemmed) = word.strip_suffix(suffix)
+            && stemmed.chars().count() >= minimum
+        {
+            return stemmed;
+        }
+    }
+
+    word
+}
+
 impl Rule for NotJustName {
     fn meta(&self) -> &'static RuleMeta {
         &NOT_JUST_NAME
     }
 
     fn check(&self, context: &mut RuleContext<'_>) {
-        let name = context.skill.name.replace('-', " ").to_ascii_lowercase();
+        let name = context.skill.name.to_ascii_lowercase();
         let description = context.skill.description.trim().to_ascii_lowercase();
 
         if name.is_empty() || description.is_empty() {
             return;
         }
 
-        let stripped = description
-            .replace(&name, "")
-            .chars()
-            .filter(|character| character.is_alphanumeric())
-            .count();
+        let name_stems: Vec<&str> = name
+            .split(|character: char| !character.is_alphanumeric())
+            .filter(|word| !word.is_empty())
+            .map(stem)
+            .collect();
 
-        // What is left once the name is removed is what the description actually contributed.
-        if stripped < 24 {
+        // Every form of the name is the name's own words, contributed in full by the field
+        // the agent already sees. What is left once they are gone is what the description
+        // actually added.
+        let contributed: usize = description
+            .split(|character: char| !character.is_alphanumeric())
+            .filter(|word| !word.is_empty())
+            .filter(|word| !name_stems.contains(&stem(word)))
+            .map(|word| word.chars().filter(|c| c.is_alphanumeric()).count())
+            .sum();
+
+        if contributed < 24 {
             context.report("The description repeats the name and stops", at(context));
         }
     }
@@ -352,16 +377,22 @@ impl Rule for ConcreteNoun {
 
         // A proper noun, an extension, a path or a CamelCase product name. One is enough: the rule
         // is looking for any anchor a request could share, not for a well-stocked vocabulary.
-        let has_anchor = description.split_whitespace().skip(1).any(|word| {
-            let cleaned = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '.');
+        let has_anchor = description
+            .split_whitespace()
+            .enumerate()
+            .any(|(index, word)| {
+                let cleaned = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '.');
 
-            looks_like_a_file(cleaned)
-                // An acronym: RAW, PDF, API.
-                || cleaned.chars().filter(|c| c.is_uppercase()).count() > 1
-                // A proper noun: Lightroom, Excel, YouTube.
-                || (cleaned.chars().next().is_some_and(|c| c.is_uppercase())
-                    && cleaned.chars().skip(1).any(|c| c.is_lowercase()))
-        });
+                looks_like_a_file(cleaned)
+                    // An acronym: RAW, PDF, API.
+                    || cleaned.chars().filter(|c| c.is_uppercase()).count() > 1
+                    // A proper noun: Lightroom, Excel, YouTube. Not in the first position:
+                    // there the capital is usually the leading verb ("Processes"), which this
+                    // heuristic cannot tell from a product name.
+                    || (index > 0
+                        && cleaned.chars().next().is_some_and(|c| c.is_uppercase())
+                        && cleaned.chars().skip(1).any(|c| c.is_lowercase()))
+            });
 
         if !has_anchor {
             context.report(
@@ -591,6 +622,17 @@ mod tests {
         }
     }
 
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/242 — "Culls" and "culling"
+    /// are forms of "cull", "photos" is "photo": the description said nothing beyond the name,
+    /// but the exact substring removal matched nothing and the leftovers cleared the floor.
+    #[test]
+    fn a_description_restating_the_name_in_other_word_forms_is_reported() {
+        let mut skill = skill_described("Culls photos. Use when culling.");
+        skill.name = "cull-photos".into();
+
+        assert_eq!(check(&NOT_JUST_NAME_RULE, &skill).len(), 1);
+    }
+
     #[test]
     fn a_description_that_only_restates_the_name_is_reported() {
         let mut skill = skill_described("Photo culling. Use when culling photos.");
@@ -599,10 +641,34 @@ mod tests {
         assert_eq!(check(&NOT_JUST_NAME_RULE, &skill).len(), 1);
     }
 
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/241 — the first word was
+    /// skipped unconditionally, so a description whose only concrete anchor opens it was
+    /// reported as naming nothing specific.
+    #[test]
+    fn a_leading_acronym_counts_as_a_concrete_noun() {
+        let skill = skill_described(
+            "PDF conversion for scanned documents into contact sheets for client review; use when a client requests proofs from a shoot.",
+        );
+
+        assert!(check(&CONCRETE_NOUN_RULE, &skill).is_empty());
+    }
+
     #[test]
     fn a_description_with_no_concrete_noun_is_reported() {
         let skill = skill_described(
             "handles the relevant items in the usual way. use when the situation calls for it and things need doing.",
+        );
+
+        assert_eq!(check(&CONCRETE_NOUN_RULE, &skill).len(), 1);
+    }
+
+    /// The skip the fix above replaced existed for a reason: the first word of a third-person
+    /// description is usually the verb, and the proper-noun heuristic would happily read
+    /// "Processes" as a product name. Position 0 still only counts anchors a verb cannot be.
+    #[test]
+    fn a_leading_verb_is_still_not_an_anchor() {
+        let skill = skill_described(
+            "Processes the relevant items in the usual way, and finishes whenever the situation calls for it and things need doing.",
         );
 
         assert_eq!(check(&CONCRETE_NOUN_RULE, &skill).len(), 1);

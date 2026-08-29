@@ -212,6 +212,19 @@ static UNDECLARED_TOOL: RuleMeta = RuleMeta {
 /// Known host-private tools that are not portable across Agent Skills runtimes.
 const HOST_SPECIFIC_TOOLS: [&str; 1] = ["AskQuestion"];
 
+/// Tools every Agent Skills host ships under the same name. Naming one of these in an
+/// explicit "the X tool" step is a portable call, not a host-private one.
+const STANDARD_TOOLS: [&str; 6] = ["Read", "Write", "Edit", "Bash", "Grep", "Glob"];
+
+/// An explicit imperative call: "Call the X tool", "Use the X tool". The trailing noun makes
+/// X unambiguously a tool name — whatever host it belongs to — so the declaration check does
+/// not have to know the tool in advance. The identifier must start uppercase to stay away
+/// from prose ("use the command-line tool").
+static NAMED_TOOL_CALL: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\b(?:[Uu]se|[Cc]all|[Ii]nvoke|[Rr]un)\s+the\s+([A-Z][A-Za-z0-9_]*)\s+tool\b")
+        .expect("the named tool call pattern compiles")
+});
+
 static HARDCODED_REPO_PATH: RuleMeta = RuleMeta {
     name: "body/hardcoded-repo-path",
     summary: "Do not hard-require consumer-repo paths without a missing-path fallback.",
@@ -613,6 +626,50 @@ impl Rule for UndeclaredTool {
                 break;
             }
         }
+
+        // The enumerated set can only ever name the tools it knows. A step that names its tool
+        // explicitly is checkable whatever the tool: report each distinct undeclared name once,
+        // at the step that calls it.
+        let mut reported: Vec<&str> = Vec::new();
+
+        for (index, line) in body.lines().enumerate() {
+            for captures in NAMED_TOOL_CALL.captures_iter(line) {
+                let whole = captures.get(1).expect("the tool name always matches");
+                let tool = whole.as_str();
+
+                if STANDARD_TOOLS
+                    .iter()
+                    .any(|standard| standard.eq_ignore_ascii_case(tool))
+                    || allowed
+                        .split_whitespace()
+                        .any(|token| token.eq_ignore_ascii_case(tool))
+                {
+                    continue;
+                }
+
+                let lower = line.to_ascii_lowercase();
+                if lower.contains("do not use")
+                    || lower.contains("don't use")
+                    || lower.contains("never use")
+                    || lower.contains("avoid using")
+                {
+                    continue;
+                }
+
+                if reported.contains(&tool) {
+                    continue;
+                }
+                reported.push(tool);
+
+                let document_line = context.skill.document_line(index + 1);
+                context.report(
+                    format!(
+                        "Instructions require tool \"{tool}\" but it is not listed in allowed-tools"
+                    ),
+                    Location::at(document_line, whole.start() + 1),
+                );
+            }
+        }
     }
 }
 
@@ -639,13 +696,20 @@ impl Rule for HardcodedRepoPath {
     }
 
     fn check(&self, context: &mut RuleContext<'_>) {
+        // Bundle-directory prefixes are matched too, because a hardcoded scripts/ path can name
+        // the consumer's repository just as well as the skill's own bundle; which one it is is
+        // decided below, against what the skill actually ships.
         static BACKTICK_PATH: LazyLock<Regex> = LazyLock::new(|| {
-            Regex::new(r"(?i)`((?:docs|src|app|packages)/[^`]+)`")
-                .expect("the backtick consumer path pattern compiles")
+            Regex::new(
+                r"(?i)`((?:docs|src|app|packages|scripts|references|assets|templates)/[^`]+)`",
+            )
+            .expect("the backtick consumer path pattern compiles")
         });
         static BARE_PATH: LazyLock<Regex> = LazyLock::new(|| {
-            Regex::new(r"(?i)\b((?:docs|src|app|packages)/[\w./-]+)")
-                .expect("the bare consumer path pattern compiles")
+            Regex::new(
+                r"(?i)\b((?:docs|src|app|packages|scripts|references|assets|templates)/[\w./-]+)",
+            )
+            .expect("the bare consumer path pattern compiles")
         });
 
         let body = context.skill.body.as_str();
@@ -662,6 +726,16 @@ impl Rule for HardcodedRepoPath {
         if has_fallback {
             return;
         }
+
+        // A path is only the skill's own bundle when the file actually ships with it — the
+        // spelling is the bundle's, the same convention the file reader reports paths in.
+        // Everything else, whatever directory it starts with, is a consumer-repo path.
+        let bundled: Vec<String> = context
+            .skill
+            .files
+            .iter()
+            .map(|file| file.path.clone())
+            .collect();
 
         let mut reported: Vec<String> = Vec::new();
 
@@ -687,12 +761,7 @@ impl Rule for HardcodedRepoPath {
             }
 
             for (start, path) in matches {
-                let lower = path.to_ascii_lowercase();
-                if lower.starts_with("scripts/")
-                    || lower.starts_with("references/")
-                    || lower.starts_with("assets/")
-                    || lower.starts_with("templates/")
-                {
+                if bundled.contains(&path) {
                     continue;
                 }
 
@@ -1231,11 +1300,60 @@ If `docs/01 - Briefs/` does not exist, ask the user where briefs live, or stop a
         assert!(check(&HARDCODED_REPO_PATH_RULE, &skill).is_empty());
     }
 
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/240 — a scripts/-prefixed
+    /// path was exempted even when nothing of the sort ships with the skill and the
+    /// surrounding text says the path lives in the consumer's repository.
+    #[test]
+    fn a_bundle_prefix_path_outside_the_bundle_is_a_consumer_repo_path() {
+        let skill = skill_with_body(
+            "\n## Steps\n\n1. List `scripts/deploy.sh` in the target repository and run it exactly as written.\n",
+        );
+
+        let messages = check(&HARDCODED_REPO_PATH_RULE, &skill);
+
+        assert_eq!(
+            messages.len(),
+            1,
+            "expected the consumer-repo warning, got {messages:?}"
+        );
+        assert!(messages[0].message.contains("scripts/deploy.sh"));
+    }
+
     #[test]
     fn skill_bundle_paths_are_not_consumer_repo_paths() {
-        let skill = skill_with_body(
+        // The exemption is bundle-resolved (#240): these are the skill's own files only
+        // because the skill actually ships them.
+        let mut skill = skill_with_body(
             "\n## Culling\n\n1. Read `scripts/cull.py`.\n2. Follow `references/formats.md`.\n3. Copy `assets/template.md`.\n",
         );
+        for (path, text) in [
+            ("scripts/cull.py", "print(1)\n"),
+            ("references/formats.md", "# Formats\n"),
+            ("assets/template.md", "# Template\n"),
+        ] {
+            skill.files.push(crate::skill::BundledFile {
+                path: path.into(),
+                bytes: text.len(),
+                executable: false,
+                text: Some(text.into()),
+            });
+        }
+
+        assert!(check(&HARDCODED_REPO_PATH_RULE, &skill).is_empty());
+    }
+
+    /// The other half of #240: when the skill does ship the file, a bundle-directory
+    /// mention stays a bundle reference and is not a hardcoded consumer-repo path.
+    #[test]
+    fn a_bundle_prefix_path_that_ships_with_the_skill_is_exempt() {
+        let mut skill =
+            skill_with_body("\n## Culling\n\n1. Run `scripts/deploy.sh` exactly as written.\n");
+        skill.files.push(crate::skill::BundledFile {
+            path: "scripts/deploy.sh".into(),
+            bytes: 20,
+            executable: true,
+            text: Some("#!/usr/bin/env bash\n".into()),
+        });
 
         assert!(check(&HARDCODED_REPO_PATH_RULE, &skill).is_empty());
     }
@@ -1349,6 +1467,48 @@ You might want to start by looking through the briefs folder.\n\
             check(&UNDECLARED_TOOL_RULE, &skill).is_empty(),
             "expected flow-sequence allowed-tools to declare AskQuestion"
         );
+    }
+
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/215 — a step that names its
+    /// tool explicitly ("Call the X tool") declares a host dependency whatever tool it is;
+    /// only the one enumerated name used to be checked.
+    #[test]
+    fn an_imperative_call_on_an_unlisted_tool_is_reported() {
+        let skill = crate::skill::parse(
+            "---\nname: legacy-review\ndescription: Reviews a pull request using the host's review panel. Use when the user asks to review a PR with inline comments.\nallowed-tools: Read\n---\n\n## Review\n\n1. Call the OpenReviewPanel tool to display inline comments.\n",
+        );
+
+        let messages = check(&UNDECLARED_TOOL_RULE, &skill);
+
+        assert_eq!(messages.len(), 1, "{messages:?}");
+        assert!(messages[0].message.contains("OpenReviewPanel"));
+        assert_eq!(messages[0].rule, "body/undeclared-tool");
+    }
+
+    /// The tools every host ships under the same name are the portable exception; naming one
+    /// in a step is not a host-private dependency.
+    #[test]
+    fn an_imperative_call_on_a_standard_tool_is_not_reported() {
+        for line in [
+            "1. Use the Read tool to open the file.",
+            "1. Run the Bash tool from the skill root.",
+        ] {
+            let skill = skill_with_body(&format!("\n## Steps\n\n{line}\n"));
+
+            assert!(
+                check(&UNDECLARED_TOOL_RULE, &skill).is_empty(),
+                "for {line}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_imperative_call_on_a_declared_tool_is_not_reported() {
+        let skill = crate::skill::parse(
+            "---\nname: a\ndescription: Reviews pull requests with the host's review panel. Use when the user asks to review a PR with inline comments.\nallowed-tools: OpenReviewPanel\n---\n\n## Review\n\n1. Call the OpenReviewPanel tool to display inline comments.\n",
+        );
+
+        assert!(check(&UNDECLARED_TOOL_RULE, &skill).is_empty());
     }
 
     #[test]
