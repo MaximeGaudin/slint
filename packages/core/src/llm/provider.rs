@@ -356,6 +356,7 @@ mod tests {
             max_retries: 0,
             max_concurrent_requests: 4,
             max_input_bytes: 1024,
+            api_key: None,
         }
     }
 

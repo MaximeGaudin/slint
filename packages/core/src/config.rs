@@ -121,6 +121,7 @@ impl Provider {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct LlmConfig {
     #[serde(default)]
     pub provider: Provider,
@@ -152,6 +153,11 @@ pub struct LlmConfig {
     /// Bodies longer than this are truncated before they are sent, and the report says so.
     #[serde(default = "default_max_input")]
     pub max_input_bytes: usize,
+    /// Not a setting: the shape every other tool's config uses, read only so `load` can refuse
+    /// it with the message it deserves instead of letting the secret sit in the file.
+    #[serde(default, skip_serializing)]
+    #[schemars(skip)]
+    pub(crate) api_key: Option<String>,
 }
 
 fn default_timeout() -> u64 {
@@ -182,6 +188,7 @@ impl Default for LlmConfig {
             max_retries: default_max_retries(),
             max_concurrent_requests: default_max_concurrent_requests(),
             max_input_bytes: default_max_input(),
+            api_key: None,
         }
     }
 }
@@ -375,6 +382,13 @@ pub fn load(path: &Path) -> Result<Config> {
     } else {
         toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?
     };
+
+    if raw.llm.api_key.is_some() {
+        bail!(
+            "{}: [llm] api_key is not a setting — slint never takes a literal key in a config file, because a key in a file is a key in version control. Use api_key_env to name the variable that holds the key.",
+            path.display()
+        );
+    }
 
     let mut config = Config {
         source: Some(path.to_path_buf()),
@@ -739,6 +753,42 @@ mod tests {
         assert_eq!(Provider::parse("groq").unwrap(), Provider::Groq);
         assert_eq!(Provider::parse("OpenAI").unwrap(), Provider::Openai);
         assert!(Provider::parse("claude").is_err());
+    }
+
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/38 —
+    /// a literal key pasted where api_key_env belongs is the shape every other tool's config
+    /// uses, and it used to be accepted and ignored while the secret sat in the file.
+    #[test]
+    fn a_literal_api_key_in_the_llm_block_is_refused_and_named() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("slint.toml");
+        fs::write(
+            &path,
+            "[llm]\nprovider = \"openai\"\nmodel = \"gpt-5-mini\"\napi_key = \"sk-test-0000\"\n",
+        )
+        .unwrap();
+
+        let failure = load(&path).unwrap_err();
+        let failure = format!("{failure:#}");
+
+        assert!(failure.contains("api_key"), "{failure}");
+        assert!(failure.contains("api_key_env"), "{failure}");
+    }
+
+    #[test]
+    fn an_unknown_field_in_the_llm_block_is_refused_rather_than_silently_dropped() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("slint.config.json");
+        fs::write(
+            &path,
+            r#"{ "llm": { "provider": "openai", "model": "gpt-5-mini", "api_key_environment": "OPENAI_API_KEY" } }"#,
+        )
+        .unwrap();
+
+        let failure = load(&path).unwrap_err();
+        let failure = format!("{failure:#}");
+
+        assert!(failure.contains("api_key_environment"), "{failure}");
     }
 
     /// Regression for https://github.com/MaximeGaudin/slint/issues/27 —
