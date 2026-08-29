@@ -319,17 +319,29 @@ pub fn parse(source: &str) -> Skill {
     };
 
     let normalised = source.strip_prefix('\u{feff}').unwrap_or(source);
-    if !normalised.starts_with("---") {
+
+    // Leading blank lines are a copy-paste artifact, not a verdict: locate the opening delimiter
+    // wherever the blank lines end, so a well-formed block is never misread as absent.
+    let leading_blank = normalised
+        .lines()
+        .take_while(|line| line.trim().is_empty())
+        .count();
+    let opens_frontmatter = normalised
+        .lines()
+        .nth(leading_blank)
+        .is_some_and(|line| line.trim_end() == "---");
+
+    if !opens_frontmatter {
         skill.notes.push(
             "No frontmatter: the name and description an agent selects on are not declared.".into(),
         );
         return skill;
     }
 
-    let mut lines = normalised.lines();
+    let mut lines = normalised.lines().skip(leading_blank);
     lines.next();
 
-    let mut consumed = 1;
+    let mut consumed = 1 + leading_blank;
     let mut closed = false;
     let mut frontmatter = String::new();
 
@@ -653,9 +665,9 @@ mod tests {
         assert!(skill.has_frontmatter);
         assert_eq!(skill.name, "photo-culling");
         assert!(skill.notes.is_empty(), "{:?}", skill.notes);
-        assert!(skill.body.starts_with("\n\n## Culling"));
+        assert!(skill.body.starts_with("\n## Culling"));
         // Line mapping still lands on the file, blank line counted.
-        assert_eq!(skill.document_line(2), 8);
+        assert_eq!(skill.document_line(2), 7);
     }
 
     #[test]
