@@ -5,6 +5,21 @@
 
 use crate::diagnostics::{Report, Severity};
 
+/// Escapes the data part of a workflow command, in the order the GitHub Actions spec requires:
+/// `%` first (so a literal `%0A` in user text cannot be read back as a newline), then `\r` and
+/// `\n` (or the command ends at the first real newline, taking the rest of the annotation).
+fn escape_data(text: &str) -> String {
+    text.replace('%', "%25")
+        .replace('\r', "%0D")
+        .replace('\n', "%0A")
+}
+
+/// Escapes a property value like `file=` or `title=`, which additionally cannot contain the
+/// delimiters `,` and `:` GitHub's naive property parser splits on.
+fn escape_property(text: &str) -> String {
+    escape_data(text).replace(':', "%3A").replace(',', "%2C")
+}
+
 pub fn render(report: &Report) -> String {
     let mut lines = Vec::new();
 
@@ -16,18 +31,18 @@ pub fn render(report: &Report) -> String {
                 Severity::Info => "notice",
             };
 
-            // Newlines have to be escaped or the command ends at the first one, taking the rest of
-            // the annotation with it.
-            let body = format!(
-                "{} ({})%0A%0A{}%0A{}",
+            let body = escape_data(&format!(
+                "{} ({})\n\n{}\n{}",
                 message.message, message.rule, message.advice, message.reference.url
-            )
-            .replace('\n', "%0A")
-            .replace('\r', "");
+            ));
 
             lines.push(format!(
                 "::{level} file={},line={},col={},title=slint {}::{}",
-                message.file, message.location.line, message.location.column, message.rule, body
+                escape_property(&message.file),
+                message.location.line,
+                message.location.column,
+                escape_property(&message.rule),
+                body
             ));
         }
     }
