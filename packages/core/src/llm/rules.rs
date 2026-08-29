@@ -54,8 +54,8 @@ pub static TERMINOLOGY: RuleMeta = RuleMeta {
     default_severity: Severity::Warning,
     fixable: false,
     needs_model: true,
-    reference_title: sources::PAPER.0,
-    reference_url: sources::PAPER.1,
+    reference_title: sources::BEST_PRACTICES.0,
+    reference_url: sources::BEST_PRACTICES.1,
 };
 
 pub static OUTPUT_EXAMPLE: RuleMeta = RuleMeta {
@@ -166,5 +166,16 @@ mod tests {
                 meta.name
             );
         }
+    }
+
+    /// https://github.com/MaximeGaudin/slint/issues/105 — Anthropic's own
+    /// best-practices doc states this rule directly ("Use consistent
+    /// terminology"); it outranks a non-peer-reviewed preprint.
+    #[test]
+    fn consistent_terminology_cites_the_best_practices_doc() {
+        assert_eq!(
+            TERMINOLOGY.reference_url,
+            "https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices"
+        );
     }
 }
