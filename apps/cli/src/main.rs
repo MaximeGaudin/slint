@@ -236,14 +236,11 @@ fn run(cli: &Cli) -> Result<u8> {
     let mut report = engine::run(&cli.paths, &config, &plugins, passes)?;
 
     if cli.fix {
-        let applied = slint::fix::apply(&report)?;
-
-        if applied.fixes > 0 {
+        report = fix_until_converged(report, slint::fix::apply, |_report| {
             // Lint again so the report describes the files as they are now rather than as they
             // were: half of what --fix does is proving the fix worked.
-            report = engine::run(&cli.paths, &config, &plugins, passes)?;
-            report.fixed = applied.fixes;
-        }
+            engine::run(&cli.paths, &config, &plugins, passes)
+        })?;
     }
 
     if cli.quiet {
@@ -471,6 +468,43 @@ fn exit_code(report: &Report, max_warnings: i64) -> u8 {
     code::CLEAN
 }
 
+/// Rounds one `--fix` invocation may take. Each round re-lints and applies what the new pass
+/// found; the bound only matters if a fix never settles, so the report still gets out.
+const MAX_FIX_ROUNDS: usize = 8;
+
+/// Applies fixes and re-lints until a pass has nothing left to fix.
+///
+/// One round can leave work behind: two fixes computed against the same text overlap, and one of
+/// them is deferred rather than applied against a moved target. Re-linting recomputes the
+/// remaining fixes against the file as it is now, so a single `--fix` invocation still converges
+/// instead of sending the user off to run it a second time.
+fn fix_until_converged(
+    report: Report,
+    mut apply: impl FnMut(&Report) -> Result<slint::fix::Applied>,
+    mut relint: impl FnMut(Report) -> Result<Report>,
+) -> Result<Report> {
+    let mut report = report;
+    let mut rounds = 0;
+    let mut total = 0;
+
+    loop {
+        let applied = apply(&report)?;
+
+        if applied.fixes == 0 {
+            return Ok(report);
+        }
+
+        total += applied.fixes;
+        report = relint(report)?;
+        report.fixed = total;
+
+        rounds += 1;
+        if rounds == MAX_FIX_ROUNDS {
+            return Ok(report);
+        }
+    }
+}
+
 fn resolve_config(cli: &Cli) -> Result<Config> {
     let path = match &cli.config {
         Some(path) => Some(path.clone()),
@@ -680,6 +714,56 @@ mod tests {
         assert_eq!(exit_code(&report_with(0, 3), 3), code::WARNINGS);
         assert_eq!(exit_code(&report_with(0, 4), 3), code::ERRORS);
         assert_eq!(exit_code(&report_with(0, 1), 0), code::ERRORS);
+    }
+
+    #[test]
+    fn fixing_converges_once_a_pass_has_nothing_left_to_fix() {
+        // Reproduces https://github.com/MaximeGaudin/slint/issues/91: the round that finds work
+        // the first pass deferred must run in the same invocation, not wait for another --fix.
+        let mut calls = 0;
+
+        let report = fix_until_converged(
+            report_with(1, 0),
+            |_| {
+                calls += 1;
+                let fixes = usize::from(calls <= 2);
+                Ok(slint::fix::Applied {
+                    files: usize::from(fixes > 0),
+                    fixes,
+                    deferred: 0,
+                })
+            },
+            |_| Ok(report_with(0, 0)),
+        )
+        .unwrap();
+
+        assert_eq!(
+            calls, 3,
+            "two rounds, then one to see there is nothing left"
+        );
+        assert_eq!(report.fixed, 2);
+    }
+
+    #[test]
+    fn fixing_gives_up_after_a_bound_instead_of_looping_forever() {
+        let mut calls = 0;
+
+        let report = fix_until_converged(
+            report_with(1, 0),
+            |_| {
+                calls += 1;
+                Ok(slint::fix::Applied {
+                    files: 1,
+                    fixes: 1,
+                    deferred: 0,
+                })
+            },
+            |_| Ok(report_with(0, 0)),
+        )
+        .unwrap();
+
+        assert_eq!(calls, MAX_FIX_ROUNDS);
+        assert_eq!(report.fixed, MAX_FIX_ROUNDS);
     }
 
     #[test]

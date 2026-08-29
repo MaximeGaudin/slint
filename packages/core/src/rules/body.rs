@@ -300,9 +300,30 @@ impl Rule for PosixPaths {
     }
 
     fn check(&self, context: &mut RuleContext<'_>) {
-        let source = context.skill.source.clone();
+        // The body's offset is measured after a byte-order mark was stripped, while fixes are
+        // byte offsets into the file as it is on disk.
+        let mark = if context.skill.source.starts_with('\u{feff}') {
+            '\u{feff}'.len_utf8()
+        } else {
+            0
+        };
 
-        for (index, line) in context.skill.body.lines().enumerate() {
+        let mut offset = context.skill.body_offset + mark;
+        let lines: Vec<(&str, usize)> = context
+            .skill
+            .body
+            .split_inclusive('\n')
+            .map(|line| {
+                let start = offset;
+                offset += line.len();
+
+                let content = line.strip_suffix('\n').unwrap_or(line);
+                let content = content.strip_suffix('\r').unwrap_or(content);
+                (content, start)
+            })
+            .collect();
+
+        for (index, (line, start)) in lines.into_iter().enumerate() {
             if line.contains("http") {
                 continue;
             }
@@ -314,10 +335,12 @@ impl Rule for PosixPaths {
             let document_line = context.skill.document_line(index + 1);
             let location = Location::span(document_line, found.start() + 1, found.len());
 
-            // The whole document, with every separator normalised: two backslashes on one line are
-            // one problem, and a fix per occurrence would fight itself on the next pass.
+            // The whole line, with every separator normalised: two backslashes on one line are
+            // one problem, and a fix per occurrence would fight itself on the next pass. Scoped
+            // to the line rather than the document, so it never overlaps another fix elsewhere
+            // in SKILL.md and both apply in one --fix invocation.
             let replacement = WINDOWS_PATH
-                .replace_all(&source, |captures: &regex::Captures<'_>| {
+                .replace_all(line, |captures: &regex::Captures<'_>| {
                     captures[0].replace('\\', "/")
                 })
                 .to_string();
@@ -326,10 +349,10 @@ impl Rule for PosixPaths {
                 format!("\"{}\" is a Windows path", found.as_str()),
                 location,
                 Fix {
-                    start: 0,
-                    end: source.len(),
+                    start,
+                    end: start + line.len(),
                     replacement,
-                    description: "Replaces backslash separators with forward slashes throughout."
+                    description: "Replaces backslash separators with forward slashes on this line."
                         .into(),
                 },
             );
@@ -742,7 +765,7 @@ mod tests {
     }
 
     #[test]
-    fn the_windows_path_fix_normalises_every_separator_at_once() {
+    fn the_windows_path_fixes_for_two_lines_apply_in_one_pass() {
         let skill = skill_with_body(
             "\n## Culling\n\n1. Read scripts\\notes.md.\n2. Then references\\formats.md.\n",
         );
@@ -750,13 +773,32 @@ mod tests {
 
         assert_eq!(messages.len(), 2, "one finding per line");
 
-        let fix = messages[0].fix.as_ref().unwrap();
-        let mut patched = skill.source.clone();
-        patched.replace_range(fix.start..fix.end, &fix.replacement);
+        // Reproduces https://github.com/MaximeGaudin/slint/issues/91: scoped to the whole
+        // document, both fixes shared one range and a --fix pass deferred the second, so the
+        // file only converged on a second invocation. Each fix now owns its own line.
+        let fixes: Vec<&Fix> = messages.iter().filter_map(|m| m.fix.as_ref()).collect();
+        let refs: Vec<&&Fix> = fixes.iter().collect();
+        let (patched, applied, deferred) = crate::fix::patch(&skill.source, &refs);
 
+        assert_eq!((applied, deferred), (2, 0), "no fix waits for another run");
         assert!(patched.contains("scripts/notes.md"));
         assert!(patched.contains("references/formats.md"));
         assert!(!patched.contains('\\'));
+    }
+
+    #[test]
+    fn a_fix_in_a_file_with_a_byte_order_mark_lands_on_the_right_bytes() {
+        let source = "\u{feff}---\nname: culling\ndescription: Culls a shoot in Lightroom. Use when triaging RAW files after a session.\n---\n\n## Culling\n\n1. Read scripts\\notes.md.\n";
+        let skill = crate::skill::parse(source);
+        let messages = check(&POSIX_RULE, &skill);
+        let fix = messages[0].fix.as_ref().unwrap();
+
+        let mut patched = skill.source.clone();
+        patched.replace_range(fix.start..fix.end, &fix.replacement);
+
+        assert!(patched.contains("scripts/notes.md"), "{patched}");
+        assert!(!patched.contains('\\'), "{patched}");
+        assert!(patched.starts_with('\u{feff}'), "the mark is untouched");
     }
 
     #[test]
