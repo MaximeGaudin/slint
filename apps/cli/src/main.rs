@@ -385,6 +385,7 @@ fn run_stdin(cli: &Cli, config: &Config) -> Result<u8> {
         }],
         fixed: 0,
         notes: Vec::new(),
+        fingerprints: BTreeMap::new(),
     }
     .sorted();
 
@@ -882,6 +883,7 @@ mod tests {
             }],
             fixed: 0,
             notes: Vec::new(),
+            fingerprints: BTreeMap::new(),
         }
     }
 
@@ -1006,6 +1008,7 @@ mod tests {
             skills: vec![],
             fixed: 0,
             notes: Vec::new(),
+            fingerprints: BTreeMap::new(),
         };
 
         assert_eq!(exit_code(&report), code::NOTHING_LINTED);

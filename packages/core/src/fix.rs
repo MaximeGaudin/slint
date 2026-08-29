@@ -6,13 +6,13 @@
 //! the next pass rather than applied against a moved target. Files are replaced by rename rather
 //! than rewritten in place, so a crash mid-fix never leaves half of each.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
 
-use crate::diagnostics::{Fix, Report};
+use crate::diagnostics::{Fix, Fingerprint, Report};
 
 /// What `--fix` did.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -54,7 +54,11 @@ pub fn apply(report: &Report) -> Applied {
     let mut applied = Applied::default();
 
     for (file, fixes) in by_file {
-        let outcome = apply_to_file(Path::new(file), &fixes);
+        // What the bytes were when these fixes were computed, if the report says. A report built
+        // by hand carries nothing to compare against, and is trusted as it stands.
+        let expected = report.fingerprints.get(file);
+
+        let outcome = apply_to_file(Path::new(file), &fixes, expected);
 
         match outcome {
             Ok(outcome) => {
@@ -75,7 +79,11 @@ pub fn apply(report: &Report) -> Applied {
     applied
 }
 
-fn apply_to_file(path: &Path, fixes: &[&Fix]) -> Result<Applied> {
+fn apply_to_file(
+    path: &Path,
+    fixes: &[&Fix],
+    expected: Option<&Fingerprint>,
+) -> Result<Applied> {
     let permission_changes = fixes
         .iter()
         .filter(|fix| fix.start == 0 && fix.end == 0 && fix.replacement.is_empty())
@@ -99,6 +107,19 @@ fn apply_to_file(path: &Path, fixes: &[&Fix]) -> Result<Applied> {
 
     let original =
         fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+
+    // The fixes are byte offsets into text measured earlier. A file that has changed since — even
+    // by the same length, which the bounds checks alone would wave straight through — is not that
+    // text, and splicing into it writes a fix on top of bytes nobody measured.
+    if let Some(expected) = expected
+        && !expected.matches(&original)
+    {
+        bail!(
+            "{} changed since it was linted, so its fixes were skipped: they were computed against the earlier bytes",
+            path.display()
+        );
+    }
+
     let (patched, count, deferred) = patch(&original, &edits);
 
     if count > 0 {
@@ -325,6 +346,7 @@ mod tests {
             }],
             fixed: 0,
             notes: Vec::new(),
+            fingerprints: BTreeMap::new(),
         };
 
         let applied = apply(&report);
@@ -355,6 +377,7 @@ mod tests {
             }],
             fixed: 0,
             notes: Vec::new(),
+            fingerprints: BTreeMap::new(),
         }
     }
 
@@ -368,7 +391,13 @@ mod tests {
         let path = temporary.path().join("SKILL.md");
         fs::write(&path, "hello world\n").unwrap();
 
-        let report = report_fixing(&path, fix(6, 11, "there"));
+        let mut report = report_fixing(&path, fix(6, 11, "there"));
+        // The report records what the bytes were when the fix was computed, which is how apply()
+        // can tell the file it is about to patch from the file it measured.
+        report.fingerprints.insert(
+            path.to_str().unwrap().to_string(),
+            Fingerprint::of("hello world\n"),
+        );
 
         // Another writer got there first: same length, different bytes.
         fs::write(&path, "yellow tent\n").unwrap();
@@ -376,11 +405,36 @@ mod tests {
         let applied = apply(&report);
 
         assert_eq!(applied.fixes, 0, "stale fixes are not applied");
+        assert_eq!(applied.failed.len(), 1, "{:?}", applied.failed);
+        assert!(
+            applied.failed[0].reason.contains("changed since it was linted"),
+            "{:?}",
+            applied.failed[0].reason
+        );
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
             "yellow tent\n",
             "the file is exactly as the other writer left it"
         );
+    }
+
+    #[test]
+    fn a_fix_whose_bytes_still_match_the_report_is_applied_normally() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("SKILL.md");
+        fs::write(&path, "hello world\n").unwrap();
+
+        let mut report = report_fixing(&path, fix(6, 11, "there"));
+        report.fingerprints.insert(
+            path.to_str().unwrap().to_string(),
+            Fingerprint::of("hello world\n"),
+        );
+
+        let applied = apply(&report);
+
+        assert_eq!(applied.fixes, 1);
+        assert!(applied.failed.is_empty(), "{:?}", applied.failed);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "hello there\n");
     }
 
     #[cfg(unix)]
@@ -425,6 +479,7 @@ mod tests {
             ],
             fixed: 0,
             notes: Vec::new(),
+            fingerprints: BTreeMap::new(),
         };
 
         let applied = apply(&report);
@@ -521,6 +576,7 @@ mod tests {
             }],
             fixed: 0,
             notes: Vec::new(),
+            fingerprints: BTreeMap::new(),
         };
 
         assert_eq!(apply(&report), Applied::default());
@@ -547,6 +603,7 @@ mod tests {
             }],
             fixed: 0,
             notes: Vec::new(),
+            fingerprints: BTreeMap::new(),
         };
 
         apply(&report);

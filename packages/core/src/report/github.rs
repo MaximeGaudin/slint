@@ -53,6 +53,7 @@ pub fn render(report: &Report) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
     use crate::report::tests::sample;
 
     #[test]
@@ -142,6 +143,7 @@ mod tests {
             skills: vec![],
             fixed: 0,
             notes: Vec::new(),
+            fingerprints: BTreeMap::new(),
         };
         assert!(render(&empty).is_empty());
     }

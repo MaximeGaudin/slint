@@ -397,6 +397,7 @@ fn paint(text: &str, style: Paint, colour: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
     use crate::report::tests::sample;
 
     #[test]
@@ -463,6 +464,7 @@ mod tests {
             skills: vec![],
             fixed: 0,
             notes: vec![],
+            fingerprints: BTreeMap::new(),
         };
         let text = render(&empty, false);
 

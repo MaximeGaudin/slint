@@ -61,6 +61,7 @@ pub fn render(report: &Report, max_warnings: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
     use crate::report::tests::sample;
 
     /// Regression for https://github.com/MaximeGaudin/slint/issues/125 —
@@ -143,6 +144,7 @@ mod tests {
             skills: vec![],
             fixed: 0,
             notes: Vec::new(),
+            fingerprints: BTreeMap::new(),
         };
         let parsed: serde_json::Value = serde_json::from_str(&render(&empty, -1)).unwrap();
 
