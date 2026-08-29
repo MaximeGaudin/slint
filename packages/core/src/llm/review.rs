@@ -9,7 +9,7 @@ use anyhow::Result;
 use serde::Deserialize;
 
 use crate::config::{Config, LlmConfig};
-use crate::diagnostics::{Location, Message, Source};
+use crate::diagnostics::{Location, Message, Source, strip_control};
 use crate::llm::provider::{Chat, FindingsFormat, GenAiChat, Prompt, findings_format_for};
 use crate::llm::rules;
 use crate::skill::Skill;
@@ -238,18 +238,6 @@ pub fn is_unparseable_findings(failure: &anyhow::Error) -> bool {
 const RETRY_REMINDER: &str = "\n\nSTRICT REMINDER: Your previous reply was not valid findings JSON. \
 Reply with only a JSON object {\"findings\":[...]} (or a bare JSON array of finding objects), \
 with no prose, markdown fences, or thinking. An empty findings array is correct for a clean skill.";
-
-/// Strips terminal control characters from text a model wrote.
-///
-/// A finding's message is arbitrary text chosen by whoever the reviewing model listened to, and a
-/// linter prints it to a terminal that will obey its escapes — so the C0/C1 control range (ESC
-/// starts an ANSI sequence, CR can reset the cursor) has to come out before the text is stored.
-/// Tab and newline are kept: they are the author's own paragraphing and are inert on the terminal.
-fn strip_control(text: &str) -> String {
-    text.chars()
-        .filter(|character| !character.is_control() || *character == '\t' || *character == '\n')
-        .collect::<String>()
-}
 
 /// Turns what the model said into messages, dropping anything that does not check out.
 pub fn parse_response(

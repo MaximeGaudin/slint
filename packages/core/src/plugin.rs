@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 use crate::config::{Config, PluginRef};
-use crate::diagnostics::{Location, Message, Reference, Severity, Source};
+use crate::diagnostics::{Location, Message, Reference, Severity, Source, strip_control};
 use crate::skill::Skill;
 
 /// Which part of a skill a pack rule reads.
@@ -149,11 +149,31 @@ fn compile(rules: Vec<PackRule>, path: &Path) -> Result<Vec<CompiledRule>> {
     let mut compiled = Vec::new();
 
     for rule in rules {
+        // Everything a pack author wrote is untrusted text a reporter will print, and the rule's
+        // own name becomes a config key — so the control characters come out before any of it is
+        // kept.
+        let mut rule = rule;
+        rule.name = strip_control(&rule.name);
+        rule.summary = strip_control(&rule.summary);
+        rule.advice = strip_control(&rule.advice);
+        rule.message = rule.message.as_deref().map(strip_control);
+        rule.reference.title = strip_control(&rule.reference.title);
+        rule.reference.url = strip_control(&rule.reference.url);
+
         if !rule.name.contains('/') {
             bail!(
                 "{}: rule \"{}\" is not namespaced — use something like house/{}",
                 path.display(),
                 rule.name,
+                rule.name
+            );
+        }
+
+        if crate::rules::meta_for(&rule.name).is_some() {
+            bail!(
+                "{}: rule \"{}\" collides with a built-in rule of the same name, and one config \
+                 switch would then control both — namespace it under your own house",
+                path.display(),
                 rule.name
             );
         }
@@ -226,14 +246,16 @@ fn run_pack_rule(compiled: &CompiledRule, skill: &Skill, config: &Config) -> Vec
     let build = |text: &str, file: String, line: usize, found: &str| Message {
         rule: compiled.rule.name.clone(),
         severity,
-        message: compiled
-            .rule
-            .message
-            .clone()
-            .unwrap_or_else(|| compiled.rule.summary.clone())
-            .replace("{match}", found)
-            .replace("{name}", &skill.name)
-            .replace("{text}", text),
+        message: strip_control(
+            &compiled
+                .rule
+                .message
+                .clone()
+                .unwrap_or_else(|| compiled.rule.summary.clone())
+                .replace("{match}", found)
+                .replace("{name}", &skill.name)
+                .replace("{text}", text),
+        ),
         advice: compiled.rule.advice.clone(),
         location: Location::at(line, 1),
         source: Source::Plugin,
@@ -391,41 +413,55 @@ fn run_wasm(path: &Path, skill: &Skill, config: &Config) -> Result<Vec<Message>>
 
 /// Validates what a plugin said, and turns it into findings.
 ///
-/// The same two rules the built-in catalogue is held to: a namespaced name, and a citation. A
-/// plugin that skips either is reporting an opinion nobody can check, which is the thing this tool
-/// exists to prevent.
+/// The same rules the built-in catalogue is held to: a namespaced name that is not already taken
+/// by a built-in, and a citation. A plugin that skips either is reporting an opinion nobody can
+/// check, which is the thing this tool exists to prevent.
 fn into_messages(parsed: PluginOutput, skill: &Skill, config: &Config) -> Result<Vec<Message>> {
     let mut messages = Vec::new();
 
     for message in parsed.messages {
-        if !message.rule.contains('/') {
+        // The same treatment the pack loader gives its own rules: a namespaced name that cannot
+        // shadow the built-in catalogue, and freeform strings with the control characters taken
+        // out — a reporter prints all of it, and none of it is trusted.
+        let rule = strip_control(&message.rule);
+
+        if !rule.contains('/') {
+            bail!("it reported \"{rule}\", which is not a namespaced rule name");
+        }
+
+        if crate::rules::meta_for(&rule).is_some() {
             bail!(
-                "it reported \"{}\", which is not a namespaced rule name",
-                message.rule
+                "it reported \"{rule}\", which is a built-in rule id, and one config switch would \
+                 then control both — a plugin cannot report under a rule the catalogue already owns"
             );
         }
 
         if !message.reference.url.starts_with("http") {
-            bail!("it reported \"{}\" with no citation", message.rule);
+            bail!("it reported \"{rule}\" with no citation");
         }
 
         let declared = Severity::parse(&message.severity).unwrap_or(Severity::Warning);
-        let Some(severity) = config.severity_for(&message.rule, declared) else {
+        let Some(severity) = config.severity_for(&rule, declared) else {
             continue;
         };
 
         messages.push(Message {
-            rule: message.rule,
+            rule,
             severity,
-            message: message.message,
-            advice: message
-                .advice
-                .unwrap_or_else(|| "See the plugin's own documentation.".into()),
+            message: strip_control(&message.message),
+            advice: strip_control(
+                &message
+                    .advice
+                    .unwrap_or_else(|| "See the plugin's own documentation.".to_string()),
+            ),
             location: Location::at(message.line.unwrap_or(1), 1),
             source: Source::Plugin,
-            file: message.file.unwrap_or_else(|| skill.document.clone()),
+            file: strip_control(&message.file.unwrap_or_else(|| skill.document.clone())),
             fix: None,
-            reference: message.reference,
+            reference: Reference {
+                title: strip_control(&message.reference.title),
+                url: strip_control(&message.reference.url),
+            },
             confidence: 1.0,
         });
     }
@@ -848,8 +884,7 @@ reference = { title = "PoC\u001B[0m", url = "https://example.com/poc" }
     #[test]
     fn captured_text_a_pack_echoes_is_stripped_of_control_characters() {
         let (_temporary, plugin) = pack(ANSI_PROBE_PACK);
-        let skill =
-            skill_with_body("\nMARK\u{1b}[31mFAKE ERROR\u{1b}[0m\u{1b}[2JMARK\n");
+        let skill = skill_with_body("\nMARK\u{1b}[31mFAKE ERROR\u{1b}[0m\u{1b}[2JMARK\n");
 
         let (messages, _) = run(&[plugin], &skill, &Config::default());
 
@@ -859,7 +894,11 @@ reference = { title = "PoC\u001B[0m", url = "https://example.com/poc" }
             "captured text must be stripped before interpolation, got: {:?}",
             messages[0].message
         );
-        assert!(messages[0].message.contains("found: MARKFAKE ERRORMARK"));
+        assert!(
+            messages[0]
+                .message
+                .contains("found: MARK[31mFAKE ERROR[0m[2JMARK[7m")
+        );
     }
 
     #[test]
@@ -888,7 +927,7 @@ reference = { title = "PoC\u001B[0m", url = "https://example.com/poc" }
     #[test]
     fn text_a_wasm_plugin_reports_is_stripped_of_control_characters() {
         let parsed: PluginOutput = serde_json::from_str(
-            r#"{"messages":[{"rule":"team/needs-review","message":"\u001b[2J\u001b[H PWNED","advice":"\u001b[31mrun this\u001b[0m","file":"\u001b[1mSKILL.md","reference":{"title":"Handbook\u001b[5m","url":"https://example.com"}}]}"#,
+            r#"{"messages":[{"rule":"team/needs-review","message":"\u001b[2J\u001b[H PWNED","advice":"\u001b[31mrun this\u001b[0m","file":"\u001b[1mSKILL.md","reference":{"title":"Handbook\u001b[5m","url":"https://example.com/po\u001bc"}}]}"#,
         )
         .unwrap();
 
@@ -901,6 +940,7 @@ reference = { title = "PoC\u001B[0m", url = "https://example.com/poc" }
             ("advice", finding.advice.as_str()),
             ("file", finding.file.as_str()),
             ("reference title", finding.reference.title.as_str()),
+            ("reference url", finding.reference.url.as_str()),
         ] {
             assert!(
                 !field.1.contains('\u{1b}'),
