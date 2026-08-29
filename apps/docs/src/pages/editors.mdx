@@ -65,6 +65,16 @@ finding in the shape a compiler emits, which most editors already know how to re
 skills/helper/SKILL.md:10:1: error [bundle/no-dangling-path] The instructions name scripts/cull.py, which is not in the bundle
 ```
 
+For an editor that does not want to keep an unsaved document in a temporary file, the document can
+come in on stdin instead, and `--stdin-filename` gives it a name (and its config an anchor):
+
+```bash
+slint --stdin --stdin-filename skills/helper/SKILL.md --no-llm --format compact
+```
+
+Stdin linting runs the static rules — the bundle beside an unsaved document does not exist, and the
+report says the model pass was skipped rather than leaving it implied.
+
 And `--format json` is the whole report, envelope first, for anything building a richer integration:
 
 ```json

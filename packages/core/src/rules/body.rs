@@ -109,13 +109,13 @@ static MAX_LINES: RuleMeta = RuleMeta {
 static TOKEN_BUDGET: RuleMeta = RuleMeta {
     name: "body/token-budget",
     summary: "Keep the body within a reasonable token budget (~5000 tokens).",
-    rationale: "The whole body is loaded when the skill is selected, on top of the conversation and tools. Oversized bodies crowd out useful context.",
+    rationale: "The whole body is loaded when the skill is activated, on top of the conversation and tools — the specification recommends keeping it under 5000 tokens. Oversized bodies crowd out useful context.",
     advice: "Move detail into referenced files that load only when needed, instead of on every activation.",
     default_severity: Severity::Warning,
     fixable: false,
     needs_model: false,
-    reference_title: sources::BEST_PRACTICES.0,
-    reference_url: sources::BEST_PRACTICES.1,
+    reference_title: sources::SPECIFICATION.0,
+    reference_url: sources::SPECIFICATION.1,
 };
 
 static POSIX_PATHS: RuleMeta = RuleMeta {
@@ -300,9 +300,30 @@ impl Rule for PosixPaths {
     }
 
     fn check(&self, context: &mut RuleContext<'_>) {
-        let source = context.skill.source.clone();
+        // The body's offset is measured after a byte-order mark was stripped, while fixes are
+        // byte offsets into the file as it is on disk.
+        let mark = if context.skill.source.starts_with('\u{feff}') {
+            '\u{feff}'.len_utf8()
+        } else {
+            0
+        };
 
-        for (index, line) in context.skill.body.lines().enumerate() {
+        let mut offset = context.skill.body_offset + mark;
+        let lines: Vec<(&str, usize)> = context
+            .skill
+            .body
+            .split_inclusive('\n')
+            .map(|line| {
+                let start = offset;
+                offset += line.len();
+
+                let content = line.strip_suffix('\n').unwrap_or(line);
+                let content = content.strip_suffix('\r').unwrap_or(content);
+                (content, start)
+            })
+            .collect();
+
+        for (index, (line, start)) in lines.into_iter().enumerate() {
             if line.contains("http") {
                 continue;
             }
@@ -314,10 +335,12 @@ impl Rule for PosixPaths {
             let document_line = context.skill.document_line(index + 1);
             let location = Location::span(document_line, found.start() + 1, found.len());
 
-            // The whole document, with every separator normalised: two backslashes on one line are
-            // one problem, and a fix per occurrence would fight itself on the next pass.
+            // The whole line, with every separator normalised: two backslashes on one line are
+            // one problem, and a fix per occurrence would fight itself on the next pass. Scoped
+            // to the line rather than the document, so it never overlaps another fix elsewhere
+            // in SKILL.md and both apply in one --fix invocation.
             let replacement = WINDOWS_PATH
-                .replace_all(&source, |captures: &regex::Captures<'_>| {
+                .replace_all(line, |captures: &regex::Captures<'_>| {
                     captures[0].replace('\\', "/")
                 })
                 .to_string();
@@ -326,10 +349,10 @@ impl Rule for PosixPaths {
                 format!("\"{}\" is a Windows path", found.as_str()),
                 location,
                 Fix {
-                    start: 0,
-                    end: source.len(),
+                    start,
+                    end: start + line.len(),
                     replacement,
-                    description: "Replaces backslash separators with forward slashes throughout."
+                    description: "Replaces backslash separators with forward slashes on this line."
                         .into(),
                 },
             );
@@ -359,6 +382,22 @@ impl Rule for RelativePaths {
     }
 }
 
+/// Values that mark an assignment as author-written documentation rather than a leak: setup
+/// instructions routinely show `password="changeme123"` without anyone's real password in it.
+static PLACEHOLDER_CREDENTIAL: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?i)(change[-_ ]?me|your[-_ ]|example[-_ ]?|placeholder|dummy|sample[-_ ]|insert[-_ ]|replace[-_ ]|<[^>]+>|\$\{[^}]*\}|\*{5,}|x{5,})"#,
+    )
+    .expect("the placeholder credential pattern compiles")
+});
+
+/// The format-specific shapes (sk-…, ghp_…, AKIA…) say "real key" on their own, but an assigned
+/// password cannot: it is also how documentation writes example values. A match whose value is an
+/// obvious placeholder is therefore not reported.
+fn is_placeholder_credential(label: &str, matched: &str) -> bool {
+    label == "an assigned password" && PLACEHOLDER_CREDENTIAL.is_match(matched)
+}
+
 impl Rule for NoSecret {
     fn meta(&self) -> &'static RuleMeta {
         &NO_SECRET
@@ -367,15 +406,20 @@ impl Rule for NoSecret {
     fn check(&self, context: &mut RuleContext<'_>) {
         for (index, line) in context.skill.body.lines().enumerate() {
             for (label, pattern) in SECRETS.iter() {
-                if pattern.is_match(line) {
-                    let document_line = context.skill.document_line(index + 1);
-                    // Deliberately no quote of the match: a report that repeats the secret is a
-                    // second place it leaks from.
-                    context.report(
-                        format!("Line {document_line} looks like {label}"),
-                        Location::at(document_line, 1),
-                    );
+                let Some(whole) = pattern.find(line) else {
+                    continue;
+                };
+                if is_placeholder_credential(label, whole.as_str()) {
+                    continue;
                 }
+
+                let document_line = context.skill.document_line(index + 1);
+                // Deliberately no quote of the match: a report that repeats the secret is a
+                // second place it leaks from.
+                context.report(
+                    format!("Line {document_line} looks like {label}"),
+                    Location::at(document_line, 1),
+                );
             }
         }
 
@@ -383,14 +427,19 @@ impl Rule for NoSecret {
             let Some(text) = &file.text else { continue };
 
             for (label, pattern) in SECRETS.iter() {
-                if pattern.is_match(text) {
-                    let path = file.path.clone();
-                    context.report_in_file(
-                        &path,
-                        format!("{path} contains {label}"),
-                        Location::whole_file(),
-                    );
+                let Some(whole) = pattern.find(text) else {
+                    continue;
+                };
+                if is_placeholder_credential(label, whole.as_str()) {
+                    continue;
                 }
+
+                let path = file.path.clone();
+                context.report_in_file(
+                    &path,
+                    format!("{path} contains {label}"),
+                    Location::whole_file(),
+                );
             }
         }
     }
@@ -574,8 +623,10 @@ impl Rule for ImperativeInstructions {
             .expect("the soft-instruction pattern compiles")
         });
         static PASSIVE: LazyLock<Regex> = LazyLock::new(|| {
-            Regex::new(r"(?i)\b([A-Za-z][A-Za-z0-9_-]*(?:\s+[A-Za-z][A-Za-z0-9_-]*){0,3}\s+should be\s+[A-Za-z]+(?:ed|en|t)?)\b")
-                .expect("the passive-instruction pattern compiles")
+            Regex::new(
+                r"(?i)\b([A-Za-z][A-Za-z0-9_-]*(?:\s+[A-Za-z][A-Za-z0-9_-]*){0,3}\s+should be\s+(?:[a-z]+ed|done|made|given|taken|written|shown|known|seen|held|kept|left|sent|built|told|met|paid|put|set|cut|run|read|found|lost|meant|said|led|brought|bought|caught|taught|thought|sold|grown|thrown|drawn|spoken|broken|hidden|chosen|driven|forgotten|stolen|understood|won|eaten|frozen|worn|torn|blown|flown|begun|ridden|risen|fallen|shaken|mistaken|bitten|lain|laid|dealt|felt|gotten))\b",
+            )
+            .expect("the passive-instruction pattern compiles")
         });
         static HEDGE: LazyLock<Regex> = LazyLock::new(|| {
             Regex::new(r"(?i)\b(generally|usually|ideally)\b").expect("the hedge pattern compiles")
@@ -713,6 +764,12 @@ mod tests {
         let skill = skill_with_body(&body);
 
         assert_eq!(check(&TOKEN_RULE, &skill).len(), 1);
+        // https://github.com/MaximeGaudin/slint/issues/99 — the ~5000-token figure
+        // comes from the specification, not the best-practices doc it cited.
+        assert_eq!(
+            TOKEN_BUDGET.reference_url, "https://agentskills.io/specification",
+            "the 5000-token figure belongs to the specification's progressive-disclosure section"
+        );
 
         let mut config = Config::default();
         config.rules.insert(
@@ -742,7 +799,7 @@ mod tests {
     }
 
     #[test]
-    fn the_windows_path_fix_normalises_every_separator_at_once() {
+    fn the_windows_path_fixes_for_two_lines_apply_in_one_pass() {
         let skill = skill_with_body(
             "\n## Culling\n\n1. Read scripts\\notes.md.\n2. Then references\\formats.md.\n",
         );
@@ -750,13 +807,32 @@ mod tests {
 
         assert_eq!(messages.len(), 2, "one finding per line");
 
-        let fix = messages[0].fix.as_ref().unwrap();
-        let mut patched = skill.source.clone();
-        patched.replace_range(fix.start..fix.end, &fix.replacement);
+        // Reproduces https://github.com/MaximeGaudin/slint/issues/91: scoped to the whole
+        // document, both fixes shared one range and a --fix pass deferred the second, so the
+        // file only converged on a second invocation. Each fix now owns its own line.
+        let fixes: Vec<&Fix> = messages.iter().filter_map(|m| m.fix.as_ref()).collect();
+        let refs: Vec<&&Fix> = fixes.iter().collect();
+        let (patched, applied, deferred) = crate::fix::patch(&skill.source, &refs);
 
+        assert_eq!((applied, deferred), (2, 0), "no fix waits for another run");
         assert!(patched.contains("scripts/notes.md"));
         assert!(patched.contains("references/formats.md"));
         assert!(!patched.contains('\\'));
+    }
+
+    #[test]
+    fn a_fix_in_a_file_with_a_byte_order_mark_lands_on_the_right_bytes() {
+        let source = "\u{feff}---\nname: culling\ndescription: Culls a shoot in Lightroom. Use when triaging RAW files after a session.\n---\n\n## Culling\n\n1. Read scripts\\notes.md.\n";
+        let skill = crate::skill::parse(source);
+        let messages = check(&POSIX_RULE, &skill);
+        let fix = messages[0].fix.as_ref().unwrap();
+
+        let mut patched = skill.source.clone();
+        patched.replace_range(fix.start..fix.end, &fix.replacement);
+
+        assert!(patched.contains("scripts/notes.md"), "{patched}");
+        assert!(!patched.contains('\\'), "{patched}");
+        assert!(patched.starts_with('\u{feff}'), "the mark is untouched");
     }
 
     #[test]
@@ -809,6 +885,41 @@ mod tests {
 
         assert_eq!(messages.len(), 1);
         assert!(messages[0].file.ends_with("scripts/cull.py"));
+    }
+
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/95 —
+    /// placeholder values in author-written setup instructions are not leaks.
+    #[test]
+    fn a_placeholder_password_in_the_documentation_is_not_a_leak() {
+        for line in [
+            "1. In the config file, set `password=\"changeme123\"` before first run.",
+            "1. Then set password=\"your-password-here\" in the same file.",
+        ] {
+            let skill = skill_with_body(&format!("\n## Setup\n\n{line}\n"));
+            assert!(check(&SECRET_RULE, &skill).is_empty(), "for {line}");
+        }
+    }
+
+    #[test]
+    fn a_placeholder_password_in_a_bundled_file_is_not_a_leak() {
+        let mut skill = good_skill();
+        skill.files.push(crate::skill::BundledFile {
+            path: "scripts/setup.py".into(),
+            bytes: 40,
+            executable: true,
+            text: Some("password = \"changeme123\"  # default for the demo\n".into()),
+        });
+
+        assert!(check(&SECRET_RULE, &skill).is_empty());
+    }
+
+    #[test]
+    fn a_real_looking_password_assignment_is_still_reported() {
+        let skill = skill_with_body("\n## Setup\n\n1. Log in with password=\"Kj9#mPx2vQz\".\n");
+        let messages = check(&SECRET_RULE, &skill);
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].severity, Severity::Error);
     }
 
     #[test]
@@ -935,6 +1046,33 @@ Feel free to rewrite the brief once you have enough answers.\n",
 
         assert_eq!(messages.len(), 1);
         assert!(messages[0].message.contains("should be checked"));
+    }
+
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/73 —
+    /// "should be <adjective>" is a description, not a passive construction.
+    #[test]
+    fn a_should_be_with_an_adjective_is_not_reported_as_passive() {
+        for line in [
+            "The output should be correct before you continue.",
+            "The final report should be short.",
+        ] {
+            let skill = skill_with_body(&format!("\n## Workflow\n\n1. {line}\n"));
+            assert!(
+                check(&IMPERATIVE_RULE, &skill).is_empty(),
+                "\"{line}\" is not passive"
+            );
+        }
+    }
+
+    #[test]
+    fn a_passive_procedure_with_an_irregular_participle_is_reported() {
+        let skill = skill_with_body(
+            "\n## Workflow\n\n1. The result should be written to disk before exiting.\n",
+        );
+        let messages = check(&IMPERATIVE_RULE, &skill);
+
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].message.contains("should be written"));
     }
 
     #[test]
