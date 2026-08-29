@@ -150,8 +150,8 @@ static SCRIPT_PREREQUISITES: RuleMeta = RuleMeta {
     default_severity: Severity::Warning,
     fixable: false,
     needs_model: false,
-    reference_title: sources::SPECIFICATION.0,
-    reference_url: sources::SPECIFICATION.1,
+    reference_title: sources::PROJECT_CONVENTIONS.0,
+    reference_url: sources::PROJECT_CONVENTIONS.1,
 };
 
 fn paths_in(text: &str) -> BTreeSet<String> {

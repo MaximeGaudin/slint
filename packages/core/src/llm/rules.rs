@@ -54,8 +54,8 @@ pub static TERMINOLOGY: RuleMeta = RuleMeta {
     default_severity: Severity::Warning,
     fixable: false,
     needs_model: true,
-    reference_title: sources::PAPER.0,
-    reference_url: sources::PAPER.1,
+    reference_title: sources::BEST_PRACTICES.0,
+    reference_url: sources::BEST_PRACTICES.1,
 };
 
 pub static OUTPUT_EXAMPLE: RuleMeta = RuleMeta {

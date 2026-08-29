@@ -14,13 +14,13 @@ use crate::skill::Skill;
 static UNIQUE_NAME: RuleMeta = RuleMeta {
     name: "project/unique-name",
     summary: "No two skills in the project may share the same name.",
-    rationale: "The name is an address. If two skills share it, whichever loads last wins — depending on folder walk order.",
+    rationale: "The name is an address. When two skills share one, the host resolves the conflict by source — Claude Code, for example, lets a personal skill override a project skill of the same name — so one skill silently stops loading.",
     advice: "Rename one skill so each name is unique and describes what makes that skill different.",
     default_severity: Severity::Error,
     fixable: false,
     needs_model: false,
-    reference_title: sources::SPECIFICATION.0,
-    reference_url: sources::SPECIFICATION.1,
+    reference_title: sources::CLAUDE_CODE.0,
+    reference_url: sources::CLAUDE_CODE.1,
 };
 
 static DISTINCT_DESCRIPTIONS: RuleMeta = RuleMeta {

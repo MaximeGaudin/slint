@@ -109,13 +109,13 @@ static MAX_LINES: RuleMeta = RuleMeta {
 static TOKEN_BUDGET: RuleMeta = RuleMeta {
     name: "body/token-budget",
     summary: "Keep the body within a reasonable token budget (~5000 tokens).",
-    rationale: "The whole body is loaded when the skill is selected, on top of the conversation and tools. Oversized bodies crowd out useful context.",
+    rationale: "The whole body is loaded when the skill is activated, on top of the conversation and tools — the specification recommends keeping it under 5000 tokens. Oversized bodies crowd out useful context.",
     advice: "Move detail into referenced files that load only when needed, instead of on every activation.",
     default_severity: Severity::Warning,
     fixable: false,
     needs_model: false,
-    reference_title: sources::BEST_PRACTICES.0,
-    reference_url: sources::BEST_PRACTICES.1,
+    reference_title: sources::SPECIFICATION.0,
+    reference_url: sources::SPECIFICATION.1,
 };
 
 static POSIX_PATHS: RuleMeta = RuleMeta {

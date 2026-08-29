@@ -85,7 +85,7 @@ static MIN_LENGTH: RuleMeta = RuleMeta {
     name: "description/min-length",
     summary: "The description must be long enough to explain what the skill does and when to use it.",
     rationale: "The agent chooses among all available skills using this text alone. A few words cannot carry both the purpose and the trigger.",
-    advice: "Expand to roughly 150–300 characters: what it does, then when to use it, in the words a request would use.",
+    advice: "Expand to at least 80 characters — what it does, then when to use it, in the words a request would use.",
     default_severity: Severity::Warning,
     fixable: false,
     needs_model: false,
