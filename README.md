@@ -19,6 +19,18 @@ It is built for terminals, CI, and editors:
 
 **Start here:** [Install](#install) · [Quick start](#quick-start) · [Configuration](#configure) · [Model pass](#the-model-half) · [Plugins](#plugins) · [Monorepo layout](#monorepo-layout) · [Docs site](apps/docs)
 
+## Prerequisites
+
+Before the first command below you need two things:
+
+- **Rust** — install [rustup](https://rustup.rs). It picks up the toolchain pinned in
+  `rust-toolchain.toml`; the workspace MSRV is 1.95 (see the root `Cargo.toml`).
+- **pnpm** — enable [corepack](https://nodejs.org/api/corepack.html) with Node.js 22+
+  (`corepack enable pnpm`); it supplies the version pinned in `package.json` (`pnpm@11.21.0`).
+
+`pnpm install:cli` needs both: pnpm runs the script, Cargo builds `apps/cli` and installs the
+`slint` binary into `~/.cargo/bin`.
+
 ## Install
 
 ```bash
