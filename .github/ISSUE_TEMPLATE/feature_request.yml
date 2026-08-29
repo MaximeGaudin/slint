@@ -1,0 +1,61 @@
+name: Feature request
+description: New feature or request
+labels: [enhancement]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What you are proposing, in a few sentences.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of the repository this concerns.
+      options:
+        - cli
+        - core
+        - engine
+        - llm
+        - plugin
+        - rules
+        - vscode
+        - docs
+        - monorepo
+        - other
+    validations:
+      required: true
+  - type: input
+    id: code
+    attributes:
+      label: Code
+      description: File paths and line numbers this concerns, if any (e.g. `apps/cli/src/main.rs:95`).
+      placeholder: packages/core/src/...
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: The behaviour you want, concretely — flags, config, output, or a sketch of the API. What slint prints or does after this change.
+    validations:
+      required: true
+  - type: textarea
+    id: rationale
+    attributes:
+      label: Rationale
+      description: The problem this solves, and what you do about it today. A workaround that already exists weakens the case.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other designs, and why this one wins. Prefer the static pass — if a regular expression can answer it, it does not belong in the model pass.
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Anything else that helps — links, specs, prior art.
+    validations:
+      required: false
