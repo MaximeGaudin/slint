@@ -58,16 +58,20 @@ slint completions zsh         # shell completions (bash, zsh, fish, powershell)
 ```
 $ slint skills
 
-skills/helper  1 error, 2 warnings
-  SKILL.md:10:1  error    bundle/no-dangling-path  The instructions name scripts/cull.py, which is not in the bundle
-                          Add the file to the bundle, or take the reference out of the instructions.
-                          https://agentskills.io/specification
+skills/photo-culling  1 error, 2 warnings
+   SKILL.md:10:1  error    bundle/no-dangling-path  The instructions name scripts/cull.py, which is not in the bundle
+                           What to do: Either add the missing file under the skill directory, or remove that path from the instructions.
+                           https://agentskills.io/specification
 
-   SKILL.md:3:1  warning  description/says-when    The description never says when to use this
-                          Append a trigger clause — "Use when …" followed by the situation.
+    SKILL.md:3:1  warning  description/says-when    The description never says when to use this
+                           What to do: Add a clause like "Use when …" with the situation, using phrasing a real user request would use.
+                           https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices
 
-   SKILL.md:9:9  warning  body/posix-paths         "scripts\notes.md" is a Windows path
-                          Use forward slashes. Bundled paths are POSIX wherever the agent unpacks them.
+  SKILL.md:11:10  warning  body/posix-paths         "scripts\notes.md" is a Windows path
+                           What to do: Replace \ with / in every bundled path.
+                           https://agentskills.io/specification
+
+  note  Skipped 8 model rules (not requested). Pass --llm to run them.
 
 3 problem(s): 1 error(s), 2 warning(s), 0 note(s) across 1 skill(s).
 1 of them are computed fixes: run again with --fix.
