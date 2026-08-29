@@ -62,6 +62,16 @@ pub fn render(report: &Report) -> String {
 
             lines.push(command);
         }
+
+        // The caveat about a pass that did not run has to survive the format, or a partial run
+        // looks like a complete one in exactly the place people look: the PR annotations.
+        for note in &skill.notes {
+            lines.push(format!("::notice title=slint note::{}", escape_data(note)));
+        }
+    }
+
+    for note in &report.notes {
+        lines.push(format!("::notice title=slint note::{}", escape_data(note)));
     }
 
     lines.join("\n")
@@ -75,7 +85,9 @@ mod tests {
 
     #[test]
     fn each_finding_becomes_one_annotation_at_its_position() {
-        let text = render(&sample());
+        let mut report = sample();
+        report.skills[0].notes.clear();
+        let text = render(&report);
         let lines: Vec<&str> = text.lines().collect();
 
         assert_eq!(lines.len(), 2);
@@ -128,6 +140,7 @@ mod tests {
     #[test]
     fn newlines_are_escaped_so_an_annotation_is_never_cut_in_half() {
         let mut report = sample();
+        report.skills[0].notes.clear();
         report.skills[0].messages[0].message = "first line\nsecond line".into();
 
         let text = render(&report);
@@ -172,6 +185,7 @@ mod tests {
     #[test]
     fn a_carriage_return_is_encoded_rather_than_deleted() {
         let mut report = sample();
+        report.skills[0].notes.clear();
         report.skills[0].messages[0].message = "first\rsecond".into();
 
         let text = render(&report);

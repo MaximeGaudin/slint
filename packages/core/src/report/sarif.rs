@@ -116,7 +116,7 @@ fn region(location: Location) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::diagnostics::{Message, Reference, SkillReport, Source};
+    use crate::diagnostics::{Reference, SkillReport, Source};
 
     fn report() -> Report {
         Report {

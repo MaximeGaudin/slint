@@ -74,6 +74,16 @@ fn compact(report: &Report) -> String {
                 message.message
             ));
         }
+
+        // A note is not a finding, but it is the only record that a pass did not run, so it
+        // prints under the skill's path rather than being read out of the JSON alone.
+        for note in &skill.notes {
+            lines.push(format!("{}: note: {}", skill.path, note));
+        }
+    }
+
+    for note in &report.notes {
+        lines.push(format!("note: {note}"));
     }
 
     lines.join("\n")
@@ -147,7 +157,9 @@ mod tests {
 
     #[test]
     fn compact_prints_one_grep_friendly_line_per_finding() {
-        let text = compact(&sample());
+        let mut report = sample();
+        report.skills[0].notes.clear();
+        let text = compact(&report);
         let lines: Vec<&str> = text.lines().collect();
 
         assert_eq!(lines.len(), 2);
