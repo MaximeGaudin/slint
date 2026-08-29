@@ -73,3 +73,25 @@ export class LintRunCoordinator {
     return this.inflight
   }
 }
+
+/**
+ * Runs lint invocations one at a time, across every target.
+ *
+ * Cancellation (above) handles a newer lint for the *same* target. It cannot help when two
+ * different targets cover the same files — a workspace-wide lint and a per-file save inside one of
+ * its skill folders. Without a gate, the slower run finishes last and republishes diagnostics it
+ * read from an older disk state. Serializing spawn→publish keeps the newest spawn's result last.
+ */
+export class LintQueue {
+  private tail: Promise<unknown> = Promise.resolve()
+
+  run<T>(job: () => Promise<T>): Promise<T> {
+    const result = this.tail.then(job, job)
+    // Keep the chain alive no matter how the job settles.
+    this.tail = result.then(
+      () => undefined,
+      () => undefined,
+    )
+    return result
+  }
+}

@@ -79,26 +79,43 @@ impl Skill {
     }
 }
 
+/// What searching the given paths turned up.
+#[derive(Debug, Default)]
+pub struct Discovery {
+    /// Every directory holding a `SKILL.md`, ready to be read.
+    pub directories: Vec<PathBuf>,
+    /// Arguments that could not be linted at all, said out loud rather than dropped: a linter
+    /// that quietly checks nothing reads exactly like a clean pass in a CI log.
+    pub skipped: Vec<String>,
+}
+
 /// Every skill under the given paths.
 ///
 /// A path that is itself a skill directory is taken as one; anything else is walked. Directories
 /// that are never a skill — `.git`, `node_modules`, `target` — are skipped without being configured,
-/// because nobody has ever wanted them linted.
-pub fn discover(paths: &[PathBuf], ignore: &GlobSet) -> Result<Vec<PathBuf>> {
-    let mut found = Vec::new();
+/// because nobody has ever wanted them linted. A file argument that is not a `SKILL.md` is not an
+/// error, but it is reported back so the run can say it linted nothing rather than everything.
+pub fn discover(paths: &[PathBuf], ignore: &GlobSet) -> Result<Discovery> {
+    let mut discovery = Discovery::default();
 
     for path in paths {
         if path.join(SKILL_FILE).is_file() {
-            found.push(path.clone());
+            discovery.directories.push(path.clone());
             continue;
         }
 
         if path.is_file() {
-            // A path straight to a SKILL.md is the shape an editor integration sends.
+            // A path straight to a SKILL.md is the shape an editor integration sends. Anything
+            // else was asked for by name, so leaving it out without a word hides the whole run.
             if path.file_name().and_then(|name| name.to_str()) == Some(SKILL_FILE)
                 && let Some(parent) = path.parent()
             {
-                found.push(parent.to_path_buf());
+                discovery.directories.push(parent.to_path_buf());
+            } else {
+                discovery.skipped.push(format!(
+                    "{} is not a SKILL.md file, so it was not linted",
+                    path.display()
+                ));
             }
             continue;
         }
@@ -117,16 +134,18 @@ pub fn discover(paths: &[PathBuf], ignore: &GlobSet) -> Result<Vec<PathBuf>> {
             }
 
             if let Some(parent) = entry.path().parent() {
-                found.push(parent.to_path_buf());
+                discovery.directories.push(parent.to_path_buf());
             }
         }
     }
 
-    found.retain(|directory| !ignore.is_match(directory));
-    found.sort();
-    found.dedup();
+    discovery
+        .directories
+        .retain(|directory| !ignore.is_match(directory));
+    discovery.directories.sort();
+    discovery.directories.dedup();
 
-    Ok(found)
+    Ok(discovery)
 }
 
 fn is_never_a_skill(path: &Path) -> bool {
@@ -622,8 +641,9 @@ mod tests {
         fs::create_dir_all(&skill).unwrap();
         fs::write(skill.join(SKILL_FILE), DOCUMENT).unwrap();
 
-        let found = discover(std::slice::from_ref(&skill), &GlobSet::empty()).unwrap();
-        assert_eq!(found, vec![skill]);
+        let discovery = discover(std::slice::from_ref(&skill), &GlobSet::empty()).unwrap();
+        assert_eq!(discovery.directories, vec![skill]);
+        assert!(discovery.skipped.is_empty());
     }
 
     #[test]
@@ -641,11 +661,12 @@ mod tests {
         fs::create_dir_all(&hidden).unwrap();
         fs::write(hidden.join(SKILL_FILE), DOCUMENT).unwrap();
 
-        let found = discover(&[root.to_path_buf()], &GlobSet::empty()).unwrap();
+        let discovery = discover(&[root.to_path_buf()], &GlobSet::empty()).unwrap();
 
-        assert_eq!(found.len(), 2);
+        assert_eq!(discovery.directories.len(), 2);
         assert!(
-            found
+            discovery
+                .directories
                 .iter()
                 .all(|path| !path.to_string_lossy().contains("node_modules"))
         );
@@ -663,10 +684,10 @@ mod tests {
         }
 
         let ignore = build_ignore(&["**/fixtures".to_string()]).unwrap();
-        let found = discover(&[root.to_path_buf()], &ignore).unwrap();
+        let discovery = discover(&[root.to_path_buf()], &ignore).unwrap();
 
-        assert_eq!(found.len(), 1);
-        assert!(found[0].ends_with("kept"));
+        assert_eq!(discovery.directories.len(), 1);
+        assert!(discovery.directories[0].ends_with("kept"));
     }
 
     #[test]
@@ -688,8 +709,29 @@ mod tests {
         let document = directory.join(SKILL_FILE);
         fs::write(&document, DOCUMENT).unwrap();
 
-        let found = discover(&[document], &GlobSet::empty()).unwrap();
-        assert_eq!(found, vec![directory]);
+        let discovery = discover(&[document], &GlobSet::empty()).unwrap();
+        assert_eq!(discovery.directories, vec![directory]);
+        assert!(discovery.skipped.is_empty());
+    }
+
+    #[test]
+    fn a_file_argument_that_is_not_a_skill_is_reported_not_dropped() {
+        // https://github.com/MaximeGaudin/slint/issues/36: a run over a stray file must say it
+        // linted nothing rather than reading like a pass.
+        let temporary = tempfile::tempdir().unwrap();
+        let file = temporary.path().join("random.txt");
+        fs::write(&file, "hello\n").unwrap();
+
+        let discovery = discover(std::slice::from_ref(&file), &GlobSet::empty()).unwrap();
+
+        assert!(discovery.directories.is_empty());
+        assert_eq!(
+            discovery.skipped,
+            vec![format!(
+                "{} is not a SKILL.md file, so it was not linted",
+                file.display()
+            )]
+        );
     }
 
     #[test]
