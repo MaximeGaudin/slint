@@ -10,7 +10,14 @@ export interface Props {
   title?: string
   description?: string
   /** Which nav item is the current one. */
-  section?: 'home' | 'rules' | 'config' | 'plugins' | 'editors' | 'contributing'
+  section?:
+    | 'home'
+    | 'rules'
+    | 'config'
+    | 'plugins'
+    | 'editors'
+    | 'json'
+    | 'contributing'
   frontmatter?: {
     title?: string
     description?: string
@@ -29,6 +36,7 @@ const nav = [
   { href: '/config/', label: 'Config', key: 'config' },
   { href: '/plugins/', label: 'Plugins', key: 'plugins' },
   { href: '/editors/', label: 'Editors', key: 'editors' },
+  { href: '/json/', label: 'JSON', key: 'json' },
   { href: '/contributing/', label: 'Contributing', key: 'contributing' },
 ]
 ---

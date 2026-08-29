@@ -71,7 +71,7 @@ skills/helper  1 error, 2 warnings
 1 of them are computed fixes: run again with --fix.
 ```
 
-Exit codes match the convention other skill linters settled on, so a CI script written for one works here: `0` clean, `1` errors, `2` warnings only, `3` slint itself failed.
+Exit codes match the convention other skill linters settled on, so a CI script written for one works here: `0` clean, `1` errors, `2` warnings only, `3` slint itself failed. The `--format json` envelope is a versioned, documented contract: [slint.dev/json](https://slint.dev/json/).
 
 
 | Flag                | What it does                                        |
@@ -154,7 +154,7 @@ message = "\"{match}\" is a note to a person, in a document a machine follows."
 reference = { title = "House style", url = "https://example.com/style" }
 ```
 
-**A WebAssembly plugin** is code, run through [Extism](https://extism.org). Point the config at a `.wasm` file; slint calls its exported `lint` function with the parsed skill as JSON and reads messages back. It runs sandboxed — no filesystem, no network.
+**A WebAssembly plugin** is code, run through [Extism](https://extism.org). Point the config at a `.wasm` file; slint calls its exported `lint` function with the parsed skill as JSON and reads messages back. It runs sandboxed — no filesystem, no network. The wire contract plugin authors write against is specified field by field at [docs/plugin-abi](https://slint.dev/plugin-abi/).
 
 Both are held to the same standard as the built-in catalogue: a namespaced rule name, and a citation.
 

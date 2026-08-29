@@ -1,0 +1,85 @@
+---
+layout: ../layouts/Page.astro
+title: The JSON envelope
+description: What slint --format json prints, field by field, and the versioning promise that comes with it.
+section: json
+---
+
+<div class="page-intro">
+
+# The JSON envelope
+
+<p class="lead">
+  {'One shape, versioned in the payload, documented here. Data on stdout, everything else on stderr, so slint --format json | jq is always safe.'}
+</p>
+
+</div>
+
+`slint --format json` answers with one JSON document. The first field tells a
+consumer which version of the shape it is reading, so a tool written against
+this page can refuse an envelope it was not written for instead of
+misreading one.
+
+```json
+{
+  "schemaVersion": 1,
+  "ok": false,
+  "summary": {
+    "skills": 2,
+    "errors": 1,
+    "warnings": 3,
+    "infos": 0,
+    "fixable": 2,
+    "fixed": 0
+  },
+  "data": { "skills": [] }
+}
+```
+
+## The envelope
+
+| Field | Type | What it is |
+| --- | --- | --- |
+| `schemaVersion` | number | The version of this shape. `1` today. Bumped when a field is removed or reinterpreted; a new field does not bump it. |
+| `ok` | boolean | False when anything at `error` severity was found. Warnings do not flip it — a caller that wants them fatal passes `--max-warnings`. |
+| `summary` | object | Counts for the whole run: `skills`, `errors`, `warnings`, `infos`, `fixable`, `fixed`. |
+| `data` | object | `{"skills": SkillReport[]}` — one entry per skill looked at, below. |
+
+`ok` and the exit code agree: a run exits `0` exactly when `ok` is true. A run
+that could not complete (an unreadable path, a model pass that hard-fails) is
+an error on stderr, not a malformed envelope on stdout.
+
+## SkillReport
+
+| Field | Type | What it is |
+| --- | --- | --- |
+| `path` | string | The skill's directory, relative to where slint was run. |
+| `name` | string | The skill's frontmatter `name`. |
+| `messages` | Message[] | Findings, sorted by file and line. |
+| `notes` | string[] | Said out loud rather than inferred: a pass that did not run, a file that could not be read. |
+
+## Message
+
+| Field | Type | What it is |
+| --- | --- | --- |
+| `rule` | string | The rule that fired, as it is written in a config file (`bundle/no-dangling-path`). |
+| `severity` | string | `error`, `warning` or `info`. |
+| `message` | string | One line, in the imperative or the indicative. |
+| `advice` | string | What to do about it. |
+| `location` | object | `line`, `column`, and optionally `end_line` and `end_column` (exclusive). 1-based, as every editor reports them. |
+| `source` | string | `static`, `model` or `plugin` — also how much the finding can be trusted. |
+| `file` | string | The document the finding is about, relative to the run. |
+| `fix` | object or absent | Only when the finding is fixable: `start` and `end` byte offsets into the file, the `replacement` text, and a `description` of what changed. |
+| `reference` | object | `title` and `url` — the document the rule's claim comes from. Every rule has one. |
+| `confidence` | number | The model's own estimate for a model-written finding; always `1.0` for anything computed. |
+
+## Versioning
+
+`schemaVersion` is the contract's version, not the binary's. It moves only
+when a consumer written against this page would misread the new output: a
+field removed, a field's meaning changed, a type changed. Adding a field
+does not move it, which is why the envelope grew `schemaVersion` without
+starting the count anywhere but one.
+
+Pinned release notes name the bump when it happens, under
+[Changelog](https://github.com/MaximeGaudin/slint/blob/main/CHANGELOG.md).
