@@ -167,4 +167,15 @@ mod tests {
             );
         }
     }
+
+    /// https://github.com/MaximeGaudin/slint/issues/105 — Anthropic's own
+    /// best-practices doc states this rule directly ("Use consistent
+    /// terminology"); it outranks a non-peer-reviewed preprint.
+    #[test]
+    fn consistent_terminology_cites_the_best_practices_doc() {
+        assert_eq!(
+            TERMINOLOGY.reference_url,
+            "https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices"
+        );
+    }
 }

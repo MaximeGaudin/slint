@@ -713,6 +713,12 @@ mod tests {
         let skill = skill_with_body(&body);
 
         assert_eq!(check(&TOKEN_RULE, &skill).len(), 1);
+        // https://github.com/MaximeGaudin/slint/issues/99 — the ~5000-token figure
+        // comes from the specification, not the best-practices doc it cited.
+        assert_eq!(
+            TOKEN_BUDGET.reference_url, "https://agentskills.io/specification",
+            "the 5000-token figure belongs to the specification's progressive-disclosure section"
+        );
 
         let mut config = Config::default();
         config.rules.insert(

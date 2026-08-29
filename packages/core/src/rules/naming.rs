@@ -258,6 +258,14 @@ mod tests {
         let messages = check(&RESERVED_RULE, &skill_named("claude-helper"));
         assert_eq!(messages.len(), 1);
         assert!(messages[0].message.contains("claude"));
+        // https://github.com/MaximeGaudin/slint/issues/84 — the reserved-word
+        // restriction comes from the Claude docs, not the vendor-neutral spec.
+        assert_eq!(
+            messages[0].reference.url,
+            "https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices",
+            "the citation must name the doc that states the restriction: {:?}",
+            messages[0].reference
+        );
     }
 
     #[test]

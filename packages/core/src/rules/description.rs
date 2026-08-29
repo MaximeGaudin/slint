@@ -449,6 +449,23 @@ mod tests {
         assert!(check_with(&MIN_LENGTH_RULE, &skill, &config).is_empty());
     }
 
+    /// https://github.com/MaximeGaudin/slint/issues/79 — the advice used to say
+    /// "roughly 150–300 characters" while the rule only fires below 80, and no
+    /// source states 150–300. The advice must match the shipped default.
+    #[test]
+    fn the_min_length_advice_matches_the_configured_default() {
+        assert!(
+            MIN_LENGTH.advice.contains("80"),
+            "advice must name the shipped default of 80: {}",
+            MIN_LENGTH.advice
+        );
+        assert!(
+            !MIN_LENGTH.advice.contains("150"),
+            "advice must not advertise a range no source states: {}",
+            MIN_LENGTH.advice
+        );
+    }
+
     #[test]
     fn first_and_second_person_are_reported() {
         for description in [

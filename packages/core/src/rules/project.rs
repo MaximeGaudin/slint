@@ -224,6 +224,13 @@ mod tests {
         assert_eq!(messages.len(), 2, "both files hear about it");
         assert!(messages[0].message.contains("skills/b"));
         assert!(messages[1].message.contains("skills/a"));
+        // https://github.com/MaximeGaudin/slint/issues/112 — the specification
+        // covers a single skill; name collisions are a host concern.
+        assert_eq!(
+            messages[0].reference.url, "https://code.claude.com/docs/en/skills",
+            "the citation must name the doc that discusses same-name skills: {:?}",
+            messages[0].reference
+        );
     }
 
     #[test]
