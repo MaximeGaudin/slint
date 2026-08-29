@@ -44,7 +44,7 @@ slint --help
 
 Building from source requires **Rust 1.95+** (the workspace MSRV, pinned in `Cargo.toml` and enforced by CI). MSRV bumps are not treated as breaking changes.
 
-Release binaries (latest release: [v0.2.0](https://github.com/MaximeGaudin/slint/releases/tag/0.2.0); macOS (Apple Silicon, Intel), Linux (x86_64, arm64), and Windows (`slint-windows-amd64.zip`) assets are published for each release):
+Release binaries (latest release: [v0.2.0](https://github.com/MaximeGaudin/slint/releases/tag/0.2.0); macOS (Apple Silicon, Intel), Linux (x86_64, arm64; glibc and static musl builds), and Windows (`slint-windows-amd64.zip`) assets are published for each release):
 
 Each release publishes a `<artifact>.sha256` file next to its tarball. Download the tarball and its checksum, verify the checksum, and only then extract as root:
 
@@ -60,6 +60,12 @@ curl -fsSLO https://github.com/MaximeGaudin/slint/releases/latest/download/slint
 curl -fsSLO https://github.com/MaximeGaudin/slint/releases/latest/download/slint-linux-amd64.tar.gz.sha256
 sha256sum -c slint-linux-amd64.tar.gz.sha256
 sudo tar xz -C /usr/local/bin slint-linux-amd64.tar.gz
+
+# Linux (x86_64, static musl build — Alpine/minimal containers)
+curl -fsSLO https://github.com/MaximeGaudin/slint/releases/latest/download/slint-linux-amd64-musl.tar.gz
+curl -fsSLO https://github.com/MaximeGaudin/slint/releases/latest/download/slint-linux-amd64-musl.tar.gz.sha256
+sha256sum -c slint-linux-amd64-musl.tar.gz.sha256
+sudo tar xz -C /usr/local/bin slint-linux-amd64-musl.tar.gz
 ```
 
 
