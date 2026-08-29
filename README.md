@@ -77,7 +77,7 @@ skills/photo-culling  1 error, 2 warnings
 1 of them are computed fixes: run again with --fix.
 ```
 
-Exit codes match the convention other skill linters settled on, so a CI script written for one works here: `0` clean, `1` errors, `2` warnings only, `3` slint itself failed, `4` nothing was linted (no `SKILL.md` was found under the given path — check the path before trusting a green run). Running `slint init` when a config already exists is an idempotent no-op and exits `0`; nothing is overwritten.
+Exit codes: `0` clean, `1` errors, `2` warnings only, `3` slint itself failed, `4` nothing was linted (no `SKILL.md` was found under the given path — check the path before trusting a green run). Running `slint init` when a config already exists is an idempotent no-op and exits `0`; nothing is overwritten.
 
 
 | Flag                    | What it does                                                       |
