@@ -260,7 +260,7 @@ fn run(cli: &Cli) -> Result<u8> {
         Err(error) => return Err(error).context("writing the report"),
     }
 
-    Ok(exit_code(&report, cli.max_warnings))
+    Ok(exit_code(&report))
 }
 
 /// Reads, lints and reports on the document coming in on stdin.
@@ -345,7 +345,7 @@ fn run_stdin(cli: &Cli, config: &Config) -> Result<u8> {
         Err(error) => return Err(error).context("writing the report"),
     }
 
-    Ok(exit_code(&report, cli.max_warnings))
+    Ok(exit_code(&report))
 }
 
 /// --print-config: the config as a caller can now rely on it, file and flags together.
@@ -450,14 +450,20 @@ fn colour_allowed(no_color_flag: bool) -> bool {
 }
 
 /// What the run means, as a number.
-fn exit_code(report: &Report, max_warnings: i64) -> u8 {
+///
+/// The code names the class of what was found, so a CI script can tell an error it must read
+/// from a warning it chose to tolerate: errors are 1, warnings-only is 2 — even when the
+/// `--max-warnings` budget is breached, because relabelling a warnings-only run as "errors"
+/// would contradict the documented contract. The budget verdict lives in the JSON envelope's
+/// `ok` flag instead, and a warnings-only run still fails a CI job the usual way: 2 is non-zero.
+fn exit_code(report: &Report) -> u8 {
     // Nothing was looked at: a typo'd path or an empty directory is not a clean pass, and a CI
     // job pointed at the wrong directory must not sit green forever.
     if report.skills.is_empty() {
         return code::NOTHING_LINTED;
     }
 
-    if !report.passes(max_warnings) {
+    if report.errors() > 0 {
         return code::ERRORS;
     }
 
@@ -695,25 +701,30 @@ mod tests {
 
     #[test]
     fn a_clean_run_exits_zero() {
-        assert_eq!(exit_code(&report_with(0, 0), -1), code::CLEAN);
+        assert_eq!(exit_code(&report_with(0, 0)), code::CLEAN);
     }
 
     #[test]
     fn errors_exit_one() {
-        assert_eq!(exit_code(&report_with(1, 0), -1), code::ERRORS);
+        assert_eq!(exit_code(&report_with(1, 0)), code::ERRORS);
     }
 
     #[test]
     fn warnings_alone_exit_two_so_ci_can_tell_them_apart() {
-        assert_eq!(exit_code(&report_with(0, 3), -1), code::WARNINGS);
+        assert_eq!(exit_code(&report_with(0, 3)), code::WARNINGS);
     }
 
     #[test]
-    fn a_warning_budget_turns_warnings_into_a_failure_once_it_is_passed() {
-        assert_eq!(exit_code(&report_with(0, 3), 5), code::WARNINGS);
-        assert_eq!(exit_code(&report_with(0, 3), 3), code::WARNINGS);
-        assert_eq!(exit_code(&report_with(0, 4), 3), code::ERRORS);
-        assert_eq!(exit_code(&report_with(0, 1), 0), code::ERRORS);
+    fn a_warning_budget_does_not_relabel_a_warnings_only_run() {
+        // https://github.com/MaximeGaudin/slint/issues/143: the exit code names the class of
+        // finding, not how comfortable the budget is — a run with no errors is "warnings only"
+        // (2) even when --max-warnings is breached. The budget verdict lives in the JSON
+        // envelope's `ok`, and 2 still fails a CI job.
+        assert_eq!(exit_code(&report_with(0, 3)), code::WARNINGS);
+        assert_eq!(exit_code(&report_with(0, 3)), code::WARNINGS);
+        assert_eq!(exit_code(&report_with(0, 4)), code::WARNINGS);
+        assert_eq!(exit_code(&report_with(0, 1)), code::WARNINGS);
+        assert_eq!(exit_code(&report_with(0, 0)), code::CLEAN);
     }
 
     #[test]
@@ -775,7 +786,7 @@ mod tests {
             notes: Vec::new(),
         };
 
-        assert_eq!(exit_code(&report, -1), code::NOTHING_LINTED);
+        assert_eq!(exit_code(&report), code::NOTHING_LINTED);
     }
 
     #[test]

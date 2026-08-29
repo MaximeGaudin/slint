@@ -87,7 +87,7 @@ skills/photo-culling  1 error, 2 warnings
 
   note  Skipped 8 model rules (not requested). Pass --llm to run them.
 
-3 problem(s): 1 error(s), 2 warning(s), 0 note(s) across 1 skill(s).
+3 problems: 1 error, 2 warnings, 0 notes across 1 skill.
 1 of them are computed fixes: run again with --fix.
 ```
 

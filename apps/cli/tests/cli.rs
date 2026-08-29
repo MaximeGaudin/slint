@@ -177,7 +177,10 @@ fn warnings_alone_exit_two() {
 }
 
 #[test]
-fn a_warning_budget_turns_warnings_into_a_failed_run() {
+fn a_warning_budget_does_not_relabel_a_warnings_only_run() {
+    // https://github.com/MaximeGaudin/slint/issues/143: with no errors the run is still
+    // "warnings only" (2) even when --max-warnings is breached — the code names the finding
+    // class, and 2 is non-zero, so CI still fails.
     let temporary = tempfile::tempdir().unwrap();
     write(
         temporary.path(),
@@ -192,7 +195,41 @@ fn a_warning_budget_turns_warnings_into_a_failed_run() {
         "0",
     ]);
 
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(2));
+}
+
+#[test]
+fn a_narrow_column_wraps_the_stylish_report_instead_of_running_past_the_pane() {
+    // https://github.com/MaximeGaudin/slint/issues/164: the report never measured the
+    // terminal, so a narrow split pane received 100+ column lines. COLUMNS pins the width a
+    // terminal would have reported; stdout here is a pipe, so this exercises the whole
+    // detection path end to end.
+    let temporary = tempfile::tempdir().unwrap();
+    write(temporary.path(), "helper", BROKEN);
+
+    let roomy = slint(&[temporary.path().to_str().unwrap(), "--no-llm"]);
+    let narrow = slint_with_environment(
+        &[("COLUMNS", "40")],
+        &[temporary.path().to_str().unwrap(), "--no-llm"],
+    );
+
+    // The long advice line runs whole when there is room, and is folded when there is not —
+    // with every word kept. (A 40-column pane is narrower than the report's own columns, so
+    // finding rows degrade to their natural length there; the advice lines, the widest thing
+    // the report draws, always wrap.)
+    let advice = "Expand to at least 80 characters — what it does, then when to use it, in the words a request would use.";
+    assert!(stdout(&roomy).contains(advice), "{:?}", stdout(&roomy));
+    assert!(
+        !stdout(&narrow).contains(advice),
+        "the advice must not run past 40 columns: {:?}",
+        stdout(&narrow)
+    );
+    for word in advice.split_whitespace() {
+        assert!(
+            stdout(&narrow).contains(word),
+            "wrapping must not lose a word: missing {word}"
+        );
+    }
 }
 
 #[test]
@@ -235,7 +272,10 @@ fn fixing_rewrites_the_file_and_the_next_run_is_cleaner() {
     assert!(stdout(&before).contains("body/posix-paths"));
 
     let fixed = slint(&[temporary.path().to_str().unwrap(), "--no-llm", "--fix"]);
-    assert!(stdout(&fixed).contains("fix(es) applied"));
+    // https://github.com/MaximeGaudin/slint/issues/169: whatever the count, the pluralisation
+    // is real words now, never the "(s)" placeholder.
+    assert!(stdout(&fixed).contains(" applied."), "{:?}", stdout(&fixed));
+    assert!(!stdout(&fixed).contains("(s)"));
 
     let document = fs::read_to_string(temporary.path().join("photo-culling/SKILL.md")).unwrap();
     assert!(document.contains("references/formats.md"));
@@ -265,7 +305,8 @@ fn two_fixable_rules_on_one_file_converge_in_a_single_fix() {
 
     let fixed = slint(&[temporary.path().to_str().unwrap(), "--no-llm", "--fix"]);
     let text = stdout(&fixed);
-    assert!(text.contains("2 fix(es) applied"), "{text}");
+    assert!(text.contains("2 fixes applied"), "{text}");
+    assert!(!text.contains("(s)"), "{text}");
 
     let document = fs::read_to_string(temporary.path().join("photo-culling/SKILL.md")).unwrap();
     assert!(!document.contains("<b>"), "{document}");
@@ -298,9 +339,11 @@ fn the_json_format_is_an_envelope_a_caller_can_branch_on() {
 
 #[test]
 fn the_json_envelope_says_the_same_thing_the_exit_code_does() {
-    // Reproduces https://github.com/MaximeGaudin/slint/issues/24: with --max-warnings exceeded
-    // the process exits 1, so the envelope's `ok` flag must say false too — a caller that
-    // branches on it before parsing anything gets the same verdict as the shell does.
+    // Reproduces https://github.com/MaximeGaudin/slint/issues/24: the process fails when the
+    // --max-warnings budget is exceeded, so the envelope's `ok` flag must say false too — a
+    // caller that branches on it before parsing anything gets the same verdict as the shell
+    // does. (https://github.com/MaximeGaudin/slint/issues/143: the exit code itself stays 2,
+    // "warnings only", because there are no errors — the verdict is still non-zero.)
     let temporary = tempfile::tempdir().unwrap();
     write(
         temporary.path(),
@@ -318,10 +361,10 @@ fn the_json_envelope_says_the_same_thing_the_exit_code_does() {
     ]);
     let parsed: serde_json::Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
 
-    assert_eq!(output.status.code(), Some(1), "the budget is exceeded");
+    assert_eq!(output.status.code(), Some(2), "warnings only, no errors");
     assert_eq!(
         parsed["ok"], false,
-        "the envelope must agree with the exit code"
+        "the envelope must agree that the run did not pass"
     );
 }
 
