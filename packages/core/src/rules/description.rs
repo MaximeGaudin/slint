@@ -597,6 +597,17 @@ mod tests {
         }
     }
 
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/242 — "Culls" and "culling"
+    /// are forms of "cull", "photos" is "photo": the description said nothing beyond the name,
+    /// but the exact substring removal matched nothing and the leftovers cleared the floor.
+    #[test]
+    fn a_description_restating_the_name_in_other_word_forms_is_reported() {
+        let mut skill = skill_described("Culls photos. Use when culling.");
+        skill.name = "cull-photos".into();
+
+        assert_eq!(check(&NOT_JUST_NAME_RULE, &skill).len(), 1);
+    }
+
     #[test]
     fn a_description_that_only_restates_the_name_is_reported() {
         let mut skill = skill_described("Photo culling. Use when culling photos.");
