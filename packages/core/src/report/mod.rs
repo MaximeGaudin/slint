@@ -154,6 +154,25 @@ mod tests {
         assert!(lines[0].starts_with("skills/helper/SKILL.md:2:1: warning [name/not-generic]"));
     }
 
+    // https://github.com/MaximeGaudin/slint/issues/134: a note says a pass did not run, and a
+    // format that drops it makes a partial run read as a complete one.
+    #[test]
+    fn notes_survive_into_compact_so_a_skipped_pass_stays_visible() {
+        let mut report = sample();
+        report.notes = vec!["1 argument was not a skill and was skipped.".into()];
+
+        let text = compact(&report);
+
+        assert!(
+            text.contains("skills/helper: note: 8 rules need a model and none is configured."),
+            "the skill's own notes print under its path: {text}"
+        );
+        assert!(
+            text.contains("note: 1 argument was not a skill and was skipped."),
+            "the run's notes print without a path: {text}"
+        );
+    }
+
     #[test]
     fn rendering_dispatches_to_the_chosen_format() {
         let report = sample();

@@ -189,4 +189,28 @@ mod tests {
         };
         assert!(render(&empty).is_empty());
     }
+
+    // https://github.com/MaximeGaudin/slint/issues/134: the CI path is exactly where a team is
+    // most likely to be unaware that the model pass never ran, so the caveat has to ride along
+    // as a notice rather than vanishing with the format.
+    #[test]
+    fn a_skipped_pass_becomes_a_notice_rather_than_disappearing() {
+        let mut report = sample();
+        report.notes = vec!["no provider is configured: set api_key_env".into()];
+
+        let text = render(&report);
+
+        assert!(
+            text.contains("::notice title=slint note::no provider is configured"),
+            "the run's notes print as notices: {text}"
+        );
+        assert!(
+            text.contains("::notice title=slint note::8 rules need a model and none is configured."),
+            "the skill's notes print as notices too: {text}"
+        );
+        assert!(
+            text.lines().all(|line| !line.contains("api_key_env\n")),
+            "a note stays on one line: {text}"
+        );
+    }
 }
