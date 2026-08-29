@@ -46,12 +46,20 @@ Building from source requires **Rust 1.95+** (the workspace MSRV, pinned in `Car
 
 Release binaries (latest release: [v0.2.0](https://github.com/MaximeGaudin/slint/releases/tag/0.2.0); macOS (Apple Silicon, Intel), Linux (x86_64, arm64), and Windows (`slint-windows-amd64.zip`) assets are published for each release):
 
+Each release publishes a `<artifact>.sha256` file next to its tarball. Download the tarball and its checksum, verify the checksum, and only then extract as root:
+
 ```bash
 # macOS (Apple Silicon)
-curl -fsSL https://github.com/MaximeGaudin/slint/releases/latest/download/slint-darwin-arm64.tar.gz | sudo tar xz -C /usr/local/bin
+curl -fsSLO https://github.com/MaximeGaudin/slint/releases/latest/download/slint-darwin-arm64.tar.gz
+curl -fsSLO https://github.com/MaximeGaudin/slint/releases/latest/download/slint-darwin-arm64.tar.gz.sha256
+shasum -a 256 -c slint-darwin-arm64.tar.gz.sha256
+sudo tar xz -C /usr/local/bin slint-darwin-arm64.tar.gz
 
 # Linux (x86_64)
-curl -fsSL https://github.com/MaximeGaudin/slint/releases/latest/download/slint-linux-amd64.tar.gz | sudo tar xz -C /usr/local/bin
+curl -fsSLO https://github.com/MaximeGaudin/slint/releases/latest/download/slint-linux-amd64.tar.gz
+curl -fsSLO https://github.com/MaximeGaudin/slint/releases/latest/download/slint-linux-amd64.tar.gz.sha256
+sha256sum -c slint-linux-amd64.tar.gz.sha256
+sudo tar xz -C /usr/local/bin slint-linux-amd64.tar.gz
 ```
 
 
@@ -112,11 +120,11 @@ Exit codes: `0` clean, `1` errors, `2` warnings only, `3` slint itself failed, `
 | `--llm-model ID`        | Override `[llm].model` from the config.                            |
 | `--llm-base-url URL`    | Override `[llm].base_url` from the config.                         |
 | `--llm-api-key-env VAR` | Override `[llm].api_key_env` from the config.                      |
-| `--no-plugins`          | Skip plugins, whatever the config says.                            |
+| `--plugins`             | Run the plugins the config names. Off by default: the config belongs to the project being scanned. |
+| `--no-plugins`          | Kept so existing scripts keep working: plugins are off unless `--plugins` is passed. |
 | `--quiet`               | Errors only.                                                       |
 | `-v` / `--verbose`      | Say which config and how many plugins, on stderr.                  |
 | `--no-color`            | Never colour the output.                                           |
-
 
 
 
@@ -151,7 +159,7 @@ api_key_env = "OPENAI_API_KEY"   # the variable holding the key, never the key i
 path = "./slint-house-rules.toml"
 ```
 
-`slint.config.json`, `.slintrc.json` and `.slintrc.toml` work too. The file is found by walking up from whatever you asked slint to lint. If a directory holds more than one of them, the first of `slint.toml`, `slint.config.json`, `.slintrc.json`, `.slintrc.toml` wins and the run says which file it read. When no project config exists anywhere up the tree, a user-global one is used: `$XDG_CONFIG_HOME/slint/config.toml`, or `~/.config/slint/config.toml` — the place for a personal provider or a severity you always disagree with. A project config always wins.
+`slint.config.json`, `.slintrc.json` and `.slintrc.toml` work too. The file is found by walking up from whatever you asked slint to lint. If a directory holds more than one of them, the first of `slint.toml`, `slint.config.json`, `.slintrc.json`, `.slintrc.toml` wins and the run says which file it read. When no project config exists anywhere up the tree, a user-global one is used: `$XDG_CONFIG_HOME/slint/config.toml`, or `~/.config/slint/config.toml` — the place for a personal provider or a severity you always disagree with. A project config always wins. When more than one path is linted in a run, the config found from the first path governs the whole run, and slint says so when a later path holds a different config of its own.
 
 For editor autocomplete over the JSON shapes, point `$schema` at the published schema:
 
@@ -202,6 +210,8 @@ reference = { title = "House style", url = "https://example.com/style" }
 **A WebAssembly plugin** is code, run through [Extism](https://extism.org). Point the config at a `.wasm` file; slint calls its exported `lint` function with the parsed skill as JSON and reads messages back. It runs sandboxed — no filesystem, no network.
 
 Both are held to the same standard as the built-in catalogue: a namespaced rule name, and a citation.
+
+Plugins are off by default and run only with `--plugins`. The config that names them lives in the project being scanned — a linter does not execute code a scanned project ships without being asked. When a config names plugins and they do not run, the report says so.
 
 ## Editors
 

@@ -136,6 +136,7 @@ pub struct LlmConfig {
     #[serde(default)]
     pub api_key_env: Option<String>,
     /// Overrides the provider's own address. This is what makes a local model or a gateway work.
+    /// Must be https, or http to a loopback address for a model on this machine.
     #[serde(default)]
     pub base_url: Option<String>,
     /// Seconds before a request is abandoned.
@@ -260,6 +261,17 @@ impl Config {
 
     pub fn options_for(&self, rule: &str) -> Option<&serde_json::Value> {
         self.rules.get(rule).and_then(|setting| setting.options())
+    }
+}
+
+impl PartialEq for Config {
+    /// Two configs agree when what they say agrees. `source` is where a config came from, and
+    /// the same settings under two file names are the same settings.
+    fn eq(&self, other: &Self) -> bool {
+        self.rules == other.rules
+            && self.ignore == other.ignore
+            && self.llm == other.llm
+            && self.plugins == other.plugins
     }
 }
 

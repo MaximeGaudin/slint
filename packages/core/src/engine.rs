@@ -20,20 +20,13 @@ use crate::rules::{self, RuleContext};
 use crate::skill::{self, Skill};
 
 /// How much of the catalogue to run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Passes {
+    /// Off unless the caller wants it: the config naming plugins belongs to the project being
+    /// scanned, and a linter does not run code the scanned project ships without being asked.
     pub plugins: bool,
     /// The model pass. Off unless a provider is configured *and* the caller wants it.
     pub model: bool,
-}
-
-impl Default for Passes {
-    fn default() -> Self {
-        Passes {
-            plugins: true,
-            model: false,
-        }
-    }
 }
 
 /// `<!-- slint-disable rule -->` anywhere in the document, and its per-line form.
@@ -635,6 +628,18 @@ pub fn run_with_reviewer(
         }
     }
 
+    // The plugins the config names, when running them was not asked for. A skipped pass says so,
+    // the same way the model half does: a review that never ran must not read like one that passed.
+    if !passes.plugins
+        && !config.plugins.is_empty()
+        && let Some(first) = per_skill.first_mut()
+    {
+        first.notes.push(format!(
+            "Skipped {} plugin(s) named by the config (not requested). Pass --plugins to run them.",
+            config.plugins.len()
+        ));
+    }
+
     // The model pass, last and optional. One request per skill, in parallel: the skills do not
     // share state, and waiting on them one after another is how a workspace review feels broken.
     // A provider that is unreachable leaves a note on that skill rather than an error on the run —
@@ -844,12 +849,15 @@ mod tests {
     }
 
     #[test]
-    fn default_passes_do_not_opt_into_the_model_pass() {
+    fn default_passes_opt_into_neither_pass() {
         assert!(
             !Passes::default().model,
             "default Passes must keep the paid model pass off"
         );
-        assert!(Passes::default().plugins);
+        assert!(
+            !Passes::default().plugins,
+            "default Passes must keep plugins off: the config naming them belongs to the scanned project"
+        );
     }
 
     #[test]
