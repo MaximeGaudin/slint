@@ -177,7 +177,10 @@ fn warnings_alone_exit_two() {
 }
 
 #[test]
-fn a_warning_budget_turns_warnings_into_a_failed_run() {
+fn a_warning_budget_does_not_relabel_a_warnings_only_run() {
+    // https://github.com/MaximeGaudin/slint/issues/143: with no errors the run is still
+    // "warnings only" (2) even when --max-warnings is breached — the code names the finding
+    // class, and 2 is non-zero, so CI still fails.
     let temporary = tempfile::tempdir().unwrap();
     write(
         temporary.path(),
@@ -192,7 +195,7 @@ fn a_warning_budget_turns_warnings_into_a_failed_run() {
         "0",
     ]);
 
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(2));
 }
 
 #[test]
@@ -298,9 +301,11 @@ fn the_json_format_is_an_envelope_a_caller_can_branch_on() {
 
 #[test]
 fn the_json_envelope_says_the_same_thing_the_exit_code_does() {
-    // Reproduces https://github.com/MaximeGaudin/slint/issues/24: with --max-warnings exceeded
-    // the process exits 1, so the envelope's `ok` flag must say false too — a caller that
-    // branches on it before parsing anything gets the same verdict as the shell does.
+    // Reproduces https://github.com/MaximeGaudin/slint/issues/24: the process fails when the
+    // --max-warnings budget is exceeded, so the envelope's `ok` flag must say false too — a
+    // caller that branches on it before parsing anything gets the same verdict as the shell
+    // does. (https://github.com/MaximeGaudin/slint/issues/143: the exit code itself stays 2,
+    // "warnings only", because there are no errors — the verdict is still non-zero.)
     let temporary = tempfile::tempdir().unwrap();
     write(
         temporary.path(),
@@ -318,10 +323,10 @@ fn the_json_envelope_says_the_same_thing_the_exit_code_does() {
     ]);
     let parsed: serde_json::Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
 
-    assert_eq!(output.status.code(), Some(1), "the budget is exceeded");
+    assert_eq!(output.status.code(), Some(2), "warnings only, no errors");
     assert_eq!(
         parsed["ok"], false,
-        "the envelope must agree with the exit code"
+        "the envelope must agree that the run did not pass"
     );
 }
 

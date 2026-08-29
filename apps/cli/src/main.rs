@@ -709,11 +709,16 @@ mod tests {
     }
 
     #[test]
-    fn a_warning_budget_turns_warnings_into_a_failure_once_it_is_passed() {
+    fn a_warning_budget_does_not_relabel_a_warnings_only_run() {
+        // https://github.com/MaximeGaudin/slint/issues/143: the exit code names the class of
+        // finding, not how comfortable the budget is — a run with no errors is "warnings only"
+        // (2) even when --max-warnings is breached. The budget verdict lives in the JSON
+        // envelope's `ok`, and 2 still fails a CI job.
         assert_eq!(exit_code(&report_with(0, 3), 5), code::WARNINGS);
         assert_eq!(exit_code(&report_with(0, 3), 3), code::WARNINGS);
-        assert_eq!(exit_code(&report_with(0, 4), 3), code::ERRORS);
-        assert_eq!(exit_code(&report_with(0, 1), 0), code::ERRORS);
+        assert_eq!(exit_code(&report_with(0, 4), 3), code::WARNINGS);
+        assert_eq!(exit_code(&report_with(0, 1), 0), code::WARNINGS);
+        assert_eq!(exit_code(&report_with(0, 0), 0), code::CLEAN);
     }
 
     #[test]
