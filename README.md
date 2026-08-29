@@ -105,7 +105,7 @@ Exit codes: `0` clean, `1` errors, `2` warnings only, `3` slint itself failed, `
 | Flag                    | What it does                                                       |
 | ----------------------- | ------------------------------------------------------------------ |
 | `--fix`                 | Apply every computed fix, then lint again.                         |
-| `--format`              | `stylish` (default), `json`, `github`, `sarif`, `compact`.         |
+| `--format`              | `stylish` (default), `json`, `github`, `sarif`, `junit`, `compact`. |
 | `--stdin`               | Lint the document on stdin (static rules only).                    |
 | `--stdin-filename PATH` | The name to report for the stdin document.                         |
 | `--print-config`        | Print the resolved config as JSON and stop.                        |
