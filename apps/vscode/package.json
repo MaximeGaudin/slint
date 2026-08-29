@@ -109,8 +109,9 @@
         },
         "slint.llm.apiKey": {
           "type": "string",
+          "scope": "machine",
           "default": "",
-          "description": "API key for the provider. Prefer User settings (not workspace) so it is not committed. Passed to slint via a process env var, never as a CLI flag."
+          "description": "API key for the provider. User settings only, so it can never be committed to a repo. Passed to slint via a process env var, never as a CLI flag."
         },
         "slint.arguments": {
           "type": "array",
@@ -119,7 +120,7 @@
             "type": "string"
           },
           "default": [],
-          "description": "Extra arguments passed to slint, such as --rule name=off."
+          "description": "Extra arguments passed to slint, such as --rule name=off. Model-pass flags (--llm, --llm-provider, --llm-model, --llm-base-url, --llm-api-key-env) are reserved for the extension's own settings and are ignored here."
         },
         "slint.rules": {
           "scope": "resource",

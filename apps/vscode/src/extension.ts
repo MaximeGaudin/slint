@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process'
 import * as path from 'node:path'
 import { promisify } from 'node:util'
 import * as vscode from 'vscode'
+import { stripReservedLlmArgs } from './argv.js'
 import {
   diagnosticRangeForFinding,
   patchText,
@@ -62,6 +63,9 @@ let diagnostics: vscode.DiagnosticCollection
 let output: vscode.OutputChannel
 let status: vscode.StatusBarItem
 let pending: NodeJS.Timeout | undefined
+let state: vscode.Memento | undefined
+let warnedReservedArgs = false
+let warnedWorkspaceModelPass = false
 /** Cancels superseded child processes and keeps the status bar honest across overlapping runs. */
 const runs = new LintRunCoordinator()
 /** Serializes slint invocations across targets so two runs can never publish over each other. */
@@ -75,6 +79,7 @@ const lastStatic = new Map<string, Envelope>()
 const fixableByFile = new Map<string, Finding[]>()
 
 export function activate(context: vscode.ExtensionContext): void {
+  state = context.globalState
   diagnostics = vscode.languages.createDiagnosticCollection('slint')
   output = vscode.window.createOutputChannel('slint')
   status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50)
@@ -116,6 +121,8 @@ export function activate(context: vscode.ExtensionContext): void {
 
       const onSave = setting<string>('onSave', document.uri) ?? 'no-llm'
       if (onSave === 'nothing') return
+
+      if (onSave === 'llm') warnIfModelPassFromWorkspace()
 
       void lint(directoryOf(document), { model: onSave === 'llm', resource: document.uri })
     }),
@@ -209,6 +216,12 @@ function spawnFor(
   target: string,
   options: { model?: boolean; fix?: boolean; resource?: vscode.Uri } = {},
 ): Spawn {
+  // `slint.arguments` is workspace-settable, so anything that could steer the model pass (and the
+  // API key it carries) to an endpoint of its choosing is dropped before the spawn.
+  const extraArgs = setting<string[]>('arguments', options.resource) ?? []
+  const allowedArgs = stripReservedLlmArgs(extraArgs)
+  if (allowedArgs.length < extraArgs.length) warnReservedArgsIgnored()
+
   const binaryArgs: string[] = [target]
   if (options.fix) binaryArgs.push('--fix')
   // `slint.rules` rides the same `--rule name=level` overrides a config file or the CLI takes;
@@ -218,7 +231,7 @@ function spawnFor(
     'json',
     '--no-color',
     ...ruleOverridesArgv(setting<Record<string, string>>('rules', options.resource)),
-    ...(setting<string[]>('arguments', options.resource) ?? []),
+    ...allowedArgs,
   )
 
   if (options.model) {
@@ -248,6 +261,47 @@ function llmEnv(resource?: vscode.Uri): NodeJS.ProcessEnv {
   if (!apiKey) return { ...process.env }
 
   return { ...process.env, [EDITOR_API_KEY_ENV]: apiKey }
+}
+
+/**
+ * A workspace settings.json can be committed to a repo, so a model pass that a workspace turned on
+ * (rather than the user's own settings) sends file contents to a provider on the word of that repo.
+ * One heads-up per session, dismissable permanently.
+ */
+function warnIfModelPassFromWorkspace(): void {
+  if (warnedWorkspaceModelPass) return
+  if (state?.get('slint.workspaceModelPassWarningDismissed')) return
+  if (!modelPassFromWorkspace()) return
+
+  warnedWorkspaceModelPass = true
+  void vscode.window
+    .showWarningMessage(
+      'This workspace enabled the slint model pass on save (slint.onSave is set in workspace settings). Saving a SKILL.md sends its contents to the configured model provider.',
+      "Don't warn again",
+    )
+    .then((choice) => {
+      if (choice === "Don't warn again") {
+        void state?.update('slint.workspaceModelPassWarningDismissed', true)
+      }
+    })
+}
+
+function modelPassFromWorkspace(): boolean {
+  const info = vscode.workspace.getConfiguration('slint').inspect<string>('onSave')
+  if (!info) return false
+
+  const effective = info.workspaceFolderValue ?? info.workspaceValue ?? info.globalValue
+  return effective === 'llm' && info.globalValue !== 'llm'
+}
+
+/** Model-pass flags in `slint.arguments` are dropped, not forwarded — say so once. */
+function warnReservedArgsIgnored(): void {
+  if (warnedReservedArgs) return
+  warnedReservedArgs = true
+
+  void vscode.window.showWarningMessage(
+    'slint ignored model-pass flags in slint.arguments; the extension controls the model pass from its own settings.',
+  )
 }
 
 async function lintActiveWithModel(): Promise<void> {
