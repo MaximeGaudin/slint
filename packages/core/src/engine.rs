@@ -30,15 +30,18 @@ pub struct Passes {
 }
 
 /// `<!-- slint-disable rule -->` anywhere in the document, and its per-line form.
+///
+/// The payload runs to the end of the comment: an explanation after the rule list is common,
+/// and a `>` inside it — an HTML tag the note mentions — must not defeat the directive.
 /// The keyword is matched case-insensitively — an author who shouts is still
 /// understood, and one who misspells it in caps is still diagnosed as unused.
 static DISABLE_FILE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"<!--\s*(?i:slint-disable)\s+([^\s>-][^>]*?)\s*-->")
+    Regex::new(r"<!--\s*(?i:slint-disable)\s+([^\s>-].*?)\s*-->")
         .expect("the disable pattern compiles")
 });
 
 static DISABLE_LINE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"<!--\s*(?i:slint-disable-next-line)\s+([^\s>-][^>]*?)\s*-->")
+    Regex::new(r"<!--\s*(?i:slint-disable-next-line)\s+([^\s>-].*?)\s*-->")
         .expect("the disable-next-line pattern compiles")
 });
 
@@ -46,7 +49,7 @@ static DISABLE_LINE: LazyLock<Regex> = LazyLock::new(|| {
 /// `<!-- slint-disable-end -->` closes: the rules are silent between the two
 /// comments and live again after it.
 static DISABLE_START: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"<!--\s*(?i:slint-disable-start)\s+([^\s>-][^>]*?)\s*-->")
+    Regex::new(r"<!--\s*(?i:slint-disable-start)\s+([^\s>-].*?)\s*-->")
         .expect("the disable-start pattern compiles")
 });
 
@@ -58,7 +61,7 @@ static DISABLE_END: LazyLock<Regex> = LazyLock::new(|| {
 /// open range — from that line on, the way `eslint-enable` and
 /// `markdownlint-enable` re-activate rules partway through a document.
 static ENABLE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"<!--\s*(?i:slint-enable)(?:\s+([^\s>-][^>]*?))?\s*-->")
+    Regex::new(r"<!--\s*(?i:slint-enable)(?:\s+([^\s>-].*?))?\s*-->")
         .expect("the enable pattern compiles")
 });
 
@@ -209,7 +212,7 @@ impl Suppressions {
             // once — the branch order below keeps the old precedence.
             let mut next_line_rules: Vec<String> = Vec::new();
             for found in DISABLE_LINE.captures_iter(line) {
-                next_line_rules.extend(split_rules(&found[1]));
+                next_line_rules.extend(rule_list(&found[1]));
             }
 
             if !next_line_rules.is_empty() {
@@ -232,11 +235,7 @@ impl Suppressions {
             }
 
             for found in DISABLE_START.captures_iter(line) {
-                open_ranges.extend(
-                    split_rules(&found[1])
-                        .into_iter()
-                        .map(|rule| (rule, number)),
-                );
+                open_ranges.extend(rule_list(&found[1]).into_iter().map(|rule| (rule, number)));
             }
             if DISABLE_START.is_match(line) {
                 continue;
@@ -248,7 +247,7 @@ impl Suppressions {
             }
 
             for found in ENABLE.captures_iter(line) {
-                let named = found.get(1).map(|rules| split_rules(rules.as_str()));
+                let named = found.get(1).map(|rules| rule_list(rules.as_str()));
                 let lifted = lift_file_disables(&mut suppressions, named.as_deref(), number);
                 let closed = close_ranges(
                     &mut suppressions,
@@ -281,7 +280,7 @@ impl Suppressions {
             }
 
             for found in DISABLE_FILE.captures_iter(line) {
-                for rule in split_rules(&found[1]) {
+                for rule in rule_list(&found[1]) {
                     suppressions.file.insert(rule.clone());
                     suppressions.directives.push(Directive {
                         rule,
@@ -421,12 +420,45 @@ fn lift_file_disables(
     lifted
 }
 
-fn split_rules(text: &str) -> Vec<String> {
-    text.split([',', ' '])
-        .map(|part| part.trim())
-        .filter(|part| !part.is_empty())
-        .map(|part| part.to_string())
-        .collect()
+/// The rules a directive names: the leading run of tokens that are rule names.
+///
+/// A rule name is a namespace and a name, `body/posix-paths`. The first token that is not one —
+/// a word of the explanation appended after the list — ends it, so the note can say anything.
+fn rule_list(payload: &str) -> Vec<String> {
+    let mut rules = Vec::new();
+
+    for token in payload.split([',', ' ']) {
+        let token = token.trim();
+
+        if is_rule_name(token) {
+            rules.push(token.to_string());
+        } else if !token.is_empty() {
+            break;
+        }
+    }
+
+    rules
+}
+
+fn is_rule_name(token: &str) -> bool {
+    // A namespace wildcard (`body/*`) is a payload token in its own right: its
+    // base keeps the trailing separator the wildcard rides on.
+    if let Some(base) = token.strip_suffix('*') {
+        return base.contains('/')
+            && base
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '/')
+            && !base.starts_with('/')
+            && !base.contains("//");
+    }
+
+    token.contains('/')
+        && token
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '/')
+        && !token.starts_with('/')
+        && !token.ends_with('/')
+        && !token.contains("//")
 }
 
 /// The rule name slint reports an unused suppression comment under. Not part of
@@ -1245,6 +1277,48 @@ mod tests {
 
         assert!(suppressions.file.contains("body/posix-paths"));
         assert!(suppressions.file.contains("name/not-generic"));
+    }
+
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/271 —
+    /// a `>` in the explanation after the rule list (an HTML tag, say) used to defeat the
+    /// whole directive, with no diagnostic.
+    #[test]
+    fn a_disable_comment_survives_free_text_that_contains_a_gt() {
+        let suppressions = Suppressions::read(
+            "<!-- slint-disable body/posix-paths, matches the <script> tag pattern -->\n",
+        );
+
+        assert!(
+            suppressions.file.contains("body/posix-paths"),
+            "the directive must survive the '>' in the trailing text: {:?}",
+            suppressions.file
+        );
+    }
+
+    /// The same survival for the per-line form, and the free text must not itself suppress
+    /// anything.
+    #[test]
+    fn a_disable_next_line_comment_survives_free_text_and_suppresses_only_the_named_rules() {
+        let suppressions = Suppressions::read(
+            "one\n<!-- slint-disable-next-line body/posix-paths (like <b> emphasis), but not body/no-secret -->\ntwo\n",
+        );
+
+        assert!(
+            suppressions
+                .lines
+                .iter()
+                .any(|(line, rule)| *line == 3 && rule == "body/posix-paths"),
+            "the named rule must be silenced on the next line: {:?}",
+            suppressions.lines
+        );
+        assert!(
+            !suppressions
+                .lines
+                .iter()
+                .any(|(_, rule)| rule == "body/no-secret"),
+            "a rule named only in the free text must not be silenced: {:?}",
+            suppressions.lines
+        );
     }
 
     /// Regression for https://github.com/MaximeGaudin/slint/issues/274 —
