@@ -161,6 +161,8 @@ mod tests {
         );
     }
 
+    // https://github.com/MaximeGaudin/slint/issues/177: the name "compact" is ESLint's, and the
+    // shape has to be ESLint's too: `path: line X, col Y, Severity - message (rule)`.
     #[test]
     fn compact_prints_one_grep_friendly_line_per_finding() {
         let mut report = sample();
@@ -169,7 +171,25 @@ mod tests {
         let lines: Vec<&str> = text.lines().collect();
 
         assert_eq!(lines.len(), 2);
-        assert!(lines[0].starts_with("skills/helper/SKILL.md:2:1: warning [name/not-generic]"));
+        assert_eq!(
+            lines[0],
+            "skills/helper/SKILL.md: line 2, col 1, Warning - \"helper\" says nothing about what this does (name/not-generic)"
+        );
+        assert_eq!(
+            lines[1],
+            "skills/helper/SKILL.md: line 9, col 1, Error - The instructions name scripts/cull.py, which is not in the bundle (bundle/no-dangling-path)"
+        );
+    }
+
+    #[test]
+    fn an_info_finding_reads_as_a_note_in_compact() {
+        let mut report = sample();
+        report.skills[0].notes.clear();
+        report.skills[0].messages[0].severity = Severity::Info;
+
+        let text = compact(&report);
+
+        assert!(text.contains(", Note - "), "{text}");
     }
 
     // https://github.com/MaximeGaudin/slint/issues/134: a note says a pass did not run, and a
