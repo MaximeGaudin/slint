@@ -576,7 +576,7 @@ mod tests {
         write_skill(
             temporary.path(),
             "fix-github-issue",
-            "---\nname: fix-github-issue\ndescription: Investigate a GitHub issue using TDD in an isolated git worktree — write a failing regression test first, commit it, implement the fix, align and run local checks that mirror CI before push, open a PR, and wait until CI is green. Use when the user pastes a GitHub issue URL/number, or asks to fix, investigate, or implement an issue.\n---\n\n### 6a. Make local lint/check match CI\n\nBefore running checks, compare CI to local entrypoints:\n\n1. Read `.github/workflows/*` (and similar) for every required job/step (fmt, lint, tests, deny, typecheck, …)\n2. Read the project’s local gate: `scripts/check.sh`, `Makefile`, `package.json` scripts (`lint`, `test`, `check`), `turbo` tasks, etc.\n",
+            "---\nname: fix-github-issue\ndescription: Investigate a GitHub issue using TDD in an isolated git worktree — write a failing regression test first, commit it, implement the fix, align and run local checks that mirror CI before push, open a PR, and wait until CI is green. Use when the user pastes a GitHub issue URL/number, or asks to fix, investigate, or implement an issue.\n---\n\n### 6a. Make local lint/check match CI\n\nBefore running checks, compare CI to local entrypoints:\n\n1. Read `.github/workflows/*` (and similar) for every required job/step (fmt, lint, tests, deny, typecheck, …)\n2. Read the project’s local gate: `./scripts/check.sh`, `Makefile`, `package.json` scripts (`lint`, `test`, `check`), `turbo` tasks, etc.\n",
         );
 
         let report = run(
