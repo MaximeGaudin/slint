@@ -271,7 +271,8 @@ fn two_fixable_rules_on_one_file_converge_in_a_single_fix() {
 
     let fixed = slint(&[temporary.path().to_str().unwrap(), "--no-llm", "--fix"]);
     let text = stdout(&fixed);
-    assert!(text.contains("2 fix(es) applied"), "{text}");
+    assert!(text.contains("2 fixes applied"), "{text}");
+    assert!(!text.contains("(s)"), "{text}");
 
     let document = fs::read_to_string(temporary.path().join("photo-culling/SKILL.md")).unwrap();
     assert!(!document.contains("<b>"), "{document}");

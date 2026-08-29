@@ -154,10 +154,24 @@ fn counts_for(skill: &crate::diagnostics::SkillReport) -> String {
     let parts: Vec<String> = [(errors, "error"), (warnings, "warning"), (infos, "note")]
         .into_iter()
         .filter(|(count, _)| *count > 0)
-        .map(|(count, label)| format!("{count} {label}{}", if count == 1 { "" } else { "s" }))
+        .map(|(count, label)| plural(count, label))
         .collect();
 
     parts.join(", ")
+}
+
+/// A count and its word, said properly: "1 error" and "2 errors" — never the "(s)" placeholder.
+/// Words that pluralise with -es ("fix" → "fixes") get it, so the applied count reads right too.
+fn plural(count: usize, word: &str) -> String {
+    let suffix = if count == 1 {
+        ""
+    } else if word.ends_with(['s', 'x', 'z']) || word.ends_with("ch") || word.ends_with("sh") {
+        "es"
+    } else {
+        "s"
+    };
+
+    format!("{count} {word}{suffix}")
 }
 
 /// The last line: what was found, and what can be done about it without thinking.
@@ -172,7 +186,7 @@ fn summary(report: &Report, colour: bool) -> String {
         );
 
         if report.fixed > 0 {
-            nothing.push_str(&format!("\n{} fix(es) applied.", report.fixed));
+            nothing.push_str(&format!("\n{} applied.", plural(report.fixed, "fix")));
         }
 
         return nothing;
@@ -184,7 +198,10 @@ fn summary(report: &Report, colour: bool) -> String {
 
     if errors + warnings + infos == 0 {
         let mut clean = paint(
-            &format!("Nothing to report across {} skill(s).", report.skills.len()),
+            &format!(
+                "Nothing to report across {}.",
+                plural(report.skills.len(), "skill")
+            ),
             Paint::Green,
             colour,
         );
@@ -192,16 +209,19 @@ fn summary(report: &Report, colour: bool) -> String {
         // A run that fixed everything it found still has to say what it did to the files, or
         // --fix looks like it did nothing at all.
         if report.fixed > 0 {
-            clean.push_str(&format!("\n{} fix(es) applied.", report.fixed));
+            clean.push_str(&format!("\n{} applied.", plural(report.fixed, "fix")));
         }
 
         return clean;
     }
 
     let counted = format!(
-        "{} problem(s): {errors} error(s), {warnings} warning(s), {infos} note(s) across {} skill(s).",
-        errors + warnings + infos,
-        report.skills.len()
+        "{}: {}, {}, {} across {}.",
+        plural(errors + warnings + infos, "problem"),
+        plural(errors, "error"),
+        plural(warnings, "warning"),
+        plural(infos, "note"),
+        plural(report.skills.len(), "skill")
     );
 
     let mut line = if errors > 0 {
@@ -223,7 +243,7 @@ fn summary(report: &Report, colour: bool) -> String {
     }
 
     if report.fixed > 0 {
-        line.push_str(&format!("\n{} fix(es) applied.", report.fixed));
+        line.push_str(&format!("\n{} applied.", plural(report.fixed, "fix")));
     }
 
     line
