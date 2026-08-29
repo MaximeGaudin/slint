@@ -351,7 +351,21 @@ impl Rule for PosixPaths {
             })
             .collect();
 
+        // A fenced block illustrates a path rather than naming one, the same way
+        // body/imperative-instructions and the bundle scan read fences: nothing inside
+        // ``` or ~~~ is an instruction to fix.
+        let mut in_fence = false;
+
         for (index, (line, start)) in lines.into_iter().enumerate() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+                in_fence = !in_fence;
+                continue;
+            }
+            if in_fence {
+                continue;
+            }
+
             if line.contains("http") {
                 continue;
             }
@@ -935,6 +949,17 @@ mod tests {
         assert!(patched.contains("scripts/notes.md"), "{patched}");
         assert!(!patched.contains('\\'), "{patched}");
         assert!(patched.starts_with('\u{feff}'), "the mark is untouched");
+    }
+
+    #[test]
+    fn a_windows_path_inside_a_fenced_example_is_not_reported() {
+        for (open, close) in [("```text", "```"), ("~~~", "~~~")] {
+            let skill = skill_with_body(&format!(
+                "\n## Steps\n\n1. Run the conversion.\n\n{open}\nBefore: scripts\\legacy\\run.bat\nAfter: scripts/legacy/run.py\n{close}\n",
+            ));
+
+            assert!(check(&POSIX_RULE, &skill).is_empty(), "for {open}{close}");
+        }
     }
 
     #[test]
