@@ -25,6 +25,22 @@ That writes `slint.toml`. `slint.config.json` and `.slintrc.json` work too, with
 The file is found by walking up from whatever you asked slint to lint, so running it inside a
 subdirectory uses the project's settings rather than none.
 
+## Editor autocomplete
+
+Point a JSON config's `$schema` at the published schema and the editor flags a misspelt field
+before slint ever runs — the same way `tsconfig.json` and `biome.json` behave:
+
+```json
+{
+  "$schema": "https://slint.dev/schemas/slint-config.json",
+  "rules": { "description/says-when": "error" }
+}
+```
+
+The schema is generated from the code that reads the config (`slint schema` prints it), so it cannot
+drift from what slint actually accepts. The VS Code extension wires it up for `slint.config.json`
+and `.slintrc.json` on its own.
+
 ## Rules
 
 ```toml
@@ -38,6 +54,15 @@ A severity is `off`, `info`, `warn` or `error`; `0`, `1` and `2` work as well, f
 from ESLint. A rule with options takes a list: the severity, then an object the rule reads for
 itself. Each rule's page lists what it accepts.
 
+When a rule misbehaves and you cannot tell why, the resolved config — file, flags and all — is one
+command away:
+
+```bash
+slint --print-config | jq '.rules'
+```
+
+And `slint --explain body/max-lines` prints one rule's entry instead of the whole catalogue.
+
 ## What to skip
 
 ```toml
@@ -46,6 +71,22 @@ ignore = ["**/fixtures/**", "**/vendor/**"]
 
 Directories that are never a skill — `.git`, `node_modules`, `target`, `dist`, `.venv` — are
 skipped without being configured, because nobody has ever wanted them linted.
+
+To point at a different ignore file without editing the config:
+
+```bash
+slint --ignore-path .gitignore
+```
+
+It reads one glob per line, `#` comments allowed, and adds them to whatever the config already says.
+`--no-ignore` goes the other way: lint everything, even what the config would skip.
+
+## Your own defaults
+
+When no project config exists anywhere up the tree, slint falls back to a user-global one:
+`$XDG_CONFIG_HOME/slint/config.toml`, or `~/.config/slint/config.toml`. That is the home for a
+personal set of severities, or an `[llm]` block you do not want to repeat in every repository. A
+project config always wins when there is one — the fallback never edits what a project meant.
 
 ## Silencing a rule for one document
 
