@@ -235,7 +235,9 @@ fn read_bundle(directory: &Path) -> Result<(Vec<BundledFile>, Vec<String>)> {
         if !entry.file_type().is_file() {
             continue;
         }
-        if entry.file_name() == SKILL_FILE && entry.path().parent() == Some(directory) {
+        // A manifest belongs to the skill whose directory holds it. A nested skill's SKILL.md is
+        // that skill's document — wherever it sits below this one — never content of this bundle.
+        if entry.file_name().eq_ignore_ascii_case(SKILL_FILE) {
             continue;
         }
 
