@@ -220,7 +220,11 @@ pub struct Config {
 ///
 /// The `JsonSchema` derive is what `slint schema` prints: one description of the config format,
 /// generated from this struct so the schema cannot drift from what slint actually reads.
+///
+/// `deny_unknown_fields` is the point: a section name off by one used to load as if the file were
+/// empty, so the whole config silently did nothing and the run went on as if none had been read.
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct RawConfig {
     /// Which rules to change, keyed by rule name (`area/thing`).
     #[serde(default)]
@@ -785,5 +789,21 @@ mod tests {
         assert!(config.rules.is_empty());
         assert_eq!(config.llm.provider, Provider::None);
         assert!(!config.llm.is_configured());
+    }
+
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/26 —
+    /// a section name off by one used to load as if the file were empty, so the whole config
+    /// silently did nothing.
+    #[test]
+    fn a_mis_spelled_top_level_section_is_refused_rather_than_silently_dropped() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("slint.toml");
+        fs::write(&path, "[rule]\n\"name/not-generic\" = \"off\"\n").unwrap();
+
+        let failure = load(&path).unwrap_err();
+        let failure = format!("{failure:#}");
+
+        assert!(failure.contains("unknown field `rule`"), "{failure}");
+        assert!(failure.contains("rules"), "{failure}");
     }
 }
