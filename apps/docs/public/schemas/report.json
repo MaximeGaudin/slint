@@ -23,12 +23,7 @@
           "type": "integer"
         }
       },
-      "required": [
-        "start",
-        "end",
-        "replacement",
-        "description"
-      ],
+      "required": ["start", "end", "replacement", "description"],
       "type": "object"
     },
     "Location": {
@@ -42,18 +37,12 @@
         "end_column": {
           "format": "uint",
           "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": ["integer", "null"]
         },
         "end_line": {
           "format": "uint",
           "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": ["integer", "null"]
         },
         "line": {
           "format": "uint",
@@ -61,10 +50,7 @@
           "type": "integer"
         }
       },
-      "required": [
-        "line",
-        "column"
-      ],
+      "required": ["line", "column"],
       "type": "object"
     },
     "Message": {
@@ -137,10 +123,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "title",
-        "url"
-      ],
+      "required": ["title", "url"],
       "type": "object"
     },
     "Report": {
@@ -167,10 +150,7 @@
           "type": "array"
         }
       },
-      "required": [
-        "skills",
-        "fixed"
-      ],
+      "required": ["skills", "fixed"],
       "type": "object"
     },
     "Severity": {
@@ -217,12 +197,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "path",
-        "name",
-        "messages",
-        "notes"
-      ],
+      "required": ["path", "name", "messages", "notes"],
       "type": "object"
     },
     "Source": {
@@ -278,14 +253,7 @@
           "type": "integer"
         }
       },
-      "required": [
-        "skills",
-        "errors",
-        "warnings",
-        "infos",
-        "fixable",
-        "fixed"
-      ],
+      "required": ["skills", "errors", "warnings", "infos", "fixable", "fixed"],
       "type": "object"
     }
   },
@@ -310,12 +278,7 @@
       "$ref": "#/$defs/Summary"
     }
   },
-  "required": [
-    "schemaVersion",
-    "ok",
-    "summary",
-    "data"
-  ],
+  "required": ["schemaVersion", "ok", "summary", "data"],
   "title": "slint report",
   "type": "object"
 }

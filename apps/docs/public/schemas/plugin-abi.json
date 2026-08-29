@@ -17,17 +17,10 @@
         },
         "text": {
           "description": "`None` for anything that is not UTF-8 text, or above [`MAX_TEXT_FILE_BYTES`]: an image\nis a file to count, not to read.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         }
       },
-      "required": [
-        "path",
-        "bytes",
-        "executable"
-      ],
+      "required": ["path", "bytes", "executable"],
       "type": "object"
     },
     "PluginInput": {
@@ -43,10 +36,7 @@
           "type": "integer"
         }
       },
-      "required": [
-        "version",
-        "skill"
-      ],
+      "required": ["version", "skill"],
       "title": "PluginInput",
       "type": "object"
     },
@@ -54,26 +44,17 @@
       "properties": {
         "advice": {
           "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "file": {
           "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "line": {
           "default": null,
           "format": "uint",
           "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": ["integer", "null"]
         },
         "message": {
           "type": "string"
@@ -89,11 +70,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "rule",
-        "message",
-        "reference"
-      ],
+      "required": ["rule", "message", "reference"],
       "type": "object"
     },
     "PluginOutput": {
@@ -118,10 +95,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "title",
-        "url"
-      ],
+      "required": ["title", "url"],
       "type": "object"
     },
     "Skill": {
