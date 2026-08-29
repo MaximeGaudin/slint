@@ -90,13 +90,13 @@
   {
     "name": "body/token-budget",
     "summary": "Keep the body within a reasonable token budget (~5000 tokens).",
-    "rationale": "The whole body is loaded when the skill is selected, on top of the conversation and tools. Oversized bodies crowd out useful context.",
+    "rationale": "The whole body is loaded when the skill is activated, on top of the conversation and tools — the specification recommends keeping it under 5000 tokens. Oversized bodies crowd out useful context.",
     "advice": "Move detail into referenced files that load only when needed, instead of on every activation.",
     "default_severity": "warning",
     "fixable": false,
     "needs_model": false,
-    "reference_title": "Skill authoring best practices — Claude Docs",
-    "reference_url": "https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices"
+    "reference_title": "The AgentSkill specification",
+    "reference_url": "https://agentskills.io/specification"
   },
   {
     "name": "body/undeclared-tool",
@@ -172,8 +172,8 @@
     "default_severity": "warning",
     "fixable": false,
     "needs_model": false,
-    "reference_title": "The AgentSkill specification",
-    "reference_url": "https://agentskills.io/specification"
+    "reference_title": "slint's own authoring conventions",
+    "reference_url": "https://slint.dev/rules"
   },
   {
     "name": "bundle/unused-file",
@@ -212,7 +212,7 @@
     "name": "description/min-length",
     "summary": "The description must be long enough to explain what the skill does and when to use it.",
     "rationale": "The agent chooses among all available skills using this text alone. A few words cannot carry both the purpose and the trigger.",
-    "advice": "Expand to roughly 150–300 characters: what it does, then when to use it, in the words a request would use.",
+    "advice": "Expand to at least 80 characters — what it does, then when to use it, in the words a request would use.",
     "default_severity": "warning",
     "fixable": false,
     "needs_model": false,
@@ -275,6 +275,17 @@
     "reference_url": "https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices"
   },
   {
+    "name": "frontmatter/compatibility-max-length",
+    "summary": "Keep the compatibility field at or under 500 characters.",
+    "rationale": "The specification caps compatibility at 1–500 characters. A longer field is rejected by strict hosts, and an environment blurb that long is doing the body's job.",
+    "advice": "Shorten compatibility to the environment requirements only (example: \"Requires Python 3.11+ and docker\"), and move the rest into the body.",
+    "default_severity": "error",
+    "fixable": false,
+    "needs_model": false,
+    "reference_title": "The AgentSkill specification",
+    "reference_url": "https://agentskills.io/specification"
+  },
+  {
     "name": "frontmatter/key-format",
     "summary": "Frontmatter keys should be lowercase with hyphens (no spaces).",
     "rationale": "Keys with spaces or odd capitalization often fail to resolve when the skill is loaded.",
@@ -297,10 +308,21 @@
     "reference_url": "https://agentskills.io/specification"
   },
   {
+    "name": "frontmatter/type-error",
+    "summary": "name and description must be YAML strings.",
+    "rationale": "An agent reads the name and description as text. A value YAML parses as a number, boolean, null, sequence, or mapping is not that text — or is nothing at all — and every check on it would run against the wrong thing.",
+    "advice": "Write the value as plain text, quoting it if it starts with a character YAML treats specially.",
+    "default_severity": "error",
+    "fixable": false,
+    "needs_model": false,
+    "reference_title": "The AgentSkill specification",
+    "reference_url": "https://agentskills.io/specification"
+  },
+  {
     "name": "frontmatter/unknown-field",
-    "summary": "Top-level frontmatter keys must be agentskills.io fields (or live under metadata).",
-    "rationale": "Product-specific keys at the top level (for example Cursor's disable-model-invocation) are invisible or rejected on other hosts. The spec keeps the top-level set closed and puts extras under metadata.",
-    "advice": "Remove the key, or move product-specific options under metadata (example: metadata.disable-model-invocation). Recognized top-level fields: name, description, license, compatibility, metadata, allowed-tools.",
+    "summary": "Top-level frontmatter keys must be agentskills.io fields, Claude Code extensions, or live under metadata.",
+    "rationale": "Product-specific keys at the top level are invisible or rejected on other hosts. The spec keeps its own top-level set closed; Claude Code's documented extensions are recognized, and anything else belongs under metadata.",
+    "advice": "Remove the key, or move product-specific options under metadata (example: metadata.version). Recognized top-level fields: name, description, license, compatibility, metadata, allowed-tools, plus Claude Code's extensions (disable-model-invocation, user-invocable, disallowed-tools, model, effort, context, agent, background, hooks, paths, shell, argument-hint, arguments, when_to_use).",
     "default_severity": "warning",
     "fixable": false,
     "needs_model": false,
@@ -315,8 +337,8 @@
     "default_severity": "warning",
     "fixable": false,
     "needs_model": true,
-    "reference_title": "Authoring Agent Skills: a software-engineering approach",
-    "reference_url": "https://arxiv.org/html/2607.25032v1"
+    "reference_title": "Skill authoring best practices — Claude Docs",
+    "reference_url": "https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices"
   },
   {
     "name": "llm/default-choice",
@@ -420,13 +442,13 @@
   {
     "name": "name/no-reserved-word",
     "summary": "Do not put reserved vendor words (like anthropic or claude) in the skill name.",
-    "rationale": "Those words are reserved by the specification. A skill that uses them can be rejected on upload.",
+    "rationale": "Claude's skill guidelines reserve those words; a skill that uses them can be rejected on upload.",
     "advice": "Remove the reserved word from the name. Name the skill after what it does instead.",
     "default_severity": "error",
     "fixable": false,
     "needs_model": false,
-    "reference_title": "The AgentSkill specification",
-    "reference_url": "https://agentskills.io/specification"
+    "reference_title": "Skill authoring best practices — Claude Docs",
+    "reference_url": "https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices"
   },
   {
     "name": "name/not-generic",
@@ -434,6 +456,17 @@
     "rationale": "Names like helper or utils give the agent nothing to match a user request against, and they collide with other generic skills.",
     "advice": "Rename it to the domain plus the action (example: cull-photos, not helper).",
     "default_severity": "warning",
+    "fixable": false,
+    "needs_model": false,
+    "reference_title": "Skill authoring best practices — Claude Docs",
+    "reference_url": "https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices"
+  },
+  {
+    "name": "project/consistent-naming-style",
+    "summary": "Skill names in the same project should follow one naming convention.",
+    "rationale": "The best-practices guide lists inconsistent patterns within a skill collection as an anti-pattern. Gerund names beside noun-phrase names read as an accident and make the collection harder to scan.",
+    "advice": "Pick one convention for the whole collection — the guide suggests the gerund form (verb + -ing, as in processing-pdfs) — and rename the outliers to match.",
+    "default_severity": "info",
     "fixable": false,
     "needs_model": false,
     "reference_title": "Skill authoring best practices — Claude Docs",
@@ -453,12 +486,12 @@
   {
     "name": "project/unique-name",
     "summary": "No two skills in the project may share the same name.",
-    "rationale": "The name is an address. If two skills share it, whichever loads last wins — depending on folder walk order.",
+    "rationale": "The name is an address. When two skills share one, the host resolves the conflict by source — Claude Code, for example, lets a personal skill override a project skill of the same name — so one skill silently stops loading.",
     "advice": "Rename one skill so each name is unique and describes what makes that skill different.",
     "default_severity": "error",
     "fixable": false,
     "needs_model": false,
-    "reference_title": "The AgentSkill specification",
-    "reference_url": "https://agentskills.io/specification"
+    "reference_title": "Extend Claude with skills — Claude Code docs",
+    "reference_url": "https://code.claude.com/docs/en/skills"
   }
 ]
