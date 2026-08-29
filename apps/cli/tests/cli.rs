@@ -1023,6 +1023,7 @@ fn a_base_url_that_came_from_the_config_warns_before_anything_is_sent() {
     );
 }
 
+#[test]
 fn a_plugin_named_by_the_config_does_not_run_unless_asked_for() {
     let temporary = tempfile::tempdir().unwrap();
 
