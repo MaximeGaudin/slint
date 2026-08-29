@@ -10,6 +10,11 @@ use crate::rules::{Rule, RuleContext, RuleMeta, sources};
 static WINDOWS_PATH: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[\w.-]+\\[\w.-]+").expect("the windows path pattern compiles"));
 
+/// A whole backslash-separated run (`a\b\c`), not just one pair of segments.
+static WINDOWS_PATH_RUN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"[\w.-]+(?:\\[\w.-]+)+").expect("the windows path run pattern compiles")
+});
+
 static ABSOLUTE_PATH: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?:^|[\s`(\x22'])((?:/(?:Users|home|var|opt|tmp)/|~/)[\w./-]+)")
         .expect("the absolute path pattern compiles")
@@ -355,32 +360,33 @@ impl Rule for PosixPaths {
                 continue;
             };
 
+            // Widen the two-segment match to the whole path run on this line, so `a\b\c` is
+            // reported and fixed as one unit in a single pass.
+            let suffix = &line[found.start()..];
+            let run_len = WINDOWS_PATH_RUN
+                .find(suffix)
+                .filter(|candidate| candidate.start() == 0)
+                .map(|candidate| candidate.len())
+                .unwrap_or(found.len());
+            let run_start = found.start();
+            let run_text = &line[run_start..run_start + run_len];
+
             let document_line = context.skill.document_line(index + 1);
-            let location = Location::span(document_line, found.start() + 1, found.len());
+            let location = Location::span(document_line, run_start + 1, run_len);
 
-            // The whole line, with every separator normalised: two backslashes on one line are
-            // one problem, and a fix per occurrence would fight itself on the next pass. Scoped
-            // to the line rather than the document, so it never overlaps another fix elsewhere
-            // in SKILL.md and both apply in one --fix invocation.
-            let replacement = WINDOWS_PATH
-                .replace_all(line, |captures: &regex::Captures<'_>| {
-                    captures[0].replace('\\', "/")
-                })
-                .to_string();
-
+            // The fix covers exactly the run it reports, not the line around it: a backslash
+            // elsewhere on the line (a regex escape, a URL fragment) is nobody's path and stays
+            // untouched. One finding per line: ten separators on one line is one thing to fix.
             context.report_fixable(
-                format!("\"{}\" is a Windows path", found.as_str()),
+                format!("\"{}\" is a Windows path", run_text),
                 location,
                 Fix {
-                    start,
-                    end: start + line.len(),
-                    replacement,
-                    description: "Replaces backslash separators with forward slashes on this line."
-                        .into(),
+                    start: start + run_start,
+                    end: start + run_start + run_len,
+                    replacement: run_text.replace('\\', "/"),
+                    description: "Replaces backslash separators with forward slashes.".into(),
                 },
             );
-
-            // One finding per line: ten separators on one line is one thing to fix.
         }
     }
 }
@@ -876,6 +882,44 @@ mod tests {
         assert!(patched.contains("scripts/notes.md"));
         assert!(patched.contains("references/formats.md"));
         assert!(!patched.contains('\\'));
+    }
+
+    #[test]
+    fn the_windows_path_fix_leaves_unrelated_backslash_text_alone() {
+        let skill = skill_with_body(
+            "\n## Culling\n\n1. Read scripts\\notes.md.\n2. See https://example.com/a\\b for the format.\n",
+        );
+        let messages = check(&POSIX_RULE, &skill);
+
+        assert_eq!(messages.len(), 1, "only the path line is reported");
+
+        let fix = messages[0].fix.as_ref().unwrap();
+        let mut patched = skill.source.clone();
+        patched.replace_range(fix.start..fix.end, &fix.replacement);
+
+        assert!(patched.contains("scripts/notes.md"));
+        assert!(
+            patched.contains("https://example.com/a\\b"),
+            "the url line must be untouched, got: {patched}"
+        );
+    }
+
+    #[test]
+    fn the_windows_path_fix_normalises_a_multi_segment_path_in_one_fix() {
+        let skill = skill_with_body("\n## Culling\n\n1. Read scripts\\notes\\more.md first.\n");
+        let messages = check(&POSIX_RULE, &skill);
+
+        assert_eq!(messages.len(), 1, "one finding per line");
+
+        let fix = messages[0].fix.as_ref().unwrap();
+        let mut patched = skill.source.clone();
+        patched.replace_range(fix.start..fix.end, &fix.replacement);
+
+        assert!(patched.contains("scripts/notes/more.md"));
+        assert!(
+            !patched.contains('\\'),
+            "the whole path run is fixed at once"
+        );
     }
 
     #[test]
