@@ -82,6 +82,7 @@ mod tests {
         let empty = Report {
             skills: vec![],
             fixed: 0,
+            notes: Vec::new(),
         };
         assert!(render(&empty).is_empty());
     }
