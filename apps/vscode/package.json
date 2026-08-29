@@ -399,6 +399,17 @@
               "default": "warning",
               "description": "Write the description in the third person (\\ (default: warning)."
             },
+            "frontmatter/compatibility-max-length": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "error",
+              "description": "Keep the compatibility field at or under 500 characters. (default: error)."
+            },
             "frontmatter/key-format": {
               "type": "string",
               "enum": [
@@ -574,6 +585,17 @@
               ],
               "default": "warning",
               "description": "The skill name should describe what the skill does. (default: warning)."
+            },
+            "project/consistent-naming-style": {
+              "type": "string",
+              "enum": [
+                "off",
+                "error",
+                "warning",
+                "info"
+              ],
+              "default": "info",
+              "description": "Skill names in the same project should follow one naming convention. (default: info)."
             },
             "project/distinct-descriptions": {
               "type": "string",

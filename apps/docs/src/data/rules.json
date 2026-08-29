@@ -275,6 +275,17 @@
     "reference_url": "https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices"
   },
   {
+    "name": "frontmatter/compatibility-max-length",
+    "summary": "Keep the compatibility field at or under 500 characters.",
+    "rationale": "The specification caps compatibility at 1–500 characters. A longer field is rejected by strict hosts, and an environment blurb that long is doing the body's job.",
+    "advice": "Shorten compatibility to the environment requirements only (example: \"Requires Python 3.11+ and docker\"), and move the rest into the body.",
+    "default_severity": "error",
+    "fixable": false,
+    "needs_model": false,
+    "reference_title": "The AgentSkill specification",
+    "reference_url": "https://agentskills.io/specification"
+  },
+  {
     "name": "frontmatter/key-format",
     "summary": "Frontmatter keys should be lowercase with hyphens (no spaces).",
     "rationale": "Keys with spaces or odd capitalization often fail to resolve when the skill is loaded.",
@@ -297,10 +308,21 @@
     "reference_url": "https://agentskills.io/specification"
   },
   {
+    "name": "frontmatter/type-error",
+    "summary": "name and description must be YAML strings.",
+    "rationale": "An agent reads the name and description as text. A value YAML parses as a number, boolean, null, sequence, or mapping is not that text — or is nothing at all — and every check on it would run against the wrong thing.",
+    "advice": "Write the value as plain text, quoting it if it starts with a character YAML treats specially.",
+    "default_severity": "error",
+    "fixable": false,
+    "needs_model": false,
+    "reference_title": "The AgentSkill specification",
+    "reference_url": "https://agentskills.io/specification"
+  },
+  {
     "name": "frontmatter/unknown-field",
-    "summary": "Top-level frontmatter keys must be agentskills.io fields (or live under metadata).",
-    "rationale": "Product-specific keys at the top level (for example Cursor's disable-model-invocation) are invisible or rejected on other hosts. The spec keeps the top-level set closed and puts extras under metadata.",
-    "advice": "Remove the key, or move product-specific options under metadata (example: metadata.disable-model-invocation). Recognized top-level fields: name, description, license, compatibility, metadata, allowed-tools.",
+    "summary": "Top-level frontmatter keys must be agentskills.io fields, Claude Code extensions, or live under metadata.",
+    "rationale": "Product-specific keys at the top level are invisible or rejected on other hosts. The spec keeps its own top-level set closed; Claude Code's documented extensions are recognized, and anything else belongs under metadata.",
+    "advice": "Remove the key, or move product-specific options under metadata (example: metadata.version). Recognized top-level fields: name, description, license, compatibility, metadata, allowed-tools, plus Claude Code's extensions (disable-model-invocation, user-invocable, disallowed-tools, model, effort, context, agent, background, hooks, paths, shell, argument-hint, arguments, when_to_use).",
     "default_severity": "warning",
     "fixable": false,
     "needs_model": false,
@@ -434,6 +456,17 @@
     "rationale": "Names like helper or utils give the agent nothing to match a user request against, and they collide with other generic skills.",
     "advice": "Rename it to the domain plus the action (example: cull-photos, not helper).",
     "default_severity": "warning",
+    "fixable": false,
+    "needs_model": false,
+    "reference_title": "Skill authoring best practices — Claude Docs",
+    "reference_url": "https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices"
+  },
+  {
+    "name": "project/consistent-naming-style",
+    "summary": "Skill names in the same project should follow one naming convention.",
+    "rationale": "The best-practices guide lists inconsistent patterns within a skill collection as an anti-pattern. Gerund names beside noun-phrase names read as an accident and make the collection harder to scan.",
+    "advice": "Pick one convention for the whole collection — the guide suggests the gerund form (verb + -ing, as in processing-pdfs) — and rename the outliers to match.",
+    "default_severity": "info",
     "fixable": false,
     "needs_model": false,
     "reference_title": "Skill authoring best practices — Claude Docs",

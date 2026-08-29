@@ -3,6 +3,9 @@
 use crate::diagnostics::{Location, Severity};
 use crate::rules::{Rule, RuleContext, RuleMeta, sources};
 
+/// The specification's cap on the optional compatibility field.
+const COMPATIBILITY_MAX_LENGTH: usize = 500;
+
 /// Top-level frontmatter fields recognized by the Agent Skills specification.
 /// Product-specific options belong under `metadata`, not as new top-level keys.
 const SPEC_FIELDS: [&str; 6] = [
@@ -74,9 +77,22 @@ static UNKNOWN_FIELD: RuleMeta = RuleMeta {
     reference_url: sources::SPECIFICATION.1,
 };
 
+static COMPATIBILITY_MAX_LENGTH_META: RuleMeta = RuleMeta {
+    name: "frontmatter/compatibility-max-length",
+    summary: "Keep the compatibility field at or under 500 characters.",
+    rationale: "The specification caps compatibility at 1–500 characters. A longer field is rejected by strict hosts, and an environment blurb that long is doing the body's job.",
+    advice: "Shorten compatibility to the environment requirements only (example: \"Requires Python 3.11+ and docker\"), and move the rest into the body.",
+    default_severity: Severity::Error,
+    fixable: false,
+    needs_model: false,
+    reference_title: sources::SPECIFICATION.0,
+    reference_url: sources::SPECIFICATION.1,
+};
+
 struct Frontmatter;
 struct KeyFormat;
 struct UnknownField;
+struct CompatibilityMaxLength;
 
 impl Rule for Frontmatter {
     fn meta(&self) -> &'static RuleMeta {
@@ -188,9 +204,33 @@ impl Rule for TypeError {
     }
 }
 
+impl Rule for CompatibilityMaxLength {
+    fn meta(&self) -> &'static RuleMeta {
+        &COMPATIBILITY_MAX_LENGTH_META
+    }
+
+    fn check(&self, context: &mut RuleContext<'_>) {
+        let Some(value) = context.skill.metadata.get("compatibility") else {
+            return;
+        };
+
+        let length = value.chars().count();
+
+        if length > COMPATIBILITY_MAX_LENGTH {
+            context.report(
+                format!(
+                    "The compatibility field is {length} characters; the limit is {COMPATIBILITY_MAX_LENGTH}"
+                ),
+                Location::at(context.skill.frontmatter_line("compatibility"), 1),
+            );
+        }
+    }
+}
+
 static FRONTMATTER_RULE: Frontmatter = Frontmatter;
 static KEY_RULE: KeyFormat = KeyFormat;
 static UNKNOWN_FIELD_RULE: UnknownField = UnknownField;
+static COMPATIBILITY_MAX_LENGTH_RULE: CompatibilityMaxLength = CompatibilityMaxLength;
 static TYPE_ERROR_RULE: TypeError = TypeError;
 
 pub fn rules() -> Vec<&'static dyn Rule> {
@@ -198,6 +238,7 @@ pub fn rules() -> Vec<&'static dyn Rule> {
         &FRONTMATTER_RULE,
         &KEY_RULE,
         &UNKNOWN_FIELD_RULE,
+        &COMPATIBILITY_MAX_LENGTH_RULE,
         &TYPE_ERROR_RULE,
     ]
 }
@@ -324,6 +365,50 @@ mod tests {
 
         assert_eq!(messages.len(), 1);
         assert!(messages[0].message.contains("team"));
+    }
+
+    /// Regression for #92: the spec caps compatibility at 500 characters, and nothing checked it.
+    fn compatibility_max_length_messages(source: &str) -> Vec<crate::diagnostics::Message> {
+        let parsed = skill::parse(source);
+        crate::engine::lint_skill(&parsed, &crate::config::Config::default())
+            .into_iter()
+            .filter(|message| message.rule == "frontmatter/compatibility-max-length")
+            .collect()
+    }
+
+    #[test]
+    fn an_oversized_compatibility_field_is_reported() {
+        let filler = "requires ".repeat(70);
+        let source = format!(
+            "---\nname: photo-culling\ndescription: Culls a photo shoot. Use when triaging RAW files.\ncompatibility: \"{filler}\"\n---\n\n## Culling\n\n1. Import the RAW files.\n"
+        );
+        let messages = compatibility_max_length_messages(&source);
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].severity, Severity::Error);
+        assert!(
+            messages[0].message.contains("500"),
+            "{}",
+            messages[0].message
+        );
+        assert_eq!(messages[0].location.line, 4);
+    }
+
+    #[test]
+    fn a_compatibility_field_within_the_limit_passes() {
+        let messages = compatibility_max_length_messages(
+            "---\nname: a\ndescription: b\ncompatibility: Requires Python 3.11+ and docker\n---\n\nBody.\n",
+        );
+
+        assert!(messages.is_empty());
+    }
+
+    #[test]
+    fn a_missing_compatibility_field_is_not_reported() {
+        let messages =
+            compatibility_max_length_messages("---\nname: a\ndescription: b\n---\n\nBody.\n");
+
+        assert!(messages.is_empty());
     }
 
     fn type_error_messages(source: &str) -> Vec<crate::diagnostics::Message> {
