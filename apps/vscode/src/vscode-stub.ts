@@ -223,6 +223,7 @@ const fakeVscode = {
     },
   },
   workspace: {
+    isTrusted: true,
     getConfiguration: (_section: string) => ({
       get: (key: string) => state.settings[key],
     }),
