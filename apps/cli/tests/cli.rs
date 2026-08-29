@@ -6,13 +6,36 @@
 
 use std::fs;
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
+
+/// The colour environment variables, so a test can pin them and nothing leaks in from the shell.
+const COLOUR_VARIABLES: [&str; 5] = [
+    "NO_COLOR",
+    "CLICOLOR",
+    "CLICOLOR_FORCE",
+    "FORCE_COLOR",
+    "TERM",
+];
 
 fn slint(arguments: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_slint"))
-        .args(arguments)
-        .output()
-        .expect("running slint")
+    let mut command = Command::new(env!("CARGO_BIN_EXE_slint"));
+    for name in COLOUR_VARIABLES {
+        command.env_remove(name);
+    }
+    command.args(arguments).output().expect("running slint")
+}
+
+/// Runs slint with the colour environment pinned: the named variables are set, every other colour
+/// variable is removed, so the run sees exactly what the test says it should.
+fn slint_with_environment(variables: &[(&str, &str)], arguments: &[&str]) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_slint"));
+    for name in COLOUR_VARIABLES {
+        command.env_remove(name);
+    }
+    for (name, value) in variables {
+        command.env(name, value);
+    }
+    command.args(arguments).output().expect("running slint")
 }
 
 fn write(root: &Path, name: &str, document: &str) {
@@ -75,6 +98,53 @@ fn a_clean_base_exits_zero_and_says_so() {
 
     assert_eq!(output.status.code(), Some(0));
     assert!(stdout(&output).contains("Nothing to report"));
+}
+
+#[test]
+fn linting_a_file_that_is_not_a_skill_says_so_instead_of_passing() {
+    // https://github.com/MaximeGaudin/slint/issues/36
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(temporary.path().join("random.txt"), "hello\n").unwrap();
+
+    let output = slint(&[
+        temporary.path().join("random.txt").to_str().unwrap(),
+        "--no-llm",
+    ]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(4),
+        "nothing was linted, which is not a clean pass"
+    );
+    let text = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(text.contains("random.txt"), "{text}");
+    assert!(text.contains("not linted"), "{text}");
+}
+
+#[test]
+fn an_empty_directory_is_a_failure_not_a_clean_run() {
+    // https://github.com/MaximeGaudin/slint/issues/118
+    let temporary = tempfile::tempdir().unwrap();
+    let empty = temporary.path().join("no-skills-here");
+    fs::create_dir_all(&empty).unwrap();
+
+    let output = slint(&[empty.to_str().unwrap(), "--no-llm"]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(4),
+        "a run that checked zero skills must not read as success"
+    );
+    assert!(
+        !stdout(&output).contains("Nothing to report"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(
+        stdout(&output).contains("No SKILL.md"),
+        "{}",
+        stdout(&output)
+    );
 }
 
 #[test]
@@ -199,6 +269,35 @@ fn the_json_format_is_an_envelope_a_caller_can_branch_on() {
 }
 
 #[test]
+fn the_json_envelope_says_the_same_thing_the_exit_code_does() {
+    // Reproduces https://github.com/MaximeGaudin/slint/issues/24: with --max-warnings exceeded
+    // the process exits 1, so the envelope's `ok` flag must say false too — a caller that
+    // branches on it before parsing anything gets the same verdict as the shell does.
+    let temporary = tempfile::tempdir().unwrap();
+    write(
+        temporary.path(),
+        "helper",
+        "---\nname: helper\ndescription: Culls a photo shoot in Lightroom by flagging the keepers and rejecting the rest. Use when triaging RAW files after a session.\n---\n\n## Helper\n\n1. Import the files.\n",
+    );
+
+    let output = slint(&[
+        temporary.path().to_str().unwrap(),
+        "--no-llm",
+        "--format",
+        "json",
+        "--max-warnings",
+        "0",
+    ]);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+
+    assert_eq!(output.status.code(), Some(1), "the budget is exceeded");
+    assert_eq!(
+        parsed["ok"], false,
+        "the envelope must agree with the exit code"
+    );
+}
+
+#[test]
 fn the_json_format_puts_nothing_but_json_on_stdout() {
     let temporary = tempfile::tempdir().unwrap();
     write(temporary.path(), "helper", BROKEN);
@@ -294,7 +393,9 @@ fn plugins_can_be_skipped_without_editing_the_config() {
 }
 
 #[test]
-fn init_writes_a_config_and_refuses_to_overwrite_one() {
+fn init_writes_a_config_and_leaves_an_existing_one_alone() {
+    // https://github.com/MaximeGaudin/slint/issues/35: running init twice is an expected,
+    // idempotent no-op, not a failure of slint itself.
     let temporary = tempfile::tempdir().unwrap();
 
     let first = Command::new(env!("CARGO_BIN_EXE_slint"))
@@ -314,7 +415,12 @@ fn init_writes_a_config_and_refuses_to_overwrite_one() {
 
     assert_eq!(
         second.status.code(),
-        Some(3),
+        Some(0),
+        "nothing was asked for and nothing is broken"
+    );
+    assert!(stderr(&second).contains("already exists"));
+    assert!(
+        temporary.path().join("slint.toml").is_file(),
         "it does not clobber what is there"
     );
 }
@@ -585,6 +691,27 @@ fn the_sarif_format_is_a_valid_sarif_log() {
     );
 }
 
+// Colour is decided by more than the `--no-color` flag: the standard environment conventions
+// (https://no-color.org and https://bixense.com/clicolors/) apply as well. These tests run the
+// binary with stdout piped, which is never a terminal, so anything coloured must have been forced.
+
+#[test]
+fn clicolor_force_colours_the_report_even_when_stdout_is_a_pipe() {
+    let temporary = tempfile::tempdir().unwrap();
+    write(temporary.path(), "helper", BROKEN);
+
+    let output = slint_with_environment(
+        &[("CLICOLOR_FORCE", "1")],
+        &[temporary.path().to_str().unwrap(), "--no-llm"],
+    );
+
+    assert!(
+        stdout(&output).contains('\x1b'),
+        "CLICOLOR_FORCE should force ANSI colour into the piped report:\n{}",
+        stdout(&output)
+    );
+}
+
 #[test]
 fn ignore_path_adds_patterns_from_a_file() {
     let temporary = tempfile::tempdir().unwrap();
@@ -610,6 +737,7 @@ fn no_ignore_lints_what_the_config_ignored() {
         "ignore = [\"**/helper\"]\n",
     )
     .unwrap();
+    write(temporary.path(), "photo-culling", GOOD);
     write(temporary.path(), "helper", BROKEN);
 
     let ignored = slint_in(temporary.path(), &["--no-llm"]);
@@ -770,5 +898,155 @@ fn a_project_config_wins_over_the_user_config() {
     assert_eq!(
         parsed["llm"]["provider"], "groq",
         "the project's own config is what counts: {parsed}"
+    );
+}
+
+#[test]
+fn force_color_colours_the_report_even_when_stdout_is_a_pipe() {
+    let temporary = tempfile::tempdir().unwrap();
+    write(temporary.path(), "helper", BROKEN);
+
+    let output = slint_with_environment(
+        &[("FORCE_COLOR", "1")],
+        &[temporary.path().to_str().unwrap(), "--no-llm"],
+    );
+
+    assert!(
+        stdout(&output).contains('\x1b'),
+        "FORCE_COLOR should force ANSI colour into the piped report:\n{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn no_color_beats_being_forced() {
+    let temporary = tempfile::tempdir().unwrap();
+    write(temporary.path(), "helper", BROKEN);
+
+    let output = slint_with_environment(
+        &[("NO_COLOR", "1"), ("CLICOLOR_FORCE", "1")],
+        &[temporary.path().to_str().unwrap(), "--no-llm"],
+    );
+
+    assert!(
+        !stdout(&output).contains('\x1b'),
+        "NO_COLOR should keep the report plain"
+    );
+}
+
+#[test]
+fn clicolor_zero_beats_being_forced() {
+    let temporary = tempfile::tempdir().unwrap();
+    write(temporary.path(), "helper", BROKEN);
+
+    let output = slint_with_environment(
+        &[("CLICOLOR", "0"), ("CLICOLOR_FORCE", "1")],
+        &[temporary.path().to_str().unwrap(), "--no-llm"],
+    );
+
+    assert!(
+        !stdout(&output).contains('\x1b'),
+        "CLICOLOR=0 should keep the report plain"
+    );
+}
+
+#[test]
+fn term_dumb_beats_being_forced() {
+    let temporary = tempfile::tempdir().unwrap();
+    write(temporary.path(), "helper", BROKEN);
+
+    let output = slint_with_environment(
+        &[("TERM", "dumb"), ("CLICOLOR_FORCE", "1")],
+        &[temporary.path().to_str().unwrap(), "--no-llm"],
+    );
+
+    assert!(
+        !stdout(&output).contains('\x1b'),
+        "TERM=dumb should keep the report plain"
+    );
+}
+
+#[test]
+fn the_no_color_flag_beats_being_forced() {
+    let temporary = tempfile::tempdir().unwrap();
+    write(temporary.path(), "helper", BROKEN);
+
+    let output = slint_with_environment(
+        &[("CLICOLOR_FORCE", "1")],
+        &[temporary.path().to_str().unwrap(), "--no-llm", "--no-color"],
+    );
+
+    assert!(
+        !stdout(&output).contains('\x1b'),
+        "--no-color should keep the report plain"
+    );
+}
+
+#[test]
+fn an_empty_no_color_is_not_a_request_to_stop() {
+    let temporary = tempfile::tempdir().unwrap();
+    write(temporary.path(), "helper", BROKEN);
+
+    let output = slint_with_environment(
+        &[("NO_COLOR", ""), ("CLICOLOR_FORCE", "1")],
+        &[temporary.path().to_str().unwrap(), "--no-llm"],
+    );
+
+    assert!(
+        stdout(&output).contains('\x1b'),
+        "an empty NO_COLOR is treated as unset by the convention"
+    );
+}
+
+#[test]
+fn clicolor_force_zero_does_not_force_anything() {
+    let temporary = tempfile::tempdir().unwrap();
+    write(temporary.path(), "helper", BROKEN);
+
+    let output = slint_with_environment(
+        &[("CLICOLOR_FORCE", "0")],
+        &[temporary.path().to_str().unwrap(), "--no-llm"],
+    );
+
+    assert!(
+        !stdout(&output).contains('\x1b'),
+        "CLICOLOR_FORCE=0 leaves the piped report plain"
+    );
+}
+
+#[test]
+fn a_closed_pipe_exits_cleanly_instead_of_failing_the_run() {
+    let temporary = tempfile::tempdir().unwrap();
+
+    // One skill with thousands of findings, so the report is far larger than any pipe buffer and
+    // the writer is guaranteed to hit the closed end rather than drain into it, which is what
+    // `slint <path> | head -1` does once head has its line.
+    let steps: String = (0..2_000)
+        .map(|index| format!("{index}. Read scripts\\notes-{index}.md.\n"))
+        .collect();
+    write(
+        temporary.path(),
+        "helper",
+        &format!(
+            "---\nname: helper\ndescription: Culls a photo shoot in Lightroom by flagging the keepers and rejecting the rest. Use when triaging RAW files after a session.\n---\n\n## Helper\n\n{steps}"
+        ),
+    );
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_slint"))
+        .arg(temporary.path().join("helper"))
+        .args(["--no-llm"])
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("spawning slint");
+
+    // The reader hangs up before the report arrives, as head does.
+    drop(child.stdout.take());
+
+    let status = child.wait().expect("waiting for slint");
+
+    assert_eq!(
+        status.code(),
+        Some(0),
+        "a downstream reader closing the pipe is not a lint failure"
     );
 }
