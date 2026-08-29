@@ -6,6 +6,7 @@
 
 use owo_colors::OwoColorize;
 use std::collections::BTreeSet;
+use unicode_width::UnicodeWidthStr;
 
 use crate::diagnostics::{Message, Report, Severity, Source};
 
@@ -16,13 +17,14 @@ pub fn render(report: &Report, colour: bool) -> String {
     let mut cited: BTreeSet<&str> = BTreeSet::new();
 
     // The longest position and rule, so the columns line up rather than each row being its own
-    // ragged shape.
+    // ragged shape. Widths are display columns — a CJK rule name is two columns per character,
+    // and counting scalar values would leave its neighbours' messages hanging in the air.
     let width = |pick: fn(&Message) -> String| {
         report
             .skills
             .iter()
             .flat_map(|skill| skill.messages.iter())
-            .map(|message| pick(message).chars().count())
+            .map(|message| pick(message).width())
             .max()
             .unwrap_or(0)
     };
@@ -120,8 +122,17 @@ fn position_of(message: &Message) -> String {
     )
 }
 
+/// Spaces out to `width` display columns, so a row's next column starts where its neighbours'
+/// do — `format!("{text:<width$}")` counts scalar values, not what a terminal actually shows.
 fn pad(text: &str, width: usize) -> String {
-    format!("{text:<width$}")
+    let used = text.width();
+    let mut padded = text.to_string();
+
+    if width > used {
+        padded.push_str(&" ".repeat(width - used));
+    }
+
+    padded
 }
 
 fn marker(severity: Severity, colour: bool) -> String {
@@ -372,7 +383,13 @@ mod tests {
             // Enough of an oracle for this test: ASCII is one column, the CJK Unified
             // Ideographs used here are East Asian Wide, two columns.
             text.chars()
-                .map(|c| if ('\u{4E00}'..='\u{9FFF}').contains(&c) { 2 } else { 1 })
+                .map(|c| {
+                    if ('\u{4E00}'..='\u{9FFF}').contains(&c) {
+                        2
+                    } else {
+                        1
+                    }
+                })
                 .sum()
         }
 
@@ -393,8 +410,11 @@ mod tests {
         };
 
         assert_eq!(
-            message_column(finding_row("says nothing about what this does"), "says nothing"),
-            message_column(finding_row("The instructions name scripts"), "The instructions name"),
+            message_column(finding_row("\"helper\" says"), "\"helper\" says"),
+            message_column(
+                finding_row("The instructions name scripts"),
+                "The instructions name"
+            ),
             "both message columns must begin on the same display column"
         );
     }
