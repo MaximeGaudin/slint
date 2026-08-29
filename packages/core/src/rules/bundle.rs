@@ -11,9 +11,12 @@ use crate::diagnostics::{Fix, Location, Reference, Severity};
 use crate::rules::{Rule, RuleContext, RuleMeta, sources};
 
 /// A relative path that looks like it means a bundled file.
+///
+/// `*` is in the leading set so the Markdown-bold bullet style (`**scripts/cull.py**: …`) —
+/// the convention Anthropic's own best-practices documentation shows — counts as a reference.
 static BUNDLED_REFERENCE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"(?:^|[\s`(\x22'\[])((?:scripts|references|reference|assets|templates|data)/[\w./-]+)",
+        r"(?:^|[\s`(\x22'\[*])((?:scripts|references|reference|assets|templates|data)/[\w./-]+)",
     )
     .expect("the bundled reference pattern compiles")
 });
@@ -150,8 +153,8 @@ static SCRIPT_PREREQUISITES: RuleMeta = RuleMeta {
     default_severity: Severity::Warning,
     fixable: false,
     needs_model: false,
-    reference_title: sources::SPECIFICATION.0,
-    reference_url: sources::SPECIFICATION.1,
+    reference_title: sources::PROJECT_CONVENTIONS.0,
+    reference_url: sources::PROJECT_CONVENTIONS.1,
 };
 
 fn paths_in(text: &str) -> BTreeSet<String> {
@@ -507,23 +510,38 @@ fn has_contents(text: &str) -> bool {
 
 fn with_contents(text: &str) -> Option<String> {
     let lines: Vec<&str> = text.lines().collect();
+    let ending = dominant_line_ending(text);
 
-    let headings: Vec<String> = lines
-        .iter()
-        .filter(|line| line.starts_with("## "))
-        .map(|line| format!("- {}", line.trim_start_matches("## ")))
-        .collect();
+    // Fenced blocks are code, not prose: a `## ` comment in bash is not a section and a `#`
+    // comment is not the title, so neither scan reads anything inside ``` or ~~~ fences.
+    let mut headings: Vec<String> = Vec::new();
+    let mut title_after: Option<usize> = None;
+    let mut fenced = false;
+
+    for (index, line) in lines.iter().enumerate() {
+        let opening = line.trim_start();
+        if opening.starts_with("```") || opening.starts_with("~~~") {
+            fenced = !fenced;
+            continue;
+        }
+
+        if fenced {
+            continue;
+        }
+
+        if line.starts_with("## ") {
+            headings.push(format!("- {}", line.trim_start_matches("## ")));
+        } else if title_after.is_none() && line.starts_with("# ") {
+            // After the title if there is one, which is where a reader looks for a contents list.
+            title_after = Some(index + 1);
+        }
+    }
 
     if headings.is_empty() {
         return None;
     }
 
-    // After the title if there is one, which is where a reader looks for a contents list.
-    let at = lines
-        .iter()
-        .position(|line| line.starts_with("# ") && !line.starts_with("## "))
-        .map(|index| index + 1)
-        .unwrap_or(0);
+    let at = title_after.unwrap_or(0);
 
     let mut rebuilt: Vec<String> = lines[..at].iter().map(|line| line.to_string()).collect();
     rebuilt.push(String::new());
@@ -532,12 +550,22 @@ fn with_contents(text: &str) -> Option<String> {
     rebuilt.extend(headings);
     rebuilt.extend(lines[at..].iter().map(|line| line.to_string()));
 
-    let mut joined = rebuilt.join("\n");
-    if text.ends_with('\n') {
-        joined.push('\n');
+    // The file's own convention is kept: a fix that rewrites the ending of every line it never
+    // meant to touch is not a fix but a silent re-encoding.
+    let mut joined = rebuilt.join(ending);
+    if text.ends_with(ending) {
+        joined.push_str(ending);
     }
 
     Some(joined)
+}
+
+/// The line ending the file mostly uses, so a rewrite speaks the file's own dialect.
+fn dominant_line_ending(text: &str) -> &'static str {
+    let crlf = text.matches("\r\n").count();
+    let lf = text.matches('\n').count() - crlf;
+
+    if crlf > lf { "\r\n" } else { "\n" }
 }
 
 static DANGLING_RULE: NoDangling = NoDangling;
@@ -630,6 +658,21 @@ mod tests {
         assert!(messages[0].message.contains("Nothing refers to"));
         // Never fixable: deleting a file in a batch is how a fixed path loses the file it points at.
         assert!(messages[0].fix.is_none());
+    }
+
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/78 —
+    /// `**scripts/cull.py**: description` is the exact bullet-list style shown in Anthropic's
+    /// own best-practices documentation, so a bold reference must count as a reference.
+    #[test]
+    fn a_file_referenced_in_markdown_bold_counts_as_used() {
+        let mut skill = skill_with_body(
+            "\n## Utility scripts\n\n**scripts/cull.py**: Culls the shoot and writes the selects to disk.\n",
+        );
+        skill
+            .files
+            .push(file("scripts/cull.py", "print(\"cull\")\n", false));
+
+        assert!(check(&UNUSED_RULE, &skill).is_empty());
     }
 
     /// Regression for https://github.com/MaximeGaudin/slint/issues/1 —
@@ -772,6 +815,137 @@ mod tests {
     }
 
     #[test]
+    fn a_crlf_file_gets_its_contents_list_written_in_crlf() {
+        // Reproduces https://github.com/MaximeGaudin/slint/issues/72: the fix used to join with
+        // "\n" whatever the file's own convention, rewriting every line ending in the file.
+        let mut text = String::from("# Formats\r\n\r\n");
+        for index in 0..40 {
+            text.push_str(&format!(
+                "## Section {index}\r\n\r\nWords about it.\r\n\r\n"
+            ));
+        }
+
+        let mut skill = skill_with_body("\n## Culling\n\nRead references/formats.md.\n");
+        skill
+            .files
+            .push(file("references/formats.md", &text, false));
+
+        let messages = check(&CONTENTS_RULE, &skill);
+        assert_eq!(messages.len(), 1);
+
+        let fixed = &messages[0].fix.as_ref().unwrap().replacement;
+
+        assert!(
+            fixed.ends_with("\r\n"),
+            "the trailing newline keeps its return"
+        );
+        assert_eq!(
+            fixed.matches('\n').count(),
+            fixed.matches("\r\n").count(),
+            "no bare LF may appear where the file uses CRLF"
+        );
+        assert!(fixed.contains("## Contents\r\n\r\n"));
+        assert!(fixed.contains("- Section 0\r\n"));
+    }
+
+    /// Reproduces https://github.com/MaximeGaudin/slint/issues/90 — a `## ` line inside a fenced
+    /// code block is code, not a section heading.
+    #[test]
+    fn a_heading_inside_a_fenced_block_is_not_a_section() {
+        let mut text = String::from(
+            "# Formats\n\n## Real Section\n\nWords.\n\n```bash\n## this is a bash comment, not a heading\necho hi\n```\n\n",
+        );
+        for index in 0..40 {
+            text.push_str(&format!("## Section {index}\n\nWords.\n\n"));
+        }
+
+        let mut skill = skill_with_body("\n## Culling\n\nRead references/formats.md.\n");
+        skill
+            .files
+            .push(file("references/formats.md", &text, false));
+
+        let messages = check(&CONTENTS_RULE, &skill);
+        assert_eq!(messages.len(), 1);
+
+        let fixed = &messages[0].fix.as_ref().unwrap().replacement;
+        assert!(fixed.contains("- Real Section"));
+        assert!(
+            !fixed.contains("- this is a bash comment"),
+            "a comment inside a fence is not a section:\n{}",
+            &fixed[..fixed.find("- Section 0").unwrap()]
+        );
+    }
+
+    #[test]
+    fn a_heading_inside_a_tilde_fence_is_not_a_section_either() {
+        let mut text = String::from(
+            "# Formats\n\n~~~\n## this belongs to the fenced example, not the contents\n~~~\n\n",
+        );
+        for index in 0..40 {
+            text.push_str(&format!("## Section {index}\n\nWords.\n\n"));
+        }
+
+        let mut skill = skill_with_body("\n## Culling\n\nRead references/formats.md.\n");
+        skill
+            .files
+            .push(file("references/formats.md", &text, false));
+
+        let messages = check(&CONTENTS_RULE, &skill);
+        assert_eq!(messages.len(), 1);
+
+        let fixed = &messages[0].fix.as_ref().unwrap().replacement;
+        assert!(
+            !fixed.contains("- this belongs to the fenced example"),
+            "a ~~~ fence hides its lines too:\n{fixed}"
+        );
+    }
+
+    #[test]
+    fn a_heading_after_the_fence_closes_is_still_a_section() {
+        let mut text = String::from("```bash\n## comment\n```\n\n");
+        for index in 0..40 {
+            text.push_str(&format!("## Section {index}\n\nWords.\n\n"));
+        }
+
+        let mut skill = skill_with_body("\n## Culling\n\nRead references/formats.md.\n");
+        skill
+            .files
+            .push(file("references/formats.md", &text, false));
+
+        let messages = check(&CONTENTS_RULE, &skill);
+        assert_eq!(messages.len(), 1);
+
+        let fixed = &messages[0].fix.as_ref().unwrap().replacement;
+        assert!(fixed.contains("- Section 0"), "the fence ended:\n{fixed}");
+    }
+
+    #[test]
+    fn a_comment_line_inside_a_fence_does_not_become_the_title() {
+        let mut text =
+            String::from("```bash\n# a comment, not a title\n```\n\n## Alpha\n\nWords.\n\n");
+        for index in 0..40 {
+            text.push_str(&format!("## Section {index}\n\nWords.\n\n"));
+        }
+
+        let mut skill = skill_with_body("\n## Culling\n\nRead references/formats.md.\n");
+        skill
+            .files
+            .push(file("references/formats.md", &text, false));
+
+        let messages = check(&CONTENTS_RULE, &skill);
+        assert_eq!(messages.len(), 1);
+
+        // No title outside a fence, so the contents list goes at the top of the file — never
+        // inside the fenced block it was misread from.
+        let fixed = &messages[0].fix.as_ref().unwrap().replacement;
+        assert!(
+            fixed.trim_start().starts_with("## Contents"),
+            "the list must not be inserted inside the fence:\n{fixed}"
+        );
+        assert!(fixed.contains("- Alpha"));
+    }
+
+    #[test]
     fn an_undeclared_import_is_reported() {
         let mut skill = skill_with_body("\n## Culling\n\nRun scripts/cull.py.\n");
         skill.files.push(file(
@@ -833,6 +1007,13 @@ mod tests {
             "expected one prerequisites finding, got {messages:?}"
         );
         assert_eq!(messages[0].severity, Severity::Warning);
+        // https://github.com/MaximeGaudin/slint/issues/77 — the specification never
+        // mentions a Prerequisites section; the section convention is slint's own.
+        assert_eq!(
+            messages[0].reference.url, "https://slint.dev/rules",
+            "the citation must own the convention instead of attributing it to the specification: {:?}",
+            messages[0].reference
+        );
         assert!(
             messages[0]
                 .message

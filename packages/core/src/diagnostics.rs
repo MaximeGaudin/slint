@@ -191,6 +191,10 @@ pub struct Report {
     pub skills: Vec<SkillReport>,
     /// Fixes written to disk during this run, when `--fix` was given.
     pub fixed: usize,
+    /// About the run as a whole rather than one skill: arguments that were skipped, a discovery
+    /// that came up empty. Said out loud rather than inferred from an empty result.
+    #[serde(default)]
+    pub notes: Vec<String>,
 }
 
 impl Report {
@@ -225,6 +229,17 @@ impl Report {
             .flat_map(|one| one.messages.iter())
             .filter(|one| one.is_fixable())
             .count()
+    }
+
+    /// Whether the run survives the caller's warning budget: anything at error severity fails
+    /// it, and so does going over `--max-warnings`. The exit code and the JSON envelope's `ok`
+    /// flag both read this, so the two verdicts a caller can see cannot disagree.
+    pub fn passes(&self, max_warnings: i64) -> bool {
+        if self.errors() > 0 {
+            return false;
+        }
+
+        !(max_warnings >= 0 && self.warnings() as i64 > max_warnings)
     }
 
     /// Worst first, then by file, then by position: the order a list of problems is read in.
@@ -310,6 +325,7 @@ mod tests {
                 notes: vec![],
             }],
             fixed: 0,
+            notes: Vec::new(),
         };
 
         assert_eq!(report.errors(), 1);
@@ -332,6 +348,7 @@ mod tests {
                 notes: vec![],
             }],
             fixed: 0,
+            notes: Vec::new(),
         }
         .sorted();
 
@@ -361,6 +378,7 @@ mod tests {
                 notes: vec![],
             }],
             fixed: 0,
+            notes: Vec::new(),
         };
 
         assert_eq!(report.fixable(), 1);
