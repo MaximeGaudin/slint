@@ -256,6 +256,7 @@ pub fn validate_rule_options(rule: &str, options: &serde_json::Value) -> Result<
         "body/max-lines" => read_options::<body::LineOptions>(rule, options),
         "body/token-budget" => read_options::<body::TokenOptions>(rule, options),
         "description/min-length" => read_options::<description::LengthOptions>(rule, options),
+        "project/distinct-descriptions" => read_options::<project::DistinctOptions>(rule, options),
         // A rule that takes no options has nothing to check; a name nobody has wired in cannot
         // be mistaken for one that does.
         _ => Ok(()),

@@ -6,6 +6,7 @@
 
 use anyhow::{Context, Result, bail};
 use clap::{CommandFactory, Parser, Subcommand};
+use std::collections::BTreeSet;
 use std::io::{IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -104,7 +105,12 @@ struct Cli {
     #[arg(long = "llm-api-key-env", value_name = "VAR")]
     llm_api_key_env: Option<String>,
 
-    /// Skip plugins, whatever the config says.
+    /// Run the plugins the config names. Off by default: the config naming them belongs to the
+    /// project being scanned, and running code a scanned project ships is not a linter's default.
+    #[arg(long)]
+    plugins: bool,
+
+    /// Skip plugins, whatever the config says. Kept for scripts that already pass it.
     #[arg(long)]
     no_plugins: bool,
 
@@ -222,10 +228,36 @@ fn run(cli: &Cli) -> Result<u8> {
         return run_stdin(cli, &config);
     }
 
-    let plugins = if cli.no_plugins {
-        Vec::new()
-    } else {
+    // A base_url that arrived from the config file, not from the command line, chooses where the
+    // API key and the document go. A config found in the scanned tree is not something the user
+    // wrote, so say out loud what it is doing before anything is sent.
+    if cli.model_pass()
+        && cli.llm_base_url.is_none()
+        && let Some(base) = config.llm.base_url.as_deref()
+        && !slint::llm::provider::is_loopback_base_url(base)
+    {
+        let where_from = config
+            .source
+            .as_ref()
+            .map(|path| format!(" file {}", path.display()))
+            .unwrap_or_default();
+        let key_variable = config
+            .llm
+            .api_key_env
+            .as_deref()
+            .unwrap_or("(no api_key_env is named)");
+
+        eprintln!(
+            "slint: the config{where_from} points the model pass at {base}. The key in {key_variable} and the documents being linted go there. If you did not write that config, check it before trusting this run."
+        );
+    }
+
+    let run_plugins = cli.plugins && !cli.no_plugins;
+
+    let plugins = if run_plugins {
         plugin::load_all(&config)?
+    } else {
+        Vec::new()
     };
 
     config::check_rule_names(&config, &plugins)?;
@@ -235,7 +267,7 @@ fn run(cli: &Cli) -> Result<u8> {
     }
 
     let passes = Passes {
-        plugins: !cli.no_plugins,
+        plugins: run_plugins,
         model: cli.model_pass(),
     };
 
@@ -531,10 +563,16 @@ fn resolve_config(cli: &Cli) -> Result<Config> {
         resolve_config_path(cli)
     };
 
-    let mut config = match path {
-        Some(path) => config::load(&path)?,
+    let mut config = match &path {
+        Some(path) => config::load(path)?,
         None => Config::default(),
     };
+
+    // One config governs the whole run, so a later path that holds a different one of its own
+    // deserves to hear that its file did not get to speak.
+    if cli.config.is_none() {
+        warn_about_unread_configs(cli, path.as_ref(), &config);
+    }
 
     for text in &cli.overrides {
         let (name, setting) = config::parse_override(text)?;
@@ -567,16 +605,83 @@ fn resolve_config_path(cli: &Cli) -> Option<PathBuf> {
                 .cloned()
                 .unwrap_or_else(|| PathBuf::from("."));
 
-            let anchor = if from.is_dir() {
-                from
-            } else {
-                from.parent()
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| PathBuf::from("."))
-            };
-
-            config::find(&anchor)
+            let found = config::find(&anchor_for(&from));
+            say_which_config_won(&found);
+            found
         }
+    }
+}
+
+/// A directory holding more than one config file is where "I edited the wrong one" lives, so the
+/// run names the file that won and the one that did not read, instead of the edit vanishing.
+fn say_which_config_won(found: &Option<PathBuf>) {
+    let Some(path) = found else {
+        return;
+    };
+    let Some(directory) = path.parent() else {
+        return;
+    };
+
+    let files = config::config_files_in(directory);
+    if files.len() < 2 {
+        return;
+    }
+
+    let name = |one: &PathBuf| one.file_name().unwrap().to_string_lossy().into_owned();
+    let ignored = files
+        .iter()
+        .skip(1)
+        .map(name)
+        .collect::<Vec<_>>()
+        .join(" and ");
+
+    eprintln!(
+        "slint: {} holds more than one config file, so {} wins (precedence: {}) and {} was not read",
+        directory.display(),
+        name(&files[0]),
+        config::CONFIG_NAMES.join(", "),
+        ignored
+    );
+}
+
+/// The directory a config search starts from: the path itself when it is one, its parent when it
+/// is a file.
+fn anchor_for(path: &Path) -> PathBuf {
+    if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        path.parent()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."))
+    }
+}
+
+/// Names the config files a later path holds that this run does not use.
+///
+/// An explicit `--config` is a deliberate choice, so it is never second-guessed here.
+fn warn_about_unread_configs(cli: &Cli, chosen: Option<&PathBuf>, effective: &Config) {
+    let mut seen = BTreeSet::new();
+
+    for path in cli.paths.iter().skip(1) {
+        let Some(file) = config::find(&anchor_for(path)) else {
+            continue;
+        };
+        if Some(&file) == chosen || !seen.insert(file.clone()) {
+            continue;
+        }
+
+        let Ok(other) = config::load(&file) else {
+            continue;
+        };
+        if other == *effective {
+            continue;
+        }
+
+        eprintln!(
+            "slint: {} holds a {} that this run does not use — the config found from the first path governs the whole run",
+            path.display(),
+            file.file_name().unwrap().to_string_lossy()
+        );
     }
 }
 

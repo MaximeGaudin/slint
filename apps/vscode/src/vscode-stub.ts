@@ -155,6 +155,8 @@ export const state = {
   codeActionProviders: [] as unknown[],
   executeCommands: [] as string[],
   messages: [] as string[],
+  secrets: new Map<string, string>(),
+  inputBoxValue: undefined as string | undefined,
   activeTextEditor: undefined as { document: FakeTextDocument } | undefined,
   workspaceFolders: [] as FakeWorkspaceFolder[],
   textDocuments: [] as FakeTextDocument[],
@@ -173,6 +175,8 @@ export function resetForTest(): void {
   state.codeActionProviders.length = 0
   state.executeCommands.length = 0
   state.messages.length = 0
+  state.secrets.clear()
+  state.inputBoxValue = undefined
   state.activeTextEditor = undefined
   state.workspaceFolders.length = 0
   state.textDocuments.length = 0
@@ -180,6 +184,17 @@ export function resetForTest(): void {
   state.changeHandlers.length = 0
   state.deleteHandlers.length = 0
   state.renameHandlers.length = 0
+}
+
+/** Fake SecretStorage backed by state.secrets, handed to the extension via activate()'s context. */
+export const secrets = {
+  get: async (key: string) => state.secrets.get(key),
+  store: async (key: string, value: string) => {
+    state.secrets.set(key, value)
+  },
+  delete: async (key: string) => {
+    state.secrets.delete(key)
+  },
 }
 
 const fakeVscode = {
@@ -192,6 +207,7 @@ const fakeVscode = {
   CodeActionKind,
   WorkspaceEdit,
   StatusBarAlignment: { Left: 1, Right: 2 } as const,
+  ConfigurationTarget: { Global: 1, Workspace: 2, WorkspaceFolder: 3 } as const,
   languages: {
     createDiagnosticCollection: (_name: string) => new DiagnosticCollection(),
     registerCodeActionsProvider: (_selector: unknown, provider: unknown) => {
@@ -217,15 +233,26 @@ const fakeVscode = {
       state.messages.push(message)
       return Promise.resolve(undefined)
     },
+    showInputBox: () => Promise.resolve(state.inputBoxValue),
     showErrorMessage: (message: string) => {
       state.messages.push(message)
       return Promise.resolve(undefined)
     },
+    showWarningMessage: (message: string, ..._items: string[]) => {
+      state.messages.push(message)
+      return Promise.resolve(undefined)
+    },
+  },
+  secrets: {
+    get: (key: string) => secrets.get(key),
+    store: (key: string, value: string) => secrets.store(key, value),
+    delete: (key: string) => secrets.delete(key),
   },
   workspace: {
     isTrusted: true,
     getConfiguration: (_section: string) => ({
       get: (key: string) => state.settings[key],
+      inspect: () => undefined,
     }),
     findFiles: (): Promise<Uri[]> => Promise.resolve([]),
     getWorkspaceFolder: (uri: Uri) =>

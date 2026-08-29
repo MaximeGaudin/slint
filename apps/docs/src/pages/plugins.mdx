@@ -143,6 +143,12 @@ The extension decides which kind a plugin is, so a config never says the same th
 that fails to load, crashes or answers with nonsense becomes a note on the report rather than a
 failed run: your rules not working must not stop the rest of the review.
 
+## Turning plugins on
+
+They are off by default, and they run only with `--plugins`. The config that names a plugin lives
+in the project being scanned, and a linter does not execute code a scanned project ships without
+being asked. When the config names plugins and they do not run, the report says so.
+
 ## Turning a plugin's rules off
 
 They behave like any other rule, which means a config can silence or raise them by name, and a

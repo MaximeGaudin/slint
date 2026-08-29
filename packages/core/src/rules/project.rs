@@ -11,6 +11,7 @@ use crate::config::Config;
 use crate::diagnostics::{Location, Message, Severity, Source};
 use crate::rules::{ProjectRule, RuleMeta, sources};
 use crate::skill::Skill;
+use serde::Deserialize;
 
 static UNIQUE_NAME: RuleMeta = RuleMeta {
     name: "project/unique-name",
@@ -144,6 +145,15 @@ impl ProjectRule for UniqueName {
     }
 }
 
+/// The options `project/distinct-descriptions` reads: the similarity below which two descriptions
+/// are no longer competitors. Anything else in the block is a misspelling, so `deny_unknown_fields`
+/// lets the config loader refuse it instead of the rule silently running with the default.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct DistinctOptions {
+    similarity: Option<f64>,
+}
+
 impl ProjectRule for DistinctDescriptions {
     fn meta(&self) -> &'static RuleMeta {
         &DISTINCT_DESCRIPTIONS
@@ -152,8 +162,8 @@ impl ProjectRule for DistinctDescriptions {
     fn check(&self, skills: &[Skill], config: &Config, severity: Severity) -> Vec<Message> {
         let threshold = config
             .options_for(DISTINCT_DESCRIPTIONS.name)
-            .and_then(|options| options.get("similarity"))
-            .and_then(|value| value.as_f64())
+            .and_then(|options| serde_json::from_value::<DistinctOptions>(options.clone()).ok())
+            .and_then(|options| options.similarity)
             .unwrap_or(0.8);
 
         let mut messages = Vec::new();
@@ -354,6 +364,40 @@ mod tests {
             DISTINCT_RULE
                 .check(&skills, &config, Severity::Warning)
                 .is_empty()
+        );
+    }
+
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/294 —
+    /// a typo'd option key used to fall back to the built-in threshold without a word, so the
+    /// author believed they had tuned a check that never moved.
+    #[test]
+    fn a_typo_d_similarity_option_is_refused_not_silently_ignored() {
+        let failure = crate::rules::validate_rule_options(
+            DISTINCT_DESCRIPTIONS.name,
+            &serde_json::json!({ "similarit": 0.9 }),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            failure.contains("project/distinct-descriptions"),
+            "{failure}"
+        );
+        assert!(failure.contains("not options"), "{failure}");
+
+        let failure = crate::rules::validate_rule_options(
+            DISTINCT_DESCRIPTIONS.name,
+            &serde_json::json!({ "similarity": "high" }),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(failure.contains("not options"), "{failure}");
+
+        assert!(
+            crate::rules::validate_rule_options(
+                DISTINCT_DESCRIPTIONS.name,
+                &serde_json::json!({ "similarity": 0.9 })
+            )
+            .is_ok()
         );
     }
 

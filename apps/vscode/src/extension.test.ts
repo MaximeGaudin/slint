@@ -9,6 +9,7 @@ import {
   type FakeTextDocument,
   Range,
   resetForTest,
+  secrets,
   state,
   Uri,
 } from './vscode-stub.js'
@@ -92,7 +93,7 @@ function writeEnvelope(dir: string, name: string, envelope: Envelope): string {
 function activateExtension(): void {
   assert.ok(extension, 'extension module must be loaded before activate()')
   resetForTest()
-  const context = { subscriptions: [] as unknown[] }
+  const context = { subscriptions: [] as unknown[], secrets }
   extension.activate(context as unknown as Parameters<ExtensionModule['activate']>[0])
 }
 
@@ -101,6 +102,7 @@ function setSettings(values: Record<string, unknown>): void {
 }
 
 async function runCommand(name: string): Promise<unknown> {
+  await new Promise((resolve) => setTimeout(resolve, 0))
   const handler = state.commands.get(name)
   assert.ok(handler, `command ${name} must be registered by activate()`)
   return Promise.resolve(handler())
@@ -209,8 +211,10 @@ describe('spawning: argv + env construction (#45)', () => {
       path: FAKE_SLINT,
       'llm.provider': 'openai',
       'llm.model': 'gpt-test',
-      'llm.apiKey': '  sk-secret  ',
     })
+    // The key lives in SecretStorage now (#191): set it the way a user would, via the command.
+    state.inputBoxValue = '  sk-secret  '
+    await runCommand('slint.setApiKey')
     state.workspaceFolders = [{ uri: Uri.file(target) }]
 
     await runCommand('slint.lintWorkspaceWithModel')
