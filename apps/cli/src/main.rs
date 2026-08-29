@@ -228,11 +228,18 @@ fn run(cli: &Cli) -> Result<u8> {
     let mut config = resolve_config(cli)?;
 
     if let Some(path) = &cli.ignore_path {
-        config.ignore.extend(read_ignore_file(path)?);
+        // The file's own directory anchors its patterns, the same way the config file's
+        // directory anchors `ignore` — so `--ignore-path tools/my-ignores` speaks for `tools/`.
+        let anchor = path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        config.ignore_path = Some((anchor, read_ignore_file(path)?));
     }
 
     if cli.no_ignore {
         config.ignore.clear();
+        config.ignore_path = None;
     }
 
     if cli.print_config {
