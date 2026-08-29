@@ -4,6 +4,7 @@
 //! This is the class of problem a per-file linter structurally cannot see, and the reason slint
 //! reads the whole set before it reports anything.
 
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
 use crate::config::Config;
@@ -35,8 +36,73 @@ static DISTINCT_DESCRIPTIONS: RuleMeta = RuleMeta {
     reference_url: sources::BEST_PRACTICES.1,
 };
 
+static CONSISTENT_NAMING: RuleMeta = RuleMeta {
+    name: "project/consistent-naming-style",
+    summary: "Skill names in the same project should follow one naming convention.",
+    rationale: "The best-practices guide lists inconsistent patterns within a skill collection as an anti-pattern. Gerund names beside noun-phrase names read as an accident and make the collection harder to scan.",
+    advice: "Pick one convention for the whole collection — the guide suggests the gerund form (verb + -ing, as in processing-pdfs) — and rename the outliers to match.",
+    default_severity: Severity::Info,
+    fixable: false,
+    needs_model: false,
+    reference_title: sources::BEST_PRACTICES.0,
+    reference_url: sources::BEST_PRACTICES.1,
+};
+
 struct UniqueName;
 struct DistinctDescriptions;
+struct ConsistentNamingStyle;
+
+/// The two naming styles the heuristic can tell apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Style {
+    /// A verb form: "processing-pdfs", "culling-photos".
+    Gerund,
+    /// Everything else: noun phrases and imperative names, which this heuristic does not
+    /// attempt to tell apart.
+    Other,
+}
+
+/// Words that end in "ing" without being verb forms.
+const NOT_GERUND: [&str; 19] = [
+    "string",
+    "thing",
+    "ring",
+    "king",
+    "sing",
+    "wing",
+    "spring",
+    "swing",
+    "bring",
+    "cling",
+    "fling",
+    "sting",
+    "during",
+    "morning",
+    "evening",
+    "nothing",
+    "something",
+    "anything",
+    "everything",
+];
+
+/// A simple, documented heuristic: a name whose first hyphen-separated word is a plain verb in its
+/// "-ing" form is gerund style; every other name — noun phrase or imperative — is not. The rule
+/// never says which style is right, only that the collection should settle on one.
+fn style_of(name: &str) -> Style {
+    let first = name
+        .split('-')
+        .next()
+        .unwrap_or(name)
+        .to_ascii_lowercase();
+
+    let gerund = first.len() >= 5 && first.ends_with("ing") && !NOT_GERUND.contains(&first.as_str());
+
+    if gerund {
+        Style::Gerund
+    } else {
+        Style::Other
+    }
+}
 
 impl ProjectRule for UniqueName {
     fn meta(&self) -> &'static RuleMeta {
@@ -134,6 +200,94 @@ impl ProjectRule for DistinctDescriptions {
     }
 }
 
+impl ProjectRule for ConsistentNamingStyle {
+    fn meta(&self) -> &'static RuleMeta {
+        &CONSISTENT_NAMING
+    }
+
+    fn check(&self, skills: &[Skill], _config: &Config, severity: Severity) -> Vec<Message> {
+        let mut gerunds: Vec<&Skill> = Vec::new();
+        let mut others: Vec<&Skill> = Vec::new();
+
+        for skill in skills {
+            if skill.name.is_empty() {
+                continue;
+            }
+
+            if style_of(&skill.name) == Style::Gerund {
+                gerunds.push(skill);
+            } else {
+                others.push(skill);
+            }
+        }
+
+        // One style or fewer than two names is a collection that has nothing to be inconsistent with.
+        if gerunds.is_empty() || others.is_empty() {
+            return Vec::new();
+        }
+
+        let mut messages = Vec::new();
+
+        // The minority is flagged, so one odd name does not drag the whole collection into the
+        // report. On a tie no convention is in force yet, so every name hears about it.
+        match gerunds.len().cmp(&others.len()) {
+            Ordering::Greater => push_naming_messages(&mut messages, &others, &gerunds, severity),
+            Ordering::Less => push_naming_messages(&mut messages, &gerunds, &others, severity),
+            Ordering::Equal => {
+                push_naming_messages(&mut messages, &gerunds, &others, severity);
+                push_naming_messages(&mut messages, &others, &gerunds, severity);
+            }
+        }
+
+        messages
+    }
+}
+
+/// Reports every flagged skill against up to three names written in the other style.
+fn push_naming_messages(
+    messages: &mut Vec<Message>,
+    flagged: &[&Skill],
+    against: &[&Skill],
+    severity: Severity,
+) {
+    let examples: Vec<&str> = against
+        .iter()
+        .take(3)
+        .map(|skill| skill.name.as_str())
+        .collect();
+
+    let flagged_are_gerunds = style_of(&flagged[0].name) == Style::Gerund;
+
+    for skill in flagged {
+        let message = if flagged_are_gerunds {
+            format!(
+                "The name \"{}\" is a gerund (verb + -ing), but {} are not",
+                skill.name,
+                examples.join(", ")
+            )
+        } else {
+            format!(
+                "The name \"{}\" is not a gerund (verb + -ing), but {} is",
+                skill.name,
+                examples.join(", ")
+            )
+        };
+
+        messages.push(Message {
+            rule: CONSISTENT_NAMING.name.to_string(),
+            severity,
+            message,
+            advice: CONSISTENT_NAMING.advice.to_string(),
+            location: Location::at(skill.frontmatter_line("name"), 1),
+            source: Source::Static,
+            file: skill.document.clone(),
+            fix: None,
+            reference: CONSISTENT_NAMING.reference(),
+            confidence: 1.0,
+        });
+    }
+}
+
 /// How much two descriptions overlap, as a fraction of the shorter one's words.
 ///
 /// A word-set overlap rather than an edit distance: what matters is whether they compete for the
@@ -163,9 +317,10 @@ pub fn similarity(left: &str, right: &str) -> f64 {
 
 static UNIQUE_NAME_RULE: UniqueName = UniqueName;
 static DISTINCT_RULE: DistinctDescriptions = DistinctDescriptions;
+static NAMING_RULE: ConsistentNamingStyle = ConsistentNamingStyle;
 
 pub fn rules() -> Vec<&'static dyn ProjectRule> {
-    vec![&UNIQUE_NAME_RULE, &DISTINCT_RULE]
+    vec![&UNIQUE_NAME_RULE, &DISTINCT_RULE, &NAMING_RULE]
 }
 
 #[cfg(test)]
