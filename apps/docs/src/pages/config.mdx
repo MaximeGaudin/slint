@@ -21,9 +21,27 @@ section: config
 slint init
 ```
 
-That writes `slint.toml`. `slint.config.json` and `.slintrc.json` work too, with the same fields.
-The file is found by walking up from whatever you asked slint to lint, so running it inside a
-subdirectory uses the project's settings rather than none.
+That writes `slint.toml`. `slint.config.json`, `.slintrc.json` and `.slintrc.toml` work too, with
+the same fields. The file is found by walking up from whatever you asked slint to lint, so running
+it inside a subdirectory uses the project's settings rather than none. If a directory holds more
+than one of them, the first of `slint.toml`, `slint.config.json`, `.slintrc.json`, `.slintrc.toml`
+wins, and the run says which file it read. When more than one path is linted in a run, the config found from the first path governs the whole run, and slint says so when a later path holds a different config of its own.
+
+## Editor autocomplete
+
+Point a JSON config's `$schema` at the published schema and the editor flags a misspelt field
+before slint ever runs — the same way `tsconfig.json` and `biome.json` behave:
+
+```json
+{
+  "$schema": "https://slint.dev/schemas/slint-config.json",
+  "rules": { "description/says-when": "error" }
+}
+```
+
+The schema is generated from the code that reads the config (`slint schema` prints it), so it cannot
+drift from what slint actually accepts. The VS Code extension wires it up for `slint.config.json`
+and `.slintrc.json` on its own.
 
 ## Rules
 
@@ -38,6 +56,15 @@ A severity is `off`, `info`, `warn` or `error`; `0`, `1` and `2` work as well, f
 from ESLint. A rule with options takes a list: the severity, then an object the rule reads for
 itself. Each rule's page lists what it accepts.
 
+When a rule misbehaves and you cannot tell why, the resolved config — file, flags and all — is one
+command away:
+
+```bash
+slint --print-config | jq '.rules'
+```
+
+And `slint --explain body/max-lines` prints one rule's entry instead of the whole catalogue.
+
 ## What to skip
 
 ```toml
@@ -47,15 +74,63 @@ ignore = ["**/fixtures/**", "**/vendor/**"]
 Directories that are never a skill — `.git`, `node_modules`, `target`, `dist`, `.venv` — are
 skipped without being configured, because nobody has ever wanted them linted.
 
+To point at a different ignore file without editing the config:
+
+```bash
+slint --ignore-path .gitignore
+```
+
+It reads one glob per line, `#` comments allowed, and adds them to whatever the config already says.
+`--no-ignore` goes the other way: lint everything, even what the config would skip.
+
+## Your own defaults
+
+When no project config exists anywhere up the tree, slint falls back to a user-global one:
+`$XDG_CONFIG_HOME/slint/config.toml`, or `~/.config/slint/config.toml`. That is the home for a
+personal set of severities, or an `[llm]` block you do not want to repeat in every repository. A
+project config always wins when there is one — the fallback never edits what a project meant.
+
 ## Silencing a rule for one document
 
 ```markdown
 <!-- slint-disable name/not-generic -->
 <!-- slint-disable-next-line body/posix-paths -->
+<!-- slint-disable-start body/max-lines -->
+
+…a section the rule does not apply to…
+
+<!-- slint-disable-end -->
 ```
 
-The first turns a rule off for the whole file; the second for the line beneath it. Both take
-several rule names, separated by commas.
+The first turns a rule off for the whole document; the second for the line beneath it; the pair
+for everything between the two comments (a range never closed runs to the end of the document).
+All of them take several rule names, separated by commas — and the keyword itself is matched
+case-insensitively, so `SLINT-DISABLE` works the same as `slint-disable`.
+
+A rule name can end in `*` to cover a whole namespace, so `body/*` silences every `body/…` rule
+instead of one at a time:
+
+```markdown
+<!-- slint-disable body/* -->
+```
+
+`<!-- slint-enable rule -->` re-activates a rule that a file-wide `slint-disable` — or an open
+`slint-disable-start` — turned off, from that line to the end of the document, the way
+`eslint-enable` does. A bare `slint-enable` re-activates everything.
+
+Four things to know:
+
+- A comment is scoped to the document it is written in. A `slint-disable` in `SKILL.md` says nothing
+  about findings on the files bundled beside it — silence those in the bundled file itself, or with
+  a config setting.
+- A comment inside a fenced code block is an example, not a directive, so documenting the syntax
+  does not silence anything.
+- A comment that silenced nothing is reported as a `suppression/unused` warning — a typo'd rule name
+  suppresses nothing, and the author has to hear about it. An `slint-enable` that names a rule
+  nothing is disabled for is reported the same way.
+- `slint-enable` names must match what the disable named: `slint-enable body/posix-paths` lifts a
+  `slint-disable body/*` (the pattern matches the rule), but there is no way to lift one rule out of
+  a list — repeat the disable without it instead.
 
 ## A model, for the rules that need one
 
@@ -66,6 +141,9 @@ model = "gpt-5-mini"
 api_key_env = "OPENAI_API_KEY"   # the variable holding the key, never the key itself
 timeout_seconds = 90
 max_input_bytes = 65536
+max_tokens = 1024
+max_retries = 2
+max_concurrent_requests = 4
 ```
 
 **Configuring a provider is not enough to spend anything.** The model pass is off unless `--llm` is
@@ -107,6 +185,13 @@ ever sent anywhere and the report names the rules that did not run.
 | `base_url` | — | Sends the same wire format somewhere else. `https`, or `http` to loopback. |
 | `timeout_seconds` | `90` | Before a request is abandoned. |
 | `max_input_bytes` | `65536` | Bodies over this are cut at a heading, and the report says so. |
+| `max_tokens` | unset | Cap on the tokens a model may spend on its reply. |
+| `max_retries` | `2` | Rate limits, 5xx and connection errors are retried with backoff before they become a note; `Retry-After` is honoured. |
+| `max_concurrent_requests` | `4` | How many model requests may be in flight at once. |
+
+Replies are cached under the system's temporary directory, keyed by provider, model, prompt and
+reply cap — so a save that does not change a skill does not re-issue a billed request. Set
+`SLINT_NO_LLM_CACHE=1` to turn that off, or `SLINT_CACHE_DIR` to move it.
 
 ## In CI
 
