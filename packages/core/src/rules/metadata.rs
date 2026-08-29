@@ -301,7 +301,11 @@ mod tests {
 
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].severity, Severity::Error);
-        assert!(messages[0].message.contains("500"), "{}", messages[0].message);
+        assert!(
+            messages[0].message.contains("500"),
+            "{}",
+            messages[0].message
+        );
         assert_eq!(messages[0].location.line, 4);
     }
 
@@ -316,7 +320,8 @@ mod tests {
 
     #[test]
     fn a_missing_compatibility_field_is_not_reported() {
-        let messages = compatibility_max_length_messages("---\nname: a\ndescription: b\n---\n\nBody.\n");
+        let messages =
+            compatibility_max_length_messages("---\nname: a\ndescription: b\n---\n\nBody.\n");
 
         assert!(messages.is_empty());
     }

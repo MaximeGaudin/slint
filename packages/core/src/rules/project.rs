@@ -89,19 +89,12 @@ const NOT_GERUND: [&str; 19] = [
 /// "-ing" form is gerund style; every other name — noun phrase or imperative — is not. The rule
 /// never says which style is right, only that the collection should settle on one.
 fn style_of(name: &str) -> Style {
-    let first = name
-        .split('-')
-        .next()
-        .unwrap_or(name)
-        .to_ascii_lowercase();
+    let first = name.split('-').next().unwrap_or(name).to_ascii_lowercase();
 
-    let gerund = first.len() >= 5 && first.ends_with("ing") && !NOT_GERUND.contains(&first.as_str());
+    let gerund =
+        first.len() >= 5 && first.ends_with("ing") && !NOT_GERUND.contains(&first.as_str());
 
-    if gerund {
-        Style::Gerund
-    } else {
-        Style::Other
-    }
+    if gerund { Style::Gerund } else { Style::Other }
 }
 
 impl ProjectRule for UniqueName {
@@ -464,9 +457,18 @@ mod tests {
     #[test]
     fn a_collection_mixing_naming_styles_is_reported() {
         let skills = vec![
-            skill("processing-pdfs", "Culls a photo shoot. Use when triaging RAW files."),
-            skill("extract-pdf-text", "Culls a photo shoot. Use when triaging RAW files."),
-            skill("cull-photos", "Culls a photo shoot. Use when triaging RAW files."),
+            skill(
+                "processing-pdfs",
+                "Culls a photo shoot. Use when triaging RAW files.",
+            ),
+            skill(
+                "extract-pdf-text",
+                "Culls a photo shoot. Use when triaging RAW files.",
+            ),
+            skill(
+                "cull-photos",
+                "Culls a photo shoot. Use when triaging RAW files.",
+            ),
         ];
 
         let messages = consistent_naming_messages(&skills);
@@ -482,8 +484,14 @@ mod tests {
     #[test]
     fn a_consistently_gerund_collection_passes() {
         let skills = vec![
-            skill("processing-pdfs", "Culls a photo shoot. Use when triaging RAW files."),
-            skill("culling-photos", "Culls a photo shoot. Use when triaging RAW files."),
+            skill(
+                "processing-pdfs",
+                "Culls a photo shoot. Use when triaging RAW files.",
+            ),
+            skill(
+                "culling-photos",
+                "Culls a photo shoot. Use when triaging RAW files.",
+            ),
         ];
 
         assert!(consistent_naming_messages(&skills).is_empty());
@@ -492,9 +500,18 @@ mod tests {
     #[test]
     fn a_consistently_non_gerund_collection_passes() {
         let skills = vec![
-            skill("extract-pdf-text", "Culls a photo shoot. Use when triaging RAW files."),
-            skill("pdf-export", "Culls a photo shoot. Use when triaging RAW files."),
-            skill("invoice-builder", "Culls a photo shoot. Use when triaging RAW files."),
+            skill(
+                "extract-pdf-text",
+                "Culls a photo shoot. Use when triaging RAW files.",
+            ),
+            skill(
+                "pdf-export",
+                "Culls a photo shoot. Use when triaging RAW files.",
+            ),
+            skill(
+                "invoice-builder",
+                "Culls a photo shoot. Use when triaging RAW files.",
+            ),
         ];
 
         assert!(consistent_naming_messages(&skills).is_empty());
@@ -502,7 +519,10 @@ mod tests {
 
     #[test]
     fn a_single_skill_is_never_reported() {
-        let skills = vec![skill("processing-pdfs", "Culls a photo shoot. Use when triaging RAW files.")];
+        let skills = vec![skill(
+            "processing-pdfs",
+            "Culls a photo shoot. Use when triaging RAW files.",
+        )];
 
         assert!(consistent_naming_messages(&skills).is_empty());
     }
@@ -510,8 +530,14 @@ mod tests {
     #[test]
     fn words_that_merely_end_in_ing_are_not_gerunds() {
         let skills = vec![
-            skill("string-utils", "Culls a photo shoot. Use when triaging RAW files."),
-            skill("thing-counter", "Culls a photo shoot. Use when triaging RAW files."),
+            skill(
+                "string-utils",
+                "Culls a photo shoot. Use when triaging RAW files.",
+            ),
+            skill(
+                "thing-counter",
+                "Culls a photo shoot. Use when triaging RAW files.",
+            ),
         ];
 
         assert!(consistent_naming_messages(&skills).is_empty());
