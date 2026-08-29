@@ -212,6 +212,19 @@ static UNDECLARED_TOOL: RuleMeta = RuleMeta {
 /// Known host-private tools that are not portable across Agent Skills runtimes.
 const HOST_SPECIFIC_TOOLS: [&str; 1] = ["AskQuestion"];
 
+/// Tools every Agent Skills host ships under the same name. Naming one of these in an
+/// explicit "the X tool" step is a portable call, not a host-private one.
+const STANDARD_TOOLS: [&str; 6] = ["Read", "Write", "Edit", "Bash", "Grep", "Glob"];
+
+/// An explicit imperative call: "Call the X tool", "Use the X tool". The trailing noun makes
+/// X unambiguously a tool name — whatever host it belongs to — so the declaration check does
+/// not have to know the tool in advance. The identifier must start uppercase to stay away
+/// from prose ("use the command-line tool").
+static NAMED_TOOL_CALL: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\b(?:[Uu]se|[Cc]all|[Ii]nvoke|[Rr]un)\s+the\s+([A-Z][A-Za-z0-9_]*)\s+tool\b")
+        .expect("the named tool call pattern compiles")
+});
+
 static HARDCODED_REPO_PATH: RuleMeta = RuleMeta {
     name: "body/hardcoded-repo-path",
     summary: "Do not hard-require consumer-repo paths without a missing-path fallback.",
@@ -611,6 +624,50 @@ impl Rule for UndeclaredTool {
                     Location::at(document_line, start + 1),
                 );
                 break;
+            }
+        }
+
+        // The enumerated set can only ever name the tools it knows. A step that names its tool
+        // explicitly is checkable whatever the tool: report each distinct undeclared name once,
+        // at the step that calls it.
+        let mut reported: Vec<&str> = Vec::new();
+
+        for (index, line) in body.lines().enumerate() {
+            for captures in NAMED_TOOL_CALL.captures_iter(line) {
+                let whole = captures.get(1).expect("the tool name always matches");
+                let tool = whole.as_str();
+
+                if STANDARD_TOOLS
+                    .iter()
+                    .any(|standard| standard.eq_ignore_ascii_case(tool))
+                    || allowed
+                        .split_whitespace()
+                        .any(|token| token.eq_ignore_ascii_case(tool))
+                {
+                    continue;
+                }
+
+                let lower = line.to_ascii_lowercase();
+                if lower.contains("do not use")
+                    || lower.contains("don't use")
+                    || lower.contains("never use")
+                    || lower.contains("avoid using")
+                {
+                    continue;
+                }
+
+                if reported.contains(&tool) {
+                    continue;
+                }
+                reported.push(tool);
+
+                let document_line = context.skill.document_line(index + 1);
+                context.report(
+                    format!(
+                        "Instructions require tool \"{tool}\" but it is not listed in allowed-tools"
+                    ),
+                    Location::at(document_line, whole.start() + 1),
+                );
             }
         }
     }
@@ -1425,6 +1482,29 @@ You might want to start by looking through the briefs folder.\n\
         assert_eq!(messages.len(), 1, "{messages:?}");
         assert!(messages[0].message.contains("OpenReviewPanel"));
         assert_eq!(messages[0].rule, "body/undeclared-tool");
+    }
+
+    /// The tools every host ships under the same name are the portable exception; naming one
+    /// in a step is not a host-private dependency.
+    #[test]
+    fn an_imperative_call_on_a_standard_tool_is_not_reported() {
+        for line in [
+            "1. Use the Read tool to open the file.",
+            "1. Run the Bash tool from the skill root.",
+        ] {
+            let skill = skill_with_body(&format!("\n## Steps\n\n{line}\n"));
+
+            assert!(check(&UNDECLARED_TOOL_RULE, &skill).is_empty(), "for {line}");
+        }
+    }
+
+    #[test]
+    fn an_imperative_call_on_a_declared_tool_is_not_reported() {
+        let skill = crate::skill::parse(
+            "---\nname: a\ndescription: Reviews pull requests with the host's review panel. Use when the user asks to review a PR with inline comments.\nallowed-tools: OpenReviewPanel\n---\n\n## Review\n\n1. Call the OpenReviewPanel tool to display inline comments.\n",
+        );
+
+        assert!(check(&UNDECLARED_TOOL_RULE, &skill).is_empty());
     }
 
     #[test]
