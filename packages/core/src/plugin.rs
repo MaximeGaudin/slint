@@ -270,8 +270,10 @@ pub fn run(plugins: &[Plugin], skill: &Skill, config: &Config) -> (Vec<Message>,
             }
             Plugin::Wasm { path } => match run_wasm(path, skill, config) {
                 Ok(found) => messages.extend(found),
+                // {:#} keeps the innermost reason — for a timeout that is the word the reader
+                // needs, and for a load failure it is the loader's own complaint.
                 Err(failure) => notes.push(format!(
-                    "The plugin {} did not run, so its rules did not either: {failure}",
+                    "The plugin {} did not run, so its rules did not either: {failure:#}",
                     path.display()
                 )),
             },
@@ -435,12 +437,28 @@ struct PluginMessage {
 /// The function a plugin exports. One entry point, so a plugin is a function of a skill.
 pub const PLUGIN_EXPORT: &str = "lint";
 
+/// How long one plugin call may take before it is treated as a crash. A plugin that lints one
+/// skill's JSON in under a few seconds is fine; one that needs longer is looping, and a loop is
+/// exactly the thing that would otherwise hang the whole run — a CI job or an editor save hook.
+const WASM_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 fn run_wasm(path: &Path, skill: &Skill, config: &Config) -> Result<Vec<Message>> {
+    run_wasm_within(path, skill, config, WASM_CALL_TIMEOUT)
+}
+
+fn run_wasm_within(
+    path: &Path,
+    skill: &Skill,
+    config: &Config,
+    timeout: std::time::Duration,
+) -> Result<Vec<Message>> {
     let input = serde_json::to_string(&PluginInput { version: 1, skill })?;
 
     // No filesystem, no network, no environment: a rule about a document does not need any of
     // them, and a plugin that cannot reach them is a plugin nobody has to audit before adding.
-    let manifest = extism::Manifest::new([extism::Wasm::file(path)]);
+    // The deadline is the same idea in time: a call that does not come back on its own is
+    // interrupted and reported like a crash rather than left to hang the run.
+    let manifest = extism::Manifest::new([extism::Wasm::file(path)]).with_timeout(timeout);
     let mut plugin = extism::Plugin::new(&manifest, [], false)
         .with_context(|| format!("loading {}", path.display()))?;
 
@@ -860,6 +878,48 @@ reference = { title = "House style", url = "https://example.com/style" }
             into_messages(parsed, &good_skill(), &config)
                 .unwrap()
                 .is_empty()
+        );
+    }
+
+    /// A wasm module whose `lint` export is `loop { }` — hand-assembled so the test needs no
+    /// wasm toolchain: type, function, export, and a code section of `loop (void) br 0 end end`.
+    const LOOP_FOREVER_WASM: &[u8] = &[
+        0x00, 0x61, 0x73, 0x6d, // \0asm
+        0x01, 0x00, 0x00, 0x00, // version 1
+        0x01, 0x04, 0x01, 0x60, 0x00, 0x00, // type: () -> ()
+        0x03, 0x02, 0x01, 0x00, // one function, of that type
+        0x07, 0x08, 0x01, 0x04, b'l', b'i', b'n', b't', 0x00, 0x00, // export "lint"
+        0x0a, 0x09, 0x01, 0x07, 0x00, 0x03, 0x40, 0x0c, 0x00, 0x0b,
+        0x0b, // loop; br 0; end; end
+    ];
+
+    #[test]
+    fn a_wasm_plugin_that_never_returns_times_out_rather_than_hanging_the_run() {
+        let temporary = tempfile::tempdir().unwrap();
+        fs::write(
+            temporary.path().join("loop-forever.wasm"),
+            LOOP_FOREVER_WASM,
+        )
+        .unwrap();
+
+        let started = std::time::Instant::now();
+        let failure = run_wasm_within(
+            &temporary.path().join("loop-forever.wasm"),
+            &good_skill(),
+            &Config::default(),
+            std::time::Duration::from_millis(300),
+        )
+        .unwrap_err();
+        let elapsed = started.elapsed();
+        let detail = format!("{failure:#}");
+
+        assert!(
+            detail.to_lowercase().contains("timeout"),
+            "a call that never returns must fail as a timeout, not a crash: {detail}"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_secs(10),
+            "the run must not wait on a plugin that never returns: {elapsed:?}"
         );
     }
 
