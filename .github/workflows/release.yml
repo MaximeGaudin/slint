@@ -264,14 +264,19 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${TAP_DEPLOY_KEY:-}" ]; then
-            echo "::warning::HOMEBREW_TAP_DEPLOY_KEY not set — skipping Homebrew tap update."
-            exit 0
+            echo "::error::HOMEBREW_TAP_DEPLOY_KEY is not set — the Homebrew tap update cannot run. Add a read/write deploy key for MaximeGaudin/homebrew-tap as the HOMEBREW_TAP_DEPLOY_KEY secret, or remove the homebrew job from release.yml."
+            exit 1
           fi
 
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           printf '%s\n' "$TAP_DEPLOY_KEY" > ~/.ssh/tap_key
           chmod 600 ~/.ssh/tap_key
           export GIT_SSH_COMMAND="ssh -i ~/.ssh/tap_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+
+          if ! git ls-remote git@github.com:MaximeGaudin/homebrew-tap.git HEAD &>/dev/null; then
+            echo "::error::Could not reach MaximeGaudin/homebrew-tap over SSH. Check that the repo exists and that HOMEBREW_TAP_DEPLOY_KEY grants read/write access."
+            exit 1
+          fi
 
           TAG="${{ inputs.tag }}"
           VERSION="${TAG#v}"
@@ -329,5 +334,16 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Formula/slint.rb
-          git commit -m "slint ${VERSION}" || { echo "no formula change"; exit 0; }
-          git push
+          if git diff --cached --quiet; then
+            echo "Formula/slint.rb already at version ${VERSION} — nothing to push."
+          else
+            git commit -m "slint ${VERSION}"
+            git push
+          fi
+
+          git clone --depth 1 git@github.com:MaximeGaudin/homebrew-tap.git tap-verify
+          if ! grep -q "version \"${VERSION}\"" tap-verify/Formula/slint.rb; then
+            echo "::error::Formula/slint.rb on MaximeGaudin/homebrew-tap does not advertise version ${VERSION} after push."
+            exit 1
+          fi
+          echo "Verified: Formula/slint.rb on MaximeGaudin/homebrew-tap is at version ${VERSION}."
