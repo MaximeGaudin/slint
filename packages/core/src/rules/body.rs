@@ -1231,6 +1231,25 @@ If `docs/01 - Briefs/` does not exist, ask the user where briefs live, or stop a
         assert!(check(&HARDCODED_REPO_PATH_RULE, &skill).is_empty());
     }
 
+    /// Regression for https://github.com/MaximeGaudin/slint/issues/240 — a scripts/-prefixed
+    /// path was exempted even when nothing of the sort ships with the skill and the
+    /// surrounding text says the path lives in the consumer's repository.
+    #[test]
+    fn a_bundle_prefix_path_outside_the_bundle_is_a_consumer_repo_path() {
+        let skill = skill_with_body(
+            "\n## Steps\n\n1. List `scripts/deploy.sh` in the target repository and run it exactly as written.\n",
+        );
+
+        let messages = check(&HARDCODED_REPO_PATH_RULE, &skill);
+
+        assert_eq!(
+            messages.len(),
+            1,
+            "expected the consumer-repo warning, got {messages:?}"
+        );
+        assert!(messages[0].message.contains("scripts/deploy.sh"));
+    }
+
     #[test]
     fn skill_bundle_paths_are_not_consumer_repo_paths() {
         let skill = skill_with_body(
