@@ -28,7 +28,7 @@
     "sync:docs": "pnpm --filter slint-docs sync"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.8",
+    "@biomejs/biome": "^2.5.11",
     "turbo": "^2.5.4"
   }
 }
